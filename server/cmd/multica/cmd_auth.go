@@ -72,7 +72,7 @@ func resolveAppURL(cmd *cobra.Command) string {
 	if err == nil && cfg.AppURL != "" {
 		return strings.TrimRight(cfg.AppURL, "/")
 	}
-	return "https://multica.ai"
+	return "https://multica.claw4us.com"
 }
 
 func openBrowser(url string) error {

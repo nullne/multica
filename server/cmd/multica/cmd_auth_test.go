@@ -40,8 +40,8 @@ func TestResolveAppURL(t *testing.T) {
 		t.Setenv("FRONTEND_ORIGIN", "")
 		t.Setenv("HOME", t.TempDir()) // avoid reading real config
 
-		if got := resolveAppURL(cmd); got != "https://multica.ai" {
-			t.Fatalf("resolveAppURL() = %q, want %q", got, "https://multica.ai")
+		if got := resolveAppURL(cmd); got != "https://multica.claw4us.com" {
+			t.Fatalf("resolveAppURL() = %q, want %q", got, "https://multica.claw4us.com")
 		}
 	})
 }
