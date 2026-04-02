@@ -8,6 +8,7 @@ config({ path: resolve(__dirname, "../../.env") });
 const remoteApiUrl = process.env.REMOTE_API_URL || "http://localhost:8080";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   images: {
     formats: ["image/avif", "image/webp"],
     qualities: [75, 80, 85],

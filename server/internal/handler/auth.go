@@ -202,6 +202,36 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email string) (db.User, 
 	return user, nil
 }
 
+func isEmailAllowed(email string) bool {
+	allowedEmails := os.Getenv("ALLOWED_EMAILS")
+	allowedDomains := os.Getenv("ALLOWED_EMAIL_DOMAINS")
+
+	if allowedEmails == "" && allowedDomains == "" {
+		return true
+	}
+
+	if allowedEmails != "" {
+		for _, e := range strings.Split(allowedEmails, ",") {
+			if strings.TrimSpace(e) == email {
+				return true
+			}
+		}
+	}
+
+	if allowedDomains != "" {
+		if at := strings.LastIndex(email, "@"); at >= 0 {
+			domain := email[at+1:]
+			for _, d := range strings.Split(allowedDomains, ",") {
+				if strings.TrimSpace(d) == domain {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 	var req SendCodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -212,6 +242,11 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
 		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	if !isEmailAllowed(email) {
+		writeError(w, http.StatusForbidden, "email not allowed")
 		return
 	}
 
