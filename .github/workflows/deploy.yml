@@ -1,0 +1,60 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Create env file
+        run: |
+          cat > .env.prod <<'ENVEOF'
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          FRONTEND_ORIGIN=${{ vars.FRONTEND_ORIGIN }}
+          CORS_ALLOWED_ORIGINS=${{ vars.CORS_ALLOWED_ORIGINS }}
+          LOG_LEVEL=${{ vars.LOG_LEVEL || 'info' }}
+          ALLOWED_EMAILS=${{ vars.ALLOWED_EMAILS }}
+          ALLOWED_EMAIL_DOMAINS=${{ vars.ALLOWED_EMAIL_DOMAINS }}
+          RESEND_API_KEY=${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL=${{ vars.RESEND_FROM_EMAIL || 'noreply@multica.ai' }}
+          S3_BUCKET=${{ vars.S3_BUCKET }}
+          S3_REGION=${{ vars.S3_REGION || 'us-west-2' }}
+          CLOUDFRONT_DOMAIN=${{ vars.CLOUDFRONT_DOMAIN }}
+          CLOUDFRONT_KEY_PAIR_ID=${{ vars.CLOUDFRONT_KEY_PAIR_ID }}
+          CLOUDFRONT_PRIVATE_KEY=${{ secrets.CLOUDFRONT_PRIVATE_KEY }}
+          COOKIE_DOMAIN=${{ vars.COOKIE_DOMAIN }}
+          LISTEN_PORT=${{ vars.LISTEN_PORT || '80' }}
+          PGDATA_DIR=${{ vars.PGDATA_DIR || './data/postgres' }}
+          ENVEOF
+
+      - name: Deploy
+        run: |
+          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --remove-orphans
+
+      - name: Wait for health check
+        run: |
+          echo "Waiting for services to be healthy..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:${LISTEN_PORT:-80}/health > /dev/null 2>&1; then
+              echo "Service is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i/30 — waiting..."
+            sleep 5
+          done
+          echo "Health check failed after 150s"
+          docker compose -f docker-compose.prod.yml --env-file .env.prod logs --tail=50
+          exit 1
+
+      - name: Cleanup env file
+        if: always()
+        run: rm -f .env.prod

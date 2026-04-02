@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.github
+server/bin
+server/tmp
+e2e
+*.md
+!apps/web/README.md
+.env*
+!.env.example
