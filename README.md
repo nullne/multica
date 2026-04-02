@@ -71,9 +71,10 @@ See the [Self-Hosting Guide](SELF_HOSTING.md) for full instructions.
 The `multica` CLI connects your local machine to Multica — authenticate, manage workspaces, and run the agent daemon.
 
 ```bash
-# Install
-brew tap multica-ai/tap
-brew install multica
+# Install (pick one)
+curl -fsSL https://raw.githubusercontent.com/nullne/multica/main/scripts/install.sh | bash
+# or
+brew tap multica-ai/tap && brew install multica
 
 # Authenticate and start
 multica login

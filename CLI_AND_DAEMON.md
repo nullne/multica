@@ -4,6 +4,12 @@ The `multica` CLI connects your local machine to Multica. It handles authenticat
 
 ## Installation
 
+### Quick Install (macOS/Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nullne/multica/main/scripts/install.sh | bash
+```
+
 ### Homebrew (macOS/Linux)
 
 ```bash

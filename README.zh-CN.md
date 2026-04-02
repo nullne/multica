@@ -71,9 +71,10 @@ make start                                         # 启动应用
 `multica` CLI 将你的本地机器连接到 Multica — 用于认证、管理工作区和运行 Agent daemon。
 
 ```bash
-# 安装
-brew tap multica-ai/tap
-brew install multica
+# 安装（任选一种）
+curl -fsSL https://raw.githubusercontent.com/nullne/multica/main/scripts/install.sh | bash
+# 或
+brew tap multica-ai/tap && brew install multica
 
 # 认证并启动
 multica login
