@@ -58,7 +58,11 @@ jobs:
         if: inputs.clean
         run: |
           docker compose -f docker-compose.prod.yml --env-file .env.prod down -v 2>/dev/null || true
-          rm -rf ${{ vars.PGDATA_DIR || './data/postgres' }}
+          PGDATA="${{ vars.PGDATA_DIR || './data/postgres' }}"
+          if [ -d "$PGDATA" ]; then
+            docker run --rm -v "$(cd "$(dirname "$PGDATA")" && pwd)/$(basename "$PGDATA")":/data alpine rm -rf /data/*
+            rm -rf "$PGDATA"
+          fi
           echo "Cleaned existing data and volumes"
 
       - name: Pull images
