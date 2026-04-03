@@ -2,6 +2,11 @@ name: Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (default: latest)"
+        required: false
+        default: "latest"
 
 concurrency:
   group: deploy-production
@@ -11,17 +16,15 @@ env:
   LISTEN_PORT: ${{ vars.LISTEN_PORT || '80' }}
 
 jobs:
-  # Ensure CI passes before deploying
-  ci:
-    uses: ./.github/workflows/ci.yml
-
   deploy:
-    needs: ci
     runs-on: self-hosted
     environment: prod
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Login to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Create env file
         run: |
@@ -43,11 +46,13 @@ jobs:
           COOKIE_DOMAIN=${{ vars.COOKIE_DOMAIN }}
           LISTEN_PORT=${{ vars.LISTEN_PORT || '80' }}
           PGDATA_DIR=${{ vars.PGDATA_DIR || './data/postgres' }}
+          IMAGE_TAG=${{ inputs.image_tag || 'latest' }}
           ENVEOF
 
-      - name: Deploy
+      - name: Pull and deploy
         run: |
-          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build --remove-orphans
+          docker compose -f docker-compose.prod.yml --env-file .env.prod pull
+          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --remove-orphans
 
       - name: Wait for health check
         run: |
