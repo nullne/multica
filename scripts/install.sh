@@ -44,8 +44,11 @@ download() {
   fi
 }
 
+TMPDIR_CLEANUP=""
+trap 'rm -rf "$TMPDIR_CLEANUP"' EXIT
+
 main() {
-  local os arch version archive_name download_url tmpdir
+  local os arch version archive_name download_url
 
   os="$(detect_os)"
   arch="$(detect_arch)"
@@ -66,8 +69,8 @@ main() {
   download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
 
   info "Downloading ${BINARY} ${version}..."
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
+  TMPDIR_CLEANUP="$(mktemp -d)"
+  local tmpdir="$TMPDIR_CLEANUP"
 
   download "$download_url" "${tmpdir}/${archive_name}"
 
