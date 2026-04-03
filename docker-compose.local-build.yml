@@ -1,0 +1,20 @@
+# Override for local testing: build images locally instead of pulling from GHCR.
+# Usage: docker compose -f docker-compose.prod.yml -f docker-compose.local-build.yml --env-file .env.prod up -d --build
+services:
+  migrate:
+    image: multica-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+  backend:
+    image: multica-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+  frontend:
+    image: multica-frontend:local
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
