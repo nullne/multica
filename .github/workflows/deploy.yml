@@ -7,6 +7,11 @@ on:
         description: "Image tag to deploy (default: latest)"
         required: false
         default: "latest"
+      clean:
+        description: "Clean deploy: remove existing database and start fresh"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-production
@@ -48,6 +53,13 @@ jobs:
           PGDATA_DIR=${{ vars.PGDATA_DIR || './data/postgres' }}
           IMAGE_TAG=${{ inputs.image_tag || 'latest' }}
           ENVEOF
+
+      - name: Clean existing data
+        if: inputs.clean
+        run: |
+          docker compose -f docker-compose.prod.yml --env-file .env.prod down -v 2>/dev/null || true
+          rm -rf ${{ vars.PGDATA_DIR || './data/postgres' }}
+          echo "Cleaned existing data and volumes"
 
       - name: Pull images
         run: docker compose -f docker-compose.prod.yml --env-file .env.prod pull
