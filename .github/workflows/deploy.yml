@@ -49,10 +49,15 @@ jobs:
           IMAGE_TAG=${{ inputs.image_tag || 'latest' }}
           ENVEOF
 
-      - name: Pull and deploy
-        run: |
-          docker compose -f docker-compose.prod.yml --env-file .env.prod pull
-          docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --remove-orphans
+      - name: Pull images
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod pull
+
+      - name: Deploy
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --remove-orphans
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.prod.yml --env-file .env.prod logs --tail=100
 
       - name: Wait for health check
         run: |
@@ -66,7 +71,7 @@ jobs:
             sleep 5
           done
           echo "Health check failed after 150s"
-          docker compose -f docker-compose.prod.yml --env-file .env.prod logs --tail=50
+          docker compose -f docker-compose.prod.yml --env-file .env.prod logs --tail=100
           exit 1
 
       - name: Cleanup env file
