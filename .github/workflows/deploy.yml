@@ -7,9 +7,18 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+env:
+  LISTEN_PORT: ${{ vars.LISTEN_PORT || '80' }}
+
 jobs:
+  # Ensure CI passes before deploying
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: ci
     runs-on: self-hosted
+    environment: prod
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -44,7 +53,7 @@ jobs:
         run: |
           echo "Waiting for services to be healthy..."
           for i in $(seq 1 30); do
-            if curl -sf http://localhost:${LISTEN_PORT:-80}/health > /dev/null 2>&1; then
+            if curl -sf http://localhost:${LISTEN_PORT}/health > /dev/null 2>&1; then
               echo "Service is healthy!"
               exit 0
             fi
