@@ -26,13 +26,15 @@ detect_arch() {
 
 get_latest_version() {
   local url="https://api.github.com/repos/${REPO}/releases/latest"
+  local json
   if command -v curl &>/dev/null; then
-    curl -fsSL "$url" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+    json="$(curl -fsSL "$url")"
   elif command -v wget &>/dev/null; then
-    wget -qO- "$url" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+    json="$(wget -qO- "$url")"
   else
     error "curl or wget is required"
   fi
+  printf '%s' "$json" | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name" *: *"([^"]+)".*/\1/'
 }
 
 download() {
@@ -64,6 +66,18 @@ main() {
   fi
 
   [ -z "$version" ] && error "Could not determine version. Set MULTICA_VERSION or check https://github.com/${REPO}/releases"
+
+  if command -v "$BINARY" &>/dev/null; then
+    local current
+    current="$("$BINARY" version 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)" || true
+    if [ "$current" = "$version" ]; then
+      info "${BINARY} ${version} is already installed"
+      exit 0
+    fi
+    if [ -n "$current" ]; then
+      info "Upgrading ${BINARY} from ${current} to ${version}"
+    fi
+  fi
 
   archive_name="${BINARY}_${os}_${arch}.tar.gz"
   download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
