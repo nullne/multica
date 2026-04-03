@@ -49,11 +49,15 @@ services:
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY; wget -q --spider http://localhost:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 5
