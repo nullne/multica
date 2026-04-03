@@ -18,6 +18,7 @@ jobs:
   deploy:
     needs: ci
     runs-on: self-hosted
+    environment: prod
     steps:
       - name: Checkout
         uses: actions/checkout@v6
