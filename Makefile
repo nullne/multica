@@ -1,4 +1,5 @@
-.PHONY: dev daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down
+.PHONY: dev daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down docker docker-backend docker-frontend prod-local prod-local-down prod-local-logs
+
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -153,6 +154,32 @@ migrate-down:
 
 sqlc:
 	cd server && sqlc generate
+
+# Docker images (same Dockerfiles as CI)
+docker-backend:
+	docker build -t multica-backend --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -f Dockerfile .
+
+docker-frontend:
+	docker build -t multica-frontend -f apps/web/Dockerfile .
+
+docker: docker-backend docker-frontend
+
+PROD_COMPOSE := docker compose --env-file $(ENV_FILE) -f docker-compose.prod.yml
+
+# Local prod: build images, tag to match prod compose, start full stack
+prod-local: docker
+	$(REQUIRE_ENV)
+	docker tag multica-backend ghcr.io/nullne/multica/backend:latest
+	docker tag multica-frontend ghcr.io/nullne/multica/frontend:latest
+	$(PROD_COMPOSE) up -d
+	@echo ""
+	@echo "✓ Production stack running at http://localhost:$${LISTEN_PORT:-80}"
+
+prod-local-down:
+	$(PROD_COMPOSE) down
+
+prod-local-logs:
+	$(PROD_COMPOSE) logs -f
 
 # Cleanup
 clean:

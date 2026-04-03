@@ -1,5 +1,5 @@
-# --- Dependencies ---
-FROM node:22-alpine AS deps
+# --- Build ---
+FROM node:22-alpine AS builder
 
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
@@ -10,21 +10,9 @@ COPY apps/web/package.json ./apps/web/
 
 RUN pnpm install --frozen-lockfile
 
-# --- Build ---
-FROM node:22-alpine AS builder
-
-RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
-
-WORKDIR /app
-
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/ ./apps/web/
 
 ENV NEXT_TELEMETRY_DISABLED=1
-# Same-domain: browser uses relative URLs, no NEXT_PUBLIC_* needed
 ENV NEXT_PUBLIC_API_URL=
 ENV NEXT_PUBLIC_WS_URL=
 
