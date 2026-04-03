@@ -1,18 +1,13 @@
 import { cookies, headers } from "next/headers";
-import { Instrument_Serif, Noto_Serif_SC } from "next/font/google";
+import localFont from "next/font/local";
 import { LocaleProvider } from "@/features/landing/i18n";
 import type { Locale } from "@/features/landing/i18n";
 
-const instrumentSerif = Instrument_Serif({
-  subsets: ["latin"],
+const instrumentSerif = localFont({
+  src: "../../public/fonts/InstrumentSerif-Regular.ttf",
   weight: "400",
   variable: "--font-serif",
-});
-
-const notoSerifSC = Noto_Serif_SC({
-  subsets: ["latin"],
-  weight: "400",
-  variable: "--font-serif-zh",
+  display: "swap",
 });
 
 const jsonLd = {
@@ -63,11 +58,17 @@ export default async function LandingLayout({
 
   return (
     <>
+      {/* eslint-disable-next-line @next/next/no-page-custom-font */}
+      <link
+        href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400&display=swap"
+        rel="stylesheet"
+      />
+      <style dangerouslySetInnerHTML={{ __html: `:root { --font-serif-zh: "Noto Serif SC", serif; }` }} />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <div className={`${instrumentSerif.variable} ${notoSerifSC.variable} h-full overflow-x-hidden overflow-y-auto bg-white`}>
+      <div className={`${instrumentSerif.variable} h-full overflow-x-hidden overflow-y-auto bg-white`}>
         <LocaleProvider initialLocale={initialLocale}>{children}</LocaleProvider>
       </div>
     </>
