@@ -125,6 +125,7 @@ function CreateAgentDialog({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [model, setModel] = useState("");
   const [selectedRuntimeId, setSelectedRuntimeId] = useState(runtimes[0]?.id ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>("private");
   const [creating, setCreating] = useState(false);
@@ -146,6 +147,7 @@ function CreateAgentDialog({
         name: name.trim(),
         description: description.trim(),
         runtime_id: selectedRuntime.id,
+        runtime_config: model.trim() ? { model: model.trim() } : undefined,
         visibility,
         triggers: [
           { id: generateId(), type: "on_assign", enabled: true, config: {} },
@@ -190,6 +192,17 @@ function CreateAgentDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="What does this agent do?"
+              className="mt-1"
+            />
+          </div>
+
+          <div>
+            <Label className="text-xs text-muted-foreground">Model</Label>
+            <Input
+              type="text"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="e.g. claude-sonnet-4-20250514 (optional, uses daemon default)"
               className="mt-1"
             />
           </div>
@@ -1190,6 +1203,7 @@ function SettingsTab({
 }) {
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
+  const [model, setModel] = useState((agent.runtime_config?.model as string) ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
   const [maxTasks, setMaxTasks] = useState(agent.max_concurrent_tasks);
   const [saving, setSaving] = useState(false);
@@ -1213,6 +1227,7 @@ function SettingsTab({
   const dirty =
     name !== agent.name ||
     description !== (agent.description ?? "") ||
+    model !== ((agent.runtime_config?.model as string) ?? "") ||
     visibility !== agent.visibility ||
     maxTasks !== agent.max_concurrent_tasks;
 
@@ -1223,7 +1238,8 @@ function SettingsTab({
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, max_concurrent_tasks: maxTasks });
+      const rc = { ...agent.runtime_config, model: model.trim() || undefined };
+      await onSave({ name: name.trim(), description, visibility, max_concurrent_tasks: maxTasks, runtime_config: rc });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1284,6 +1300,19 @@ function SettingsTab({
           placeholder="What does this agent do?"
           className="mt-1"
         />
+      </div>
+
+      <div>
+        <Label className="text-xs text-muted-foreground">Model</Label>
+        <Input
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder="e.g. claude-sonnet-4-20250514 (optional, uses daemon default)"
+          className="mt-1"
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Override the default model for this agent. Leave empty to use daemon default.
+        </p>
       </div>
 
       <div>

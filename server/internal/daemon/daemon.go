@@ -868,6 +868,14 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		instructions = task.Agent.Instructions
 	}
 
+	// Model priority: agent runtime_config.model > daemon env var default
+	model := entry.Model
+	if task.Agent != nil && task.Agent.RuntimeConfig != nil {
+		if m, ok := task.Agent.RuntimeConfig["model"].(string); ok && m != "" {
+			model = m
+		}
+	}
+
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
 	// via `multica repo checkout <url>`.
@@ -939,7 +947,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	taskLog.Info("starting agent",
 		"provider", provider,
 		"workdir", env.WorkDir,
-		"model", entry.Model,
+		"model", model,
 		"reused", reused,
 	)
 	if task.PriorSessionID != "" {
@@ -950,7 +958,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 
 	session, err := backend.Execute(ctx, prompt, agent.ExecOptions{
 		Cwd:             env.WorkDir,
-		Model:           entry.Model,
+		Model:           model,
 		Timeout:         d.cfg.AgentTimeout,
 		ResumeSessionID: task.PriorSessionID,
 	})

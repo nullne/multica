@@ -37,10 +37,11 @@ type Task struct {
 
 // AgentData holds agent details returned by the claim endpoint.
 type AgentData struct {
-	ID           string      `json:"id"`
-	Name         string      `json:"name"`
-	Instructions string      `json:"instructions"`
-	Skills       []SkillData `json:"skills"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Instructions  string                 `json:"instructions"`
+	RuntimeConfig map[string]interface{} `json:"runtime_config,omitempty"`
+	Skills        []SkillData            `json:"skills"`
 }
 
 // SkillData represents a structured skill for task execution.
