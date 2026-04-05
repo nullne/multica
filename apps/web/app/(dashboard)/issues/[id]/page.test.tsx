@@ -276,6 +276,27 @@ describe("IssueDetailPage", () => {
     expect(screen.getAllByText("Activity").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("renders a readable fallback for unknown activity actions", async () => {
+    mockGetIssue.mockResolvedValueOnce(mockIssue);
+    mockListTimeline.mockResolvedValueOnce([
+      {
+        type: "activity",
+        id: "activity-1",
+        actor_type: "agent",
+        actor_id: "agent-1",
+        action: "agent_waiting_for_input",
+        details: {},
+        created_at: "2026-01-18T00:00:00Z",
+      },
+    ] satisfies TimelineEntry[]);
+
+    await renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("agent waiting for input")).toBeInTheDocument();
+    });
+  });
+
   it("shows 'Issue not found' for missing issue", async () => {
     // issue-detail fetches getIssue, useIssueReactions also fetches getIssue
     mockGetIssue.mockRejectedValue(new Error("Not found"));
