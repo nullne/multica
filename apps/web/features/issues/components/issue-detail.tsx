@@ -161,6 +161,8 @@ function PropRow({
 interface IssueDetailProps {
   issueId: string;
   onDelete?: () => void;
+  /** Override mobile back button behavior. When omitted, navigates to /issues. */
+  onBack?: () => void;
   defaultSidebarOpen?: boolean;
   layoutId?: string;
   /** When set, the issue detail will auto-scroll to this comment and briefly highlight it. */
@@ -171,7 +173,7 @@ interface IssueDetailProps {
 // IssueDetail
 // ---------------------------------------------------------------------------
 
-export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId }: IssueDetailProps) {
+export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId }: IssueDetailProps) {
   const id = issueId;
   const isMobile = useIsMobile();
   const router = useRouter();
@@ -384,9 +386,15 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
           <div className="flex items-center gap-1.5 min-w-0">
             {isMobile ? (
               <>
-                <Link href="/issues" className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
-                  <ChevronLeft className="h-4 w-4" />
-                </Link>
+                {onBack ? (
+                  <button onClick={onBack} className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <Link href="/issues" className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
+                    <ChevronLeft className="h-4 w-4" />
+                  </Link>
+                )}
                 <span className="truncate text-muted-foreground">{issue.identifier}</span>
               </>
             ) : (

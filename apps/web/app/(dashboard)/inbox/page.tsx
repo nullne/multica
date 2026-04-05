@@ -427,6 +427,7 @@ export default function InboxPage() {
           defaultSidebarOpen={false}
           layoutId="multica_inbox_issue_detail_layout"
           highlightCommentId={selected.details?.comment_id ?? undefined}
+          onBack={() => setSelectedKey("")}
           onDelete={() => {
             handleArchive(selected.id);
           }}
