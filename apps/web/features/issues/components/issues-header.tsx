@@ -302,7 +302,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
     SORT_OPTIONS.find((o) => o.value === sortBy)?.label ?? "Manual";
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between px-4">
+    <div className="flex h-12 shrink-0 items-center justify-between px-2 md:px-4 gap-1">
       {/* Left: scope buttons */}
       <div className="flex items-center gap-1">
         {SCOPES.map((s) => (

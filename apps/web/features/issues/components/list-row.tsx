@@ -20,7 +20,7 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
 
   return (
     <div
-      className={`group/row flex h-9 items-center gap-2 px-4 text-sm transition-colors hover:bg-accent/50 ${
+      className={`group/row flex h-9 items-center gap-2 px-2 md:px-4 text-sm transition-colors hover:bg-accent/50 ${
         selected ? "bg-accent/30" : ""
       }`}
     >
@@ -42,12 +42,12 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
         href={`/issues/${issue.id}`}
         className="flex flex-1 items-center gap-2 min-w-0"
       >
-        <span className="w-16 shrink-0 text-xs text-muted-foreground">
+        <span className="hidden md:inline w-16 shrink-0 text-xs text-muted-foreground">
           {issue.identifier}
         </span>
         <span className="min-w-0 flex-1 truncate">{issue.title}</span>
         {issue.due_date && (
-          <span className="shrink-0 text-xs text-muted-foreground">
+          <span className="hidden sm:inline shrink-0 text-xs text-muted-foreground">
             {formatDate(issue.due_date)}
           </span>
         )}

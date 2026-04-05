@@ -170,7 +170,7 @@ export function BoardView({
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <div className="flex flex-1 min-h-0 gap-4 overflow-x-auto p-4">
+      <div className="flex flex-1 min-h-0 gap-3 md:gap-4 overflow-x-auto p-3 md:p-4">
         {visibleStatuses.map((status) => (
           <BoardColumn
             key={status}
