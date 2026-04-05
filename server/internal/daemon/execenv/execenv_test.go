@@ -583,6 +583,151 @@ func TestPrepareWithRepoContextOpencode(t *testing.T) {
 	}
 }
 
+func TestWriteContextFilesCursorNativeSkills(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ctx := TaskContextForEnv{
+		IssueID: "cursor-skill-test",
+		AgentSkills: []SkillContextForEnv{
+			{
+				Name:    "Go Conventions",
+				Content: "Follow Go conventions.",
+				Files: []SkillFileContextForEnv{
+					{Path: "templates/example.go", Content: "package main"},
+				},
+			},
+		},
+	}
+
+	if err := writeContextFiles(dir, "cursor", ctx); err != nil {
+		t.Fatalf("writeContextFiles failed: %v", err)
+	}
+
+	// Skills should be in .cursor/skills/ (native discovery).
+	skillMd, err := os.ReadFile(filepath.Join(dir, ".cursor", "skills", "go-conventions", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("failed to read .cursor/skills/go-conventions/SKILL.md: %v", err)
+	}
+	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
+		t.Error("SKILL.md missing content")
+	}
+
+	// Supporting files should also be under .cursor/skills/.
+	supportFile, err := os.ReadFile(filepath.Join(dir, ".cursor", "skills", "go-conventions", "templates", "example.go"))
+	if err != nil {
+		t.Fatalf("failed to read supporting file: %v", err)
+	}
+	if string(supportFile) != "package main" {
+		t.Errorf("supporting file content = %q, want %q", string(supportFile), "package main")
+	}
+
+	// .agent_context/skills/ should NOT exist for Cursor.
+	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
+		t.Error("expected .agent_context/skills/ to NOT exist for Cursor provider")
+	}
+
+	// issue_context.md should still be in .agent_context/.
+	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "issue_context.md")); os.IsNotExist(err) {
+		t.Error("expected .agent_context/issue_context.md to exist")
+	}
+}
+
+func TestInjectRuntimeConfigCursor(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ctx := TaskContextForEnv{
+		IssueID:     "test-issue-id",
+		AgentSkills: []SkillContextForEnv{{Name: "Coding", Content: "Write good code."}},
+	}
+
+	if err := InjectRuntimeConfig(dir, "cursor", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+
+	// Cursor uses .cursor/rules/multica.md.
+	content, err := os.ReadFile(filepath.Join(dir, ".cursor", "rules", "multica.md"))
+	if err != nil {
+		t.Fatalf("failed to read .cursor/rules/multica.md: %v", err)
+	}
+
+	s := string(content)
+	if !strings.Contains(s, "Multica Agent Runtime") {
+		t.Error(".cursor/rules/multica.md missing meta skill header")
+	}
+	if !strings.Contains(s, "Coding") {
+		t.Error(".cursor/rules/multica.md missing skill name")
+	}
+	if !strings.Contains(s, "discovered automatically") {
+		t.Error(".cursor/rules/multica.md missing native skill discovery hint")
+	}
+
+	// CLAUDE.md and AGENTS.md should NOT exist.
+	if _, err := os.Stat(filepath.Join(dir, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Error("expected CLAUDE.md to NOT exist for Cursor provider")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "AGENTS.md")); !os.IsNotExist(err) {
+		t.Error("expected AGENTS.md to NOT exist for Cursor provider")
+	}
+}
+
+func TestPrepareWithRepoContextCursor(t *testing.T) {
+	t.Parallel()
+	workspacesRoot := t.TempDir()
+
+	taskCtx := TaskContextForEnv{
+		IssueID: "e5f6a7b8-c9d0-1234-efab-567890123456",
+		Repos: []RepoContextForEnv{
+			{URL: "https://github.com/org/backend", Description: "Go backend"},
+		},
+	}
+	env, err := Prepare(PrepareParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-test-cursor",
+		TaskID:         "e5f6a7b8-c9d0-1234-efab-567890123456",
+		AgentName:      "Cursor Agent",
+		Provider:       "cursor",
+		Task:           taskCtx,
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("Prepare failed: %v", err)
+	}
+	defer env.Cleanup(true)
+
+	if err := InjectRuntimeConfig(env.WorkDir, "cursor", taskCtx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+
+	// Workdir should only contain expected entries.
+	entries, err := os.ReadDir(env.WorkDir)
+	if err != nil {
+		t.Fatalf("failed to read workdir: %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if name != ".agent_context" && name != ".cursor" {
+			t.Errorf("unexpected entry in workdir: %s", name)
+		}
+	}
+
+	// .cursor/rules/multica.md should contain repo info.
+	content, err := os.ReadFile(filepath.Join(env.WorkDir, ".cursor", "rules", "multica.md"))
+	if err != nil {
+		t.Fatalf("failed to read .cursor/rules/multica.md: %v", err)
+	}
+	s := string(content)
+	for _, want := range []string{
+		"multica repo checkout",
+		"https://github.com/org/backend",
+		"Go backend",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf(".cursor/rules/multica.md missing %q", want)
+		}
+	}
+}
+
 func TestInjectRuntimeConfigUnknownProvider(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

@@ -92,8 +92,15 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			Model: strings.TrimSpace(os.Getenv("MULTICA_OPENCODE_MODEL")),
 		}
 	}
+	cursorPath := envOrDefault("MULTICA_CURSOR_PATH", "cursor-agent")
+	if _, err := exec.LookPath(cursorPath); err == nil {
+		agents["cursor"] = AgentEntry{
+			Path:  cursorPath,
+			Model: strings.TrimSpace(os.Getenv("MULTICA_CURSOR_MODEL")),
+		}
+	}
 	if len(agents) == 0 {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, or opencode and ensure it is on PATH")
+		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, opencode, or cursor-agent and ensure it is on PATH")
 	}
 
 	// Host info
