@@ -67,6 +67,14 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
@@ -102,6 +110,11 @@ const taskStatusConfig: Record<string, { label: string; icon: typeof CheckCircle
 };
 
 
+const MODEL_SUGGESTIONS = [
+  { group: "Claude", models: ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-4-20250506"] },
+  { group: "OpenAI", models: ["o3", "gpt-4.1", "gpt-4.1-mini", "codex-mini-latest", "o4-mini"] },
+];
+
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -126,6 +139,8 @@ function CreateAgentDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [model, setModel] = useState("");
+  const [modelOpen, setModelOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
   const [selectedRuntimeId, setSelectedRuntimeId] = useState(runtimes[0]?.id ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>("private");
   const [creating, setCreating] = useState(false);
@@ -198,13 +213,59 @@ function CreateAgentDialog({
 
           <div>
             <Label className="text-xs text-muted-foreground">Model</Label>
-            <Input
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="e.g. claude-sonnet-4-20250514 (optional, uses daemon default)"
-              className="mt-1"
-            />
+            <Popover open={modelOpen} onOpenChange={setModelOpen}>
+              <PopoverTrigger className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 mt-1.5 text-left text-sm transition-colors hover:bg-muted">
+                <span className={model ? "text-foreground" : "text-muted-foreground"}>
+                  {model || "Default (from daemon config)"}
+                </span>
+                <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${modelOpen ? "rotate-180" : ""}`} />
+              </PopoverTrigger>
+              <PopoverContent align="start" className="w-[var(--anchor-width)] p-0">
+                <Command shouldFilter={true}>
+                  <CommandInput
+                    placeholder="Search or type a model name..."
+                    value={modelSearch}
+                    onValueChange={setModelSearch}
+                  />
+                  <CommandList>
+                    <CommandEmpty>
+                      {modelSearch.trim() ? (
+                        <button
+                          type="button"
+                          className="text-primary hover:underline"
+                          onClick={() => { setModel(modelSearch.trim()); setModelSearch(""); setModelOpen(false); }}
+                        >
+                          Use &quot;{modelSearch.trim()}&quot;
+                        </button>
+                      ) : (
+                        <span className="text-muted-foreground">Type a model name</span>
+                      )}
+                    </CommandEmpty>
+                    <CommandGroup heading="Default">
+                      <CommandItem
+                        data-checked={!model}
+                        onSelect={() => { setModel(""); setModelSearch(""); setModelOpen(false); }}
+                      >
+                        Default (from daemon config)
+                      </CommandItem>
+                    </CommandGroup>
+                    {MODEL_SUGGESTIONS.map((group) => (
+                      <CommandGroup key={group.group} heading={group.group}>
+                        {group.models.map((m) => (
+                          <CommandItem
+                            key={m}
+                            data-checked={model === m}
+                            onSelect={() => { setModel(m); setModelSearch(""); setModelOpen(false); }}
+                          >
+                            {m}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    ))}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
 
           <div>
@@ -1204,6 +1265,8 @@ function SettingsTab({
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [model, setModel] = useState((agent.runtime_config?.model as string) ?? "");
+  const [modelOpen, setModelOpen] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
   const [maxTasks, setMaxTasks] = useState(agent.max_concurrent_tasks);
   const [saving, setSaving] = useState(false);
@@ -1304,12 +1367,59 @@ function SettingsTab({
 
       <div>
         <Label className="text-xs text-muted-foreground">Model</Label>
-        <Input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder="e.g. claude-sonnet-4-20250514 (optional, uses daemon default)"
-          className="mt-1"
-        />
+        <Popover open={modelOpen} onOpenChange={setModelOpen}>
+          <PopoverTrigger className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 mt-1.5 text-left text-sm transition-colors hover:bg-muted">
+            <span className={model ? "text-foreground" : "text-muted-foreground"}>
+              {model || "Default (from daemon config)"}
+            </span>
+            <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${modelOpen ? "rotate-180" : ""}`} />
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[var(--anchor-width)] p-0">
+            <Command shouldFilter={true}>
+              <CommandInput
+                placeholder="Search or type a model name..."
+                value={modelSearch}
+                onValueChange={setModelSearch}
+              />
+              <CommandList>
+                <CommandEmpty>
+                  {modelSearch.trim() ? (
+                    <button
+                      type="button"
+                      className="text-primary hover:underline"
+                      onClick={() => { setModel(modelSearch.trim()); setModelSearch(""); setModelOpen(false); }}
+                    >
+                      Use &quot;{modelSearch.trim()}&quot;
+                    </button>
+                  ) : (
+                    <span className="text-muted-foreground">Type a model name</span>
+                  )}
+                </CommandEmpty>
+                <CommandGroup heading="Default">
+                  <CommandItem
+                    data-checked={!model}
+                    onSelect={() => { setModel(""); setModelSearch(""); setModelOpen(false); }}
+                  >
+                    Default (from daemon config)
+                  </CommandItem>
+                </CommandGroup>
+                {MODEL_SUGGESTIONS.map((group) => (
+                  <CommandGroup key={group.group} heading={group.group}>
+                    {group.models.map((m) => (
+                      <CommandItem
+                        key={m}
+                        data-checked={model === m}
+                        onSelect={() => { setModel(m); setModelSearch(""); setModelOpen(false); }}
+                      >
+                        {m}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ))}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
         <p className="text-xs text-muted-foreground mt-1">
           Override the default model for this agent. Leave empty to use daemon default.
         </p>
