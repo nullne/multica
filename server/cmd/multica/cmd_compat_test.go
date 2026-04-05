@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/nullne/multica/server/internal/cli"
 )
 
 func TestLegacyCompatibilityCommandsRemainAvailable(t *testing.T) {

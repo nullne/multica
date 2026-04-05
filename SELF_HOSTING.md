@@ -245,7 +245,7 @@ Each team member who wants to run AI agents locally needs to:
 1. **Install the CLI**
 
    ```bash
-   brew tap multica-ai/tap
+   brew tap nullne/tap
    brew install multica-cli
    ```
 

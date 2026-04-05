@@ -13,7 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/nullne/multica/main/scripts/install
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew tap multica-ai/tap
+brew tap nullne/tap
 brew install multica-cli
 ```
 

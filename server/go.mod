@@ -1,4 +1,4 @@
-module github.com/multica-ai/multica/server
+module github.com/nullne/multica/server
 
 go 1.26.1
 

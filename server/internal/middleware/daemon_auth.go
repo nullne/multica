@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/multica-ai/multica/server/internal/auth"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/nullne/multica/server/internal/auth"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 // Daemon context keys.

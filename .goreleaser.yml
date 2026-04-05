@@ -40,7 +40,7 @@ changelog:
 brews:
   - name: multica
     repository:
-      owner: multica-ai
+      owner: nullne
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"

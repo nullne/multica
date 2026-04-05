@@ -16,9 +16,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/multica-ai/multica/server/internal/cli"
-	"github.com/multica-ai/multica/server/internal/daemon"
-	logger_pkg "github.com/multica-ai/multica/server/internal/logger"
+	"github.com/nullne/multica/server/internal/cli"
+	"github.com/nullne/multica/server/internal/daemon"
+	logger_pkg "github.com/nullne/multica/server/internal/logger"
 )
 
 var daemonCmd = &cobra.Command{

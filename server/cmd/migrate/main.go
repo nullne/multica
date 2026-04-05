@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/nullne/multica/server/internal/logger"
 )
 
 func main() {
