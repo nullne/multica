@@ -17,9 +17,9 @@
 开源平台，将编码 Agent 变成真正的队友。<br/>
 分配任务、跟踪进度、积累技能——在一个地方管理你的人类 + Agent 团队。
 
-[![CI](https://github.com/multica-ai/multica/actions/workflows/ci.yml/badge.svg)](https://github.com/multica-ai/multica/actions/workflows/ci.yml)
+[![CI](https://github.com/nullne/multica/actions/workflows/ci.yml/badge.svg)](https://github.com/nullne/multica/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![GitHub stars](https://img.shields.io/github/stars/multica-ai/multica?style=flat)](https://github.com/multica-ai/multica/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/nullne/multica?style=flat)](https://github.com/nullne/multica/stargazers)
 
 [官网](https://multica.ai) · [云服务](https://multica.ai/app) · [自部署指南](SELF_HOSTING.md) · [参与贡献](CONTRIBUTING.md)
 
@@ -54,7 +54,7 @@ Multica 将编码 Agent 变成真正的队友。像分配给同事一样分配�
 ### Docker 自部署
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/nullne/multica.git
 cd multica
 cp .env.example .env
 # 编辑 .env — 至少修改 JWT_SECRET
@@ -74,7 +74,7 @@ make start                                         # 启动应用
 # 安装（任选一种）
 curl -fsSL https://raw.githubusercontent.com/nullne/multica/main/scripts/install.sh | bash
 # 或
-brew tap multica-ai/tap && brew install multica
+brew tap nullne/tap && brew install multica
 
 # 认证并启动
 multica login
