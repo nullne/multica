@@ -74,7 +74,7 @@ make start                                         # 启动应用
 # 安装（任选一种）
 curl -fsSL https://raw.githubusercontent.com/nullne/multica/main/scripts/install.sh | bash
 # 或
-brew tap nullne/tap && brew install multica
+brew tap multica-ai/tap && brew install multica
 
 # 认证并启动
 multica login
