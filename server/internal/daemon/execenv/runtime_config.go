@@ -13,6 +13,7 @@ import (
 // For Claude:   writes {workDir}/CLAUDE.md  (skills discovered natively from .claude/skills/)
 // For Codex:    writes {workDir}/AGENTS.md  (skills discovered natively via CODEX_HOME)
 // For OpenCode: writes {workDir}/AGENTS.md  (skills discovered natively from .config/opencode/skills/)
+// For Cursor:   writes {workDir}/.cursor/rules/multica.md  (Cursor discovers rules from .cursor/rules/)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) error {
 	content := buildMetaSkillContent(provider, ctx)
 
@@ -21,6 +22,12 @@ func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) error 
 		return os.WriteFile(filepath.Join(workDir, "CLAUDE.md"), []byte(content), 0o644)
 	case "codex", "opencode":
 		return os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte(content), 0o644)
+	case "cursor":
+		rulesDir := filepath.Join(workDir, ".cursor", "rules")
+		if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+			return fmt.Errorf("create .cursor/rules dir: %w", err)
+		}
+		return os.WriteFile(filepath.Join(rulesDir, "multica.md"), []byte(content), 0o644)
 	default:
 		// Unknown provider — skip config injection, prompt-only mode.
 		return nil
@@ -115,8 +122,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		case "claude":
 			// Claude discovers skills natively from .claude/skills/ — just list names.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "codex", "opencode":
-			// Codex and OpenCode discover skills natively from their respective paths — just list names.
+		case "codex", "opencode", "cursor":
+			// Codex, OpenCode, and Cursor discover skills natively from their respective paths — just list names.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
 		default:
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
