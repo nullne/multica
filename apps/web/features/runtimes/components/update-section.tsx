@@ -11,7 +11,7 @@ import { api } from "@/shared/api";
 import type { RuntimeUpdateStatus } from "@/shared/types";
 
 const GITHUB_RELEASES_URL =
-  "https://api.github.com/repos/multica-ai/multica/releases/latest";
+  "https://api.github.com/repos/nullne/multica/releases/latest";
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 let cachedLatestVersion: string | null = null;

@@ -17,9 +17,9 @@
 Open-source platform that turns coding agents into real teammates.<br/>
 Assign tasks, track progress, compound skills — manage your human + agent workforce in one place.
 
-[![CI](https://github.com/multica-ai/multica/actions/workflows/ci.yml/badge.svg)](https://github.com/multica-ai/multica/actions/workflows/ci.yml)
+[![CI](https://github.com/nullne/multica/actions/workflows/ci.yml/badge.svg)](https://github.com/nullne/multica/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![GitHub stars](https://img.shields.io/github/stars/multica-ai/multica?style=flat)](https://github.com/multica-ai/multica/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/nullne/multica?style=flat)](https://github.com/nullne/multica/stargazers)
 
 [Website](https://multica.ai) · [Cloud](https://multica.ai/app) · [Self-Hosting](SELF_HOSTING.md) · [Contributing](CONTRIBUTING.md)
 
@@ -54,7 +54,7 @@ The fastest way to get started — no setup required: **[multica.ai](https://mul
 ### Self-Host with Docker
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/nullne/multica.git
 cd multica
 cp .env.example .env
 # Edit .env — at minimum, change JWT_SECRET
@@ -74,7 +74,7 @@ The `multica` CLI connects your local machine to Multica — authenticate, manag
 # Install (pick one)
 curl -fsSL https://raw.githubusercontent.com/nullne/multica/main/scripts/install.sh | bash
 # or
-brew tap multica-ai/tap && brew install multica
+brew tap nullne/tap && brew install multica
 
 # Authenticate and start
 multica login

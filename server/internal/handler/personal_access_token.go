@@ -7,8 +7,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/auth"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/nullne/multica/server/internal/auth"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 type PersonalAccessTokenResponse struct {

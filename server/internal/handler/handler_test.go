@@ -13,10 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/multica-ai/multica/server/internal/events"
-	"github.com/multica-ai/multica/server/internal/realtime"
-	"github.com/multica-ai/multica/server/internal/service"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/nullne/multica/server/internal/events"
+	"github.com/nullne/multica/server/internal/realtime"
+	"github.com/nullne/multica/server/internal/service"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 var testHandler *Handler

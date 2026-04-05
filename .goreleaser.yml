@@ -40,12 +40,12 @@ changelog:
 brews:
   - name: multica
     repository:
-      owner: multica-ai
+      owner: nullne
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
-    homepage: "https://github.com/multica-ai/multica"
+    homepage: "https://github.com/nullne/multica"
     description: "Multica CLI — local agent runtime and management tool for the Multica platform"
     license: "Apache-2.0"
     install: |

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 func TestListTimeline_MergedAndSorted(t *testing.T) {

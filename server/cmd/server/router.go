@@ -12,14 +12,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/multica-ai/multica/server/internal/auth"
-	"github.com/multica-ai/multica/server/internal/events"
-	"github.com/multica-ai/multica/server/internal/handler"
-	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/realtime"
-	"github.com/multica-ai/multica/server/internal/service"
-	"github.com/multica-ai/multica/server/internal/storage"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/nullne/multica/server/internal/auth"
+	"github.com/nullne/multica/server/internal/events"
+	"github.com/nullne/multica/server/internal/handler"
+	"github.com/nullne/multica/server/internal/middleware"
+	"github.com/nullne/multica/server/internal/realtime"
+	"github.com/nullne/multica/server/internal/service"
+	"github.com/nullne/multica/server/internal/storage"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 func allowedOrigins() []string {

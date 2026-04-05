@@ -11,10 +11,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/multica-ai/multica/server/internal/events"
-	"github.com/multica-ai/multica/server/internal/logger"
-	"github.com/multica-ai/multica/server/internal/realtime"
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/nullne/multica/server/internal/events"
+	"github.com/nullne/multica/server/internal/logger"
+	"github.com/nullne/multica/server/internal/realtime"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 func main() {

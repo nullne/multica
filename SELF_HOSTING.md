@@ -24,7 +24,7 @@ Additionally, each user who wants to run AI agents locally installs the **`multi
 ## Quick Start (Docker Compose)
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/nullne/multica.git
 cd multica
 cp .env.example .env
 ```
@@ -245,7 +245,7 @@ Each team member who wants to run AI agents locally needs to:
 1. **Install the CLI**
 
    ```bash
-   brew tap multica-ai/tap
+   brew tap nullne/tap
    brew install multica-cli
    ```
 

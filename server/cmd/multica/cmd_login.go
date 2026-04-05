@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/nullne/multica/server/internal/cli"
 )
 
 var loginCmd = &cobra.Command{
