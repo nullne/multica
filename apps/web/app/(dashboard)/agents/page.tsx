@@ -115,6 +115,11 @@ const MODEL_SUGGESTIONS = [
   { group: "OpenAI", models: ["o3", "gpt-4.1", "gpt-4.1-mini", "codex-mini-latest", "o4-mini"] },
 ];
 
+function defaultModelLabel(runtime: RuntimeDevice | null | undefined): string {
+  const dm = runtime?.metadata?.default_model;
+  return dm ? `Default (${dm})` : "Default (from daemon config)";
+}
+
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -216,7 +221,7 @@ function CreateAgentDialog({
             <Popover open={modelOpen} onOpenChange={setModelOpen}>
               <PopoverTrigger className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 mt-1.5 text-left text-sm transition-colors hover:bg-muted">
                 <span className={model ? "text-foreground" : "text-muted-foreground"}>
-                  {model || "Default (from daemon config)"}
+                  {model || defaultModelLabel(selectedRuntime)}
                 </span>
                 <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${modelOpen ? "rotate-180" : ""}`} />
               </PopoverTrigger>
@@ -246,7 +251,7 @@ function CreateAgentDialog({
                         data-checked={!model}
                         onSelect={() => { setModel(""); setModelSearch(""); setModelOpen(false); }}
                       >
-                        Default (from daemon config)
+                        {defaultModelLabel(selectedRuntime)}
                       </CommandItem>
                     </CommandGroup>
                     {MODEL_SUGGESTIONS.map((group) => (
@@ -1370,7 +1375,7 @@ function SettingsTab({
         <Popover open={modelOpen} onOpenChange={setModelOpen}>
           <PopoverTrigger className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 mt-1.5 text-left text-sm transition-colors hover:bg-muted">
             <span className={model ? "text-foreground" : "text-muted-foreground"}>
-              {model || "Default (from daemon config)"}
+              {model || defaultModelLabel(runtimeDevice)}
             </span>
             <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${modelOpen ? "rotate-180" : ""}`} />
           </PopoverTrigger>
@@ -1400,7 +1405,7 @@ function SettingsTab({
                     data-checked={!model}
                     onSelect={() => { setModel(""); setModelSearch(""); setModelOpen(false); }}
                   >
-                    Default (from daemon config)
+                    {defaultModelLabel(runtimeDevice)}
                   </CommandItem>
                 </CommandGroup>
                 {MODEL_SUGGESTIONS.map((group) => (

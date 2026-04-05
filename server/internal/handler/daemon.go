@@ -25,10 +25,11 @@ type DaemonRegisterRequest struct {
 	DeviceName  string `json:"device_name"`
 	CLIVersion  string `json:"cli_version"` // multica CLI version
 	Runtimes    []struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		Version string `json:"version"` // agent CLI version (claude/codex)
-		Status  string `json:"status"`
+		Name         string `json:"name"`
+		Type         string `json:"type"`
+		Version      string `json:"version"`       // agent CLI version (claude/codex)
+		Status       string `json:"status"`
+		DefaultModel string `json:"default_model"` // model configured via env var (optional)
 	} `json:"runtimes"`
 }
 
@@ -90,10 +91,14 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		if runtime.Status == "offline" {
 			status = "offline"
 		}
-		metadata, _ := json.Marshal(map[string]any{
+		meta := map[string]any{
 			"version":     runtime.Version,
 			"cli_version": req.CLIVersion,
-		})
+		}
+		if runtime.DefaultModel != "" {
+			meta["default_model"] = runtime.DefaultModel
+		}
+		metadata, _ := json.Marshal(meta)
 
 		registered, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
 			WorkspaceID: parseUUID(req.WorkspaceID),
