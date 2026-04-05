@@ -72,6 +72,7 @@ import { useIssueReactions } from "@/features/issues/hooks/use-issue-reactions";
 import { useIssueSubscribers } from "@/features/issues/hooks/use-issue-subscribers";
 import { ReactionBar } from "@/components/common/reaction-bar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { timeAgo } from "@/shared/utils";
 
 function shortDate(date: string | null): string {
@@ -160,6 +161,8 @@ function PropRow({
 interface IssueDetailProps {
   issueId: string;
   onDelete?: () => void;
+  /** Override mobile back button behavior. When omitted, navigates to /issues. */
+  onBack?: () => void;
   defaultSidebarOpen?: boolean;
   layoutId?: string;
   /** When set, the issue detail will auto-scroll to this comment and briefly highlight it. */
@@ -170,8 +173,9 @@ interface IssueDetailProps {
 // IssueDetail
 // ---------------------------------------------------------------------------
 
-export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId }: IssueDetailProps) {
+export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId }: IssueDetailProps) {
   const id = issueId;
+  const isMobile = useIsMobile();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -374,32 +378,49 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
-      <ResizablePanel id="content" minSize="50%">
+      <ResizablePanel id="content" minSize={isMobile ? "100%" : "50%"}>
       {/* LEFT: Content area */}
       <div className="flex h-full flex-col">
         {/* Header bar */}
         <div className="flex h-12 shrink-0 items-center justify-between border-b bg-background px-4 text-sm">
           <div className="flex items-center gap-1.5 min-w-0">
-            {workspace && (
+            {isMobile ? (
               <>
-                <Link
-                  href="/issues"
-                  className="text-muted-foreground hover:text-foreground transition-colors truncate shrink-0"
-                >
-                  {workspace.name}
-                </Link>
+                {onBack ? (
+                  <button onClick={onBack} className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <Link href="/issues" className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
+                    <ChevronLeft className="h-4 w-4" />
+                  </Link>
+                )}
+                <span className="truncate text-muted-foreground">{issue.identifier}</span>
+              </>
+            ) : (
+              <>
+                {workspace && (
+                  <>
+                    <Link
+                      href="/issues"
+                      className="text-muted-foreground hover:text-foreground transition-colors truncate shrink-0"
+                    >
+                      {workspace.name}
+                    </Link>
+                    <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
+                  </>
+                )}
+                <span className="truncate text-muted-foreground">
+                  {issue.identifier}
+                </span>
                 <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
+                <span className="truncate">{issue.title}</span>
               </>
             )}
-            <span className="truncate text-muted-foreground">
-              {issue.identifier}
-            </span>
-            <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
-            <span className="truncate">{issue.title}</span>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            {/* Issue navigation */}
-            {allIssues.length > 1 && (
+            {/* Issue navigation — hidden on mobile */}
+            {!isMobile && allIssues.length > 1 && (
               <div className="flex items-center gap-0.5 mr-1">
                 <Tooltip>
                   <TooltipTrigger
@@ -582,26 +603,28 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant={sidebarOpen ? "secondary" : "ghost"}
-                    size="icon-xs"
-                    className={sidebarOpen ? "" : "text-muted-foreground"}
-                    onClick={() => {
-                      const panel = sidebarRef.current;
-                      if (!panel) return;
-                      if (panel.isCollapsed()) panel.expand();
-                      else panel.collapse();
-                    }}
-                  >
-                    <PanelRight className="h-4 w-4" />
-                  </Button>
-                }
-              />
-              <TooltipContent side="bottom">Toggle sidebar</TooltipContent>
-            </Tooltip>
+            {!isMobile && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant={sidebarOpen ? "secondary" : "ghost"}
+                      size="icon-xs"
+                      className={sidebarOpen ? "" : "text-muted-foreground"}
+                      onClick={() => {
+                        const panel = sidebarRef.current;
+                        if (!panel) return;
+                        if (panel.isCollapsed()) panel.expand();
+                        else panel.collapse();
+                      }}
+                    >
+                      <PanelRight className="h-4 w-4" />
+                    </Button>
+                  }
+                />
+                <TooltipContent side="bottom">Toggle sidebar</TooltipContent>
+              </Tooltip>
+            )}
           </div>
 
             {/* Delete confirmation dialog (controlled by state) */}
@@ -629,12 +652,12 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
 
         {/* Content — scrollable */}
         <div ref={scrollContainerRef} className="relative flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-4xl px-8 py-8">
+        <div className="mx-auto w-full max-w-4xl px-4 py-4 md:px-8 md:py-8">
           <TitleEditor
             key={`title-${id}`}
             defaultValue={issue.title}
             placeholder="Issue title"
-            className="w-full text-2xl font-bold leading-snug tracking-tight"
+            className="w-full text-xl md:text-2xl font-bold leading-snug tracking-tight"
             onBlur={(value) => {
               const trimmed = value.trim();
               if (trimmed && trimmed !== issue.title) handleUpdateField({ title: trimmed });
@@ -936,122 +959,126 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
         </div>
       </div>
       </ResizablePanel>
-      <ResizableHandle />
-      <ResizablePanel
-        id="sidebar"
-        defaultSize={defaultSidebarOpen ? 320 : 0}
-        minSize={260}
-        maxSize={420}
-        collapsible
-        groupResizeBehavior="preserve-pixel-size"
-        panelRef={sidebarRef}
-        onResize={(size) => setSidebarOpen(size.inPixels > 0)}
-      >
-      {/* RIGHT: Properties sidebar */}
-      <div className="overflow-y-auto border-l h-full">
-        <div className="p-4 space-y-5">
-          {/* Properties section */}
-          <div>
-            <button
-              className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${propertiesOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-              onClick={() => setPropertiesOpen(!propertiesOpen)}
-            >
-              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${propertiesOpen ? "rotate-90" : ""}`} />
-              Properties
-            </button>
+      {!isMobile && (
+        <>
+          <ResizableHandle />
+          <ResizablePanel
+            id="sidebar"
+            defaultSize={defaultSidebarOpen ? 320 : 0}
+            minSize={260}
+            maxSize={420}
+            collapsible
+            groupResizeBehavior="preserve-pixel-size"
+            panelRef={sidebarRef}
+            onResize={(size) => setSidebarOpen(size.inPixels > 0)}
+          >
+          {/* RIGHT: Properties sidebar */}
+          <div className="overflow-y-auto border-l h-full">
+            <div className="p-4 space-y-5">
+              {/* Properties section */}
+              <div>
+                <button
+                  className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${propertiesOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => setPropertiesOpen(!propertiesOpen)}
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${propertiesOpen ? "rotate-90" : ""}`} />
+                  Properties
+                </button>
 
-            {propertiesOpen && <div className="space-y-0.5 pl-2">
-              {/* Status */}
-              <PropRow label="Status">
-                <DropdownMenu>
-                  <DropdownMenuTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden">
-                    <StatusIcon status={issue.status} className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate">{STATUS_CONFIG[issue.status].label}</span>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-44">
-                    {ALL_STATUSES.map((s) => (
-                      <DropdownMenuItem key={s} onClick={() => handleUpdateField({ status: s })}>
-                        <StatusIcon status={s} className="h-3.5 w-3.5" />
-                        {STATUS_CONFIG[s].label}
-                        {s === issue.status && <Check className="ml-auto h-3.5 w-3.5" />}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </PropRow>
+                {propertiesOpen && <div className="space-y-0.5 pl-2">
+                  {/* Status */}
+                  <PropRow label="Status">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden">
+                        <StatusIcon status={issue.status} className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{STATUS_CONFIG[issue.status].label}</span>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-44">
+                        {ALL_STATUSES.map((s) => (
+                          <DropdownMenuItem key={s} onClick={() => handleUpdateField({ status: s })}>
+                            <StatusIcon status={s} className="h-3.5 w-3.5" />
+                            {STATUS_CONFIG[s].label}
+                            {s === issue.status && <Check className="ml-auto h-3.5 w-3.5" />}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </PropRow>
 
-              {/* Priority */}
-              <PropRow label="Priority">
-                <DropdownMenu>
-                  <DropdownMenuTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden">
-                    <PriorityIcon priority={issue.priority} className="shrink-0" />
-                    <span className="truncate">{PRIORITY_CONFIG[issue.priority].label}</span>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-44">
-                    {PRIORITY_ORDER.map((p) => (
-                      <DropdownMenuItem key={p} onClick={() => handleUpdateField({ priority: p })}>
-                        <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${PRIORITY_CONFIG[p].badgeBg} ${PRIORITY_CONFIG[p].badgeText}`}>
-                          <PriorityIcon priority={p} className="h-3 w-3" inheritColor />
-                          {PRIORITY_CONFIG[p].label}
-                        </span>
-                        {p === issue.priority && <Check className="ml-auto h-3.5 w-3.5" />}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </PropRow>
+                  {/* Priority */}
+                  <PropRow label="Priority">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden">
+                        <PriorityIcon priority={issue.priority} className="shrink-0" />
+                        <span className="truncate">{PRIORITY_CONFIG[issue.priority].label}</span>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="w-44">
+                        {PRIORITY_ORDER.map((p) => (
+                          <DropdownMenuItem key={p} onClick={() => handleUpdateField({ priority: p })}>
+                            <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${PRIORITY_CONFIG[p].badgeBg} ${PRIORITY_CONFIG[p].badgeText}`}>
+                              <PriorityIcon priority={p} className="h-3 w-3" inheritColor />
+                              {PRIORITY_CONFIG[p].label}
+                            </span>
+                            {p === issue.priority && <Check className="ml-auto h-3.5 w-3.5" />}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </PropRow>
 
-              {/* Assignee */}
-              <PropRow label="Assignee">
-                <AssigneePicker
-                  assigneeType={issue.assignee_type}
-                  assigneeId={issue.assignee_id}
-                  onUpdate={handleUpdateField}
-                  align="start"
-                />
-              </PropRow>
+                  {/* Assignee */}
+                  <PropRow label="Assignee">
+                    <AssigneePicker
+                      assigneeType={issue.assignee_type}
+                      assigneeId={issue.assignee_id}
+                      onUpdate={handleUpdateField}
+                      align="start"
+                    />
+                  </PropRow>
 
-              {/* Due date */}
-              <PropRow label="Due date">
-                <DueDatePicker
-                  dueDate={issue.due_date}
-                  onUpdate={handleUpdateField}
-                />
-              </PropRow>
-            </div>}
+                  {/* Due date */}
+                  <PropRow label="Due date">
+                    <DueDatePicker
+                      dueDate={issue.due_date}
+                      onUpdate={handleUpdateField}
+                    />
+                  </PropRow>
+                </div>}
+              </div>
+
+              {/* Details section */}
+              <div>
+                <button
+                  className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${detailsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => setDetailsOpen(!detailsOpen)}
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${detailsOpen ? "rotate-90" : ""}`} />
+                  Details
+                </button>
+
+                {detailsOpen && <div className="space-y-0.5 pl-2">
+                  <PropRow label="Created by">
+                    <ActorAvatar
+                      actorType={issue.creator_type}
+                      actorId={issue.creator_id}
+                      size={18}
+                    />
+                    <span className="truncate">{getActorName(issue.creator_type, issue.creator_id)}</span>
+                  </PropRow>
+                  <PropRow label="Created">
+                    <span className="text-muted-foreground">{shortDate(issue.created_at)}</span>
+                  </PropRow>
+                  <PropRow label="Updated">
+                    <span className="text-muted-foreground">{shortDate(issue.updated_at)}</span>
+                  </PropRow>
+                </div>}
+              </div>
+
+            </div>
           </div>
-
-          {/* Details section */}
-          <div>
-            <button
-              className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${detailsOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-              onClick={() => setDetailsOpen(!detailsOpen)}
-            >
-              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${detailsOpen ? "rotate-90" : ""}`} />
-              Details
-            </button>
-
-            {detailsOpen && <div className="space-y-0.5 pl-2">
-              <PropRow label="Created by">
-                <ActorAvatar
-                  actorType={issue.creator_type}
-                  actorId={issue.creator_id}
-                  size={18}
-                />
-                <span className="truncate">{getActorName(issue.creator_type, issue.creator_id)}</span>
-              </PropRow>
-              <PropRow label="Created">
-                <span className="text-muted-foreground">{shortDate(issue.created_at)}</span>
-              </PropRow>
-              <PropRow label="Updated">
-                <span className="text-muted-foreground">{shortDate(issue.updated_at)}</span>
-              </PropRow>
-            </div>}
-          </div>
-
-        </div>
-      </div>
-      </ResizablePanel>
+          </ResizablePanel>
+        </>
+      )}
     </ResizablePanelGroup>
   );
 }

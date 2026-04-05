@@ -25,6 +25,7 @@ import {
   MoreHorizontal,
   Play,
   ChevronDown,
+  ChevronLeft,
   Globe,
   Lock,
   Settings,
@@ -72,6 +73,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/shared/api";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useRuntimeStore } from "@/features/runtimes";
@@ -1541,6 +1543,7 @@ function AgentDetail({
 // ---------------------------------------------------------------------------
 
 export default function AgentsPage() {
+  const isMobile = useIsMobile();
   const isLoading = useAuthStore((s) => s.isLoading);
   const workspace = useWorkspaceStore((s) => s.workspace);
   const agents = useWorkspaceStore((s) => s.agents);
@@ -1643,6 +1646,99 @@ export default function AgentsPage() {
     );
   }
 
+  const agentList = (
+    <div className="overflow-y-auto h-full border-r">
+      <div className="flex h-12 items-center justify-between border-b px-4">
+        <h1 className="text-sm font-semibold">Agents</h1>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={() => setShowCreate(true)}
+        >
+          <Plus className="h-4 w-4 text-muted-foreground" />
+        </Button>
+      </div>
+      {agents.length === 0 ? (
+        <div className="flex flex-col items-center justify-center px-4 py-12">
+          <Bot className="h-8 w-8 text-muted-foreground/40" />
+          <p className="mt-3 text-sm text-muted-foreground">No agents yet</p>
+          <Button
+            onClick={() => setShowCreate(true)}
+            size="xs"
+            className="mt-3"
+          >
+            <Plus className="h-3 w-3" />
+            Create Agent
+          </Button>
+        </div>
+      ) : (
+        <div className="divide-y">
+          {agents.map((agent) => (
+            <AgentListItem
+              key={agent.id}
+              agent={agent}
+              isSelected={agent.id === selectedId}
+              onClick={() => setSelectedId(agent.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const agentDetail = selected ? (
+    <AgentDetail
+      key={selected.id}
+      agent={selected}
+      runtimes={runtimes}
+      onUpdate={handleUpdate}
+      onArchive={handleArchive}
+      onRestore={handleRestore}
+    />
+  ) : (
+    <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+      <Bot className="h-10 w-10 text-muted-foreground/30" />
+      <p className="mt-3 text-sm">Select an agent to view details</p>
+      <Button
+        onClick={() => setShowCreate(true)}
+        size="xs"
+        className="mt-3"
+      >
+        <Plus className="h-3 w-3" />
+        Create Agent
+      </Button>
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="flex flex-1 min-h-0 flex-col">
+        {selected ? (
+          <>
+            <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+              <Button variant="ghost" size="icon-xs" onClick={() => setSelectedId("")}>
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span className="text-sm font-medium truncate">Agents</span>
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {agentDetail}
+            </div>
+          </>
+        ) : (
+          agentList
+        )}
+        {showCreate && (
+          <CreateAgentDialog
+            runtimes={runtimes}
+            onClose={() => setShowCreate(false)}
+            onCreate={handleCreate}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <ResizablePanelGroup
       orientation="horizontal"
@@ -1651,73 +1747,13 @@ export default function AgentsPage() {
       onLayoutChanged={onLayoutChanged}
     >
       <ResizablePanel id="list" defaultSize={280} minSize={240} maxSize={400} groupResizeBehavior="preserve-pixel-size">
-        {/* Left column — agent list */}
-        <div className="overflow-y-auto h-full border-r">
-          <div className="flex h-12 items-center justify-between border-b px-4">
-            <h1 className="text-sm font-semibold">Agents</h1>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => setShowCreate(true)}
-            >
-              <Plus className="h-4 w-4 text-muted-foreground" />
-            </Button>
-          </div>
-          {agents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center px-4 py-12">
-              <Bot className="h-8 w-8 text-muted-foreground/40" />
-              <p className="mt-3 text-sm text-muted-foreground">No agents yet</p>
-              <Button
-                onClick={() => setShowCreate(true)}
-                size="xs"
-                className="mt-3"
-              >
-                <Plus className="h-3 w-3" />
-                Create Agent
-              </Button>
-            </div>
-          ) : (
-            <div className="divide-y">
-              {agents.map((agent) => (
-                <AgentListItem
-                  key={agent.id}
-                  agent={agent}
-                  isSelected={agent.id === selectedId}
-                  onClick={() => setSelectedId(agent.id)}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+        {agentList}
       </ResizablePanel>
 
       <ResizableHandle />
 
       <ResizablePanel id="detail" minSize="50%">
-        {/* Right column — agent detail */}
-        {selected ? (
-          <AgentDetail
-            key={selected.id}
-            agent={selected}
-            runtimes={runtimes}
-            onUpdate={handleUpdate}
-            onArchive={handleArchive}
-            onRestore={handleRestore}
-          />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
-            <Bot className="h-10 w-10 text-muted-foreground/30" />
-            <p className="mt-3 text-sm">Select an agent to view details</p>
-            <Button
-              onClick={() => setShowCreate(true)}
-              size="xs"
-              className="mt-3"
-            >
-              <Plus className="h-3 w-3" />
-              Create Agent
-            </Button>
-          </div>
-        )}
+        {agentDetail}
       </ResizablePanel>
 
       {showCreate && (

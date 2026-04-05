@@ -116,8 +116,8 @@ export function IssuesPage() {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      {/* Header 1: Workspace breadcrumb */}
-      <div className="flex h-12 shrink-0 items-center gap-1.5 border-b px-4">
+      {/* Header 1: Workspace breadcrumb — hidden on mobile since sidebar handles navigation */}
+      <div className="hidden md:flex h-12 shrink-0 items-center gap-1.5 border-b px-4">
         <WorkspaceAvatar name={workspace?.name ?? "W"} size="sm" />
         <span className="text-sm text-muted-foreground">
           {workspace?.name ?? "Workspace"}

@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useCallback } from "react";
-import { Server } from "lucide-react";
+import { Server, ChevronLeft } from "lucide-react";
 import { useDefaultLayout } from "react-resizable-panels";
 import {
   ResizablePanelGroup,
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useWSEvent } from "@/features/realtime";
@@ -17,6 +19,7 @@ import { RuntimeList } from "./runtime-list";
 import { RuntimeDetail } from "./runtime-detail";
 
 export default function RuntimesPage() {
+  const isMobile = useIsMobile();
   const isLoading = useAuthStore((s) => s.isLoading);
   const workspace = useWorkspaceStore((s) => s.workspace);
   const runtimes = useRuntimeStore((s) => s.runtimes);
@@ -75,6 +78,34 @@ export default function RuntimesPage() {
             ))}
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (isMobile) {
+    // Mobile: show list or detail, not both
+    if (selected) {
+      return (
+        <div className="flex flex-1 min-h-0 flex-col">
+          <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+            <Button variant="ghost" size="icon-xs" onClick={() => setSelectedId("")}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="text-sm font-medium truncate">Runtimes</span>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <RuntimeDetail key={selected.id} runtime={selected} />
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="flex flex-1 min-h-0 flex-col">
+        <RuntimeList
+          runtimes={runtimes}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+        />
       </div>
     );
   }
