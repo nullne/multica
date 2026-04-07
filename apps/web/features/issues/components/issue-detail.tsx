@@ -91,6 +91,11 @@ function priorityLabel(priority: string): string {
   return PRIORITY_CONFIG[priority as IssuePriority]?.label ?? priority;
 }
 
+function humanizeActivityAction(action?: string): string {
+  if (!action) return "updated this issue";
+  return action.replace(/_/g, " ");
+}
+
 function formatActivity(
   entry: TimelineEntry,
   resolveActorName?: (type: string, id: string) => string,
@@ -127,7 +132,7 @@ function formatActivity(
     case "task_failed":
       return "task failed";
     default:
-      return entry.action ?? "";
+      return humanizeActivityAction(entry.action);
   }
 }
 
