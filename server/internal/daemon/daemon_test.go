@@ -66,6 +66,48 @@ func TestBuildPromptNoIssueDetails(t *testing.T) {
 	}
 }
 
+func TestBuildPromptCriteriaRoleIncludesStructuredBlock(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildPrompt(Task{
+		IssueID: "issue-1",
+		Context: map[string]any{"role": "criteria"},
+	})
+	for _, want := range []string{
+		"acceptance-criteria definition step",
+		"<!--multica:criteria",
+		"\"criteria\"",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
+func TestBuildPromptValidatorRoleIncludesCriteriaJSON(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildPrompt(Task{
+		IssueID: "issue-1",
+		Context: map[string]any{
+			"role": "validator",
+			"acceptance_criteria": []map[string]any{
+				{"id": "AC-1", "check": "response contains x"},
+			},
+		},
+	})
+	for _, want := range []string{
+		"verification/acceptance step",
+		"acceptance criteria JSON data",
+		"AC-1",
+		"<!--multica:verification",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
 func TestIsWorkspaceNotFoundError(t *testing.T) {
 	t.Parallel()
 

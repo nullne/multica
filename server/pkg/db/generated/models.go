@@ -175,6 +175,7 @@ type Issue struct {
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	Number             int32              `json:"number"`
+	VerifierAgentID    pgtype.UUID        `json:"verifier_agent_id"`
 }
 
 type IssueDependency struct {
