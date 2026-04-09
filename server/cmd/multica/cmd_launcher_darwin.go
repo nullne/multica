@@ -7,25 +7,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var launcherCmd = &cobra.Command{
 	Use:   "launcher",
-	Short: "Manage macOS global shortcut for the project picker (macOS only)",
+	Short: "Manage macOS native project picker app (macOS only)",
 }
 
 var launcherInstallCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Install a macOS Quick Action for 'multica open' with a global keyboard shortcut",
+	Short: "Install a native macOS app that shows a project picker dialog",
 	RunE:  runLauncherInstall,
 }
 
 var launcherUninstallCmd = &cobra.Command{
 	Use:   "uninstall",
-	Short: "Remove the macOS Quick Action",
+	Short: "Remove the macOS launcher app",
 	RunE:  runLauncherUninstall,
 }
 
@@ -37,19 +36,7 @@ func init() {
 	launcherCmd.AddCommand(launcherUninstallCmd)
 }
 
-const (
-	serviceName   = "Multica Open Project"
-	workflowDir   = "Multica Open Project.workflow"
-	launchAppName = "Multica Open.app"
-)
-
-func servicesDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, "Library", "Services"), nil
-}
+const launchAppName = "Multica Open.app"
 
 func applicationsDir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -70,187 +57,68 @@ func runLauncherInstall(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("cannot find multica binary: %w", err)
 		}
 	}
+	multicaPath, _ = filepath.Abs(multicaPath)
 
 	profile := resolveProfile(cmd)
 	editorFlag := ""
 	if editor != "" {
-		editorFlag = fmt.Sprintf(" --editor %s", editor)
+		editorFlag = " --editor " + editor
 	}
 	profileFlag := ""
 	if profile != "" {
-		profileFlag = fmt.Sprintf(" --profile %s", profile)
+		profileFlag = " --profile " + profile
 	}
 
-	// --- 1. Create Automator Quick Action (.workflow) ---
-	svcDir, err := servicesDir()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(svcDir, 0o755); err != nil {
-		return fmt.Errorf("create Services dir: %w", err)
-	}
+	baseCmd := multicaPath + " open" + profileFlag
+	listCmd := baseCmd + " --list"
+	openCmd := baseCmd + editorFlag + " --project"
 
-	wfPath := filepath.Join(svcDir, workflowDir)
-	wfContents := filepath.Join(wfPath, "Contents")
-	if err := os.MkdirAll(wfContents, 0o755); err != nil {
-		return fmt.Errorf("create workflow dir: %w", err)
-	}
+	// AppleScript that:
+	// 1. Calls `multica open --list` to get project names
+	// 2. Shows a native macOS "choose from list" dialog
+	// 3. Calls `multica open --project <selection>` to clone + open in editor
+	appleScript := fmt.Sprintf(`#!/usr/bin/osascript
+on run
+	try
+		set projectText to do shell script "%s"
+	on error errMsg
+		display dialog "Failed to fetch projects:" & return & return & errMsg with title "Multica" buttons {"OK"} default button "OK" with icon stop
+		return
+	end try
 
-	openCommand := fmt.Sprintf("%s open%s%s", multicaPath, profileFlag, editorFlag)
+	if projectText is "" then
+		display dialog "No projects found." & return & return & "Add repos to your workspace settings in the web app." with title "Multica" buttons {"OK"} default button "OK" with icon note
+		return
+	end if
 
-	infoPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>NSServices</key>
-	<array>
-		<dict>
-			<key>NSMenuItem</key>
-			<dict>
-				<key>default</key>
-				<string>%s</string>
-			</dict>
-			<key>NSMessage</key>
-			<string>runWorkflowAsService</string>
-		</dict>
-	</array>
-</dict>
-</plist>`, serviceName)
+	set oldDelims to AppleScript's text item delimiters
+	set AppleScript's text item delimiters to linefeed
+	set projectList to text items of projectText
+	set AppleScript's text item delimiters to oldDelims
 
-	documentWflow := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>AMApplicationBuild</key>
-	<string>523</string>
-	<key>AMApplicationVersion</key>
-	<string>2.10</string>
-	<key>AMDocumentVersion</key>
-	<string>2</string>
-	<key>actions</key>
-	<array>
-		<dict>
-			<key>action</key>
-			<dict>
-				<key>AMAccepts</key>
-				<dict>
-					<key>Container</key>
-					<string>List</string>
-					<key>Optional</key>
-					<true/>
-					<key>Type</key>
-					<string>0</string>
-				</dict>
-				<key>AMActionVersion</key>
-				<string>1.0.2</string>
-				<key>AMApplication</key>
-				<array>
-					<string>Automator</string>
-				</array>
-				<key>AMLargeIcon</key>
-				<false/>
-				<key>AMParameterProperties</key>
-				<dict>
-					<key>COMMAND_STRING</key>
-					<dict/>
-					<key>CheckedForUserDefaultShell</key>
-					<dict/>
-					<key>inputMethod</key>
-					<dict/>
-					<key>shell</key>
-					<dict/>
-					<key>source</key>
-					<dict/>
-				</dict>
-				<key>AMProvides</key>
-				<dict>
-					<key>Container</key>
-					<string>List</string>
-					<key>Type</key>
-					<string>0</string>
-				</dict>
-				<key>ActionBundlePath</key>
-				<string>/System/Library/Automator/Run Shell Script.action</string>
-				<key>ActionName</key>
-				<string>Run Shell Script</string>
-				<key>ActionParameters</key>
-				<dict>
-					<key>COMMAND_STRING</key>
-					<string>%s</string>
-					<key>CheckedForUserDefaultShell</key>
-					<true/>
-					<key>inputMethod</key>
-					<integer>1</integer>
-					<key>shell</key>
-					<string>/bin/zsh</string>
-					<key>source</key>
-					<string></string>
-				</dict>
-				<key>BundleIdentifier</key>
-				<string>com.apple.RunShellScript</string>
-				<key>CFBundleVersion</key>
-				<string>1.0.2</string>
-				<key>CanShowSelectedItemsWhenRun</key>
-				<false/>
-				<key>CanShowWhenRun</key>
-				<true/>
-				<key>Category</key>
-				<array>
-					<string>AMCategoryUtilities</string>
-				</array>
-				<key>Class Name</key>
-				<string>RunShellScriptAction</string>
-				<key>InputUUID</key>
-				<string>A1A1A1A1-B2B2-C3C3-D4D4-E5E5E5E5E5E5</string>
-				<key>Keywords</key>
-				<array>
-					<string>Shell</string>
-					<string>Script</string>
-					<string>Command</string>
-					<string>Run</string>
-					<string>Unix</string>
-				</array>
-				<key>OutputUUID</key>
-				<string>F6F6F6F6-A7A7-B8B8-C9C9-D0D0D0D0D0D0</string>
-				<key>UUID</key>
-				<string>12345678-AAAA-BBBB-CCCC-DDDDDDDDDDDD</string>
-				<key>UnlocalizedApplications</key>
-				<array>
-					<string>Automator</string>
-				</array>
-			</dict>
-		</dict>
-	</array>
-	<key>connectors</key>
-	<dict/>
-	<key>workflowMetaData</key>
-	<dict>
-		<key>workflowTypeIdentifier</key>
-		<string>com.apple.Automator.servicesMenu</string>
-	</dict>
-</dict>
-</plist>`, openCommand)
+	set selectedProject to choose from list projectList with title "Multica — Open Project" with prompt "Select a project to open in your editor:" OK button name "Open" cancel button name "Cancel"
 
-	if err := os.WriteFile(filepath.Join(wfContents, "Info.plist"), []byte(infoPlist), 0o644); err != nil {
-		return fmt.Errorf("write Info.plist: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(wfContents, "document.wflow"), []byte(documentWflow), 0o644); err != nil {
-		return fmt.Errorf("write document.wflow: %w", err)
-	}
+	if selectedProject is false then return
 
-	// --- 2. Create a standalone .app launcher (opens Terminal + multica open) ---
+	set chosenProject to item 1 of selectedProject
+
+	try
+		do shell script "%s " & quoted form of chosenProject & " > /dev/null 2>&1 &"
+	on error errMsg
+		display dialog "Failed to open project:" & return & return & errMsg with title "Multica" buttons {"OK"} default button "OK" with icon stop
+	end try
+end run
+`, listCmd, openCmd)
+
+	// Create .app bundle
 	appDir, err := applicationsDir()
 	if err != nil {
 		return err
 	}
+
+	// Remove old version if present
 	appPath := filepath.Join(appDir, launchAppName)
-	appScript := fmt.Sprintf(`#!/bin/bash
-osascript -e '
-tell application "Terminal"
-    activate
-    do script "%s"
-end tell'
-`, strings.ReplaceAll(openCommand, `"`, `\"`))
+	os.RemoveAll(appPath)
 
 	scriptDir := filepath.Join(appPath, "Contents", "MacOS")
 	if err := os.MkdirAll(scriptDir, 0o755); err != nil {
@@ -258,11 +126,11 @@ end tell'
 	}
 
 	scriptPath := filepath.Join(scriptDir, "launcher")
-	if err := os.WriteFile(scriptPath, []byte(appScript), 0o755); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(appleScript), 0o755); err != nil {
 		return fmt.Errorf("write launcher script: %w", err)
 	}
 
-	appInfoPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+	appInfoPlist := `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -271,62 +139,53 @@ end tell'
 	<key>CFBundleIdentifier</key>
 	<string>com.multica.open</string>
 	<key>CFBundleName</key>
-	<string>%s</string>
+	<string>Multica Open</string>
 	<key>CFBundleVersion</key>
 	<string>1.0</string>
 	<key>LSUIElement</key>
 	<true/>
 </dict>
-</plist>`, serviceName)
+</plist>`
 
 	contentsDir := filepath.Join(appPath, "Contents")
 	if err := os.WriteFile(filepath.Join(contentsDir, "Info.plist"), []byte(appInfoPlist), 0o644); err != nil {
 		return fmt.Errorf("write app Info.plist: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "✓ Installed Quick Action: "+wfPath)
-	fmt.Fprintln(os.Stderr, "✓ Installed launcher app: "+appPath)
+	fmt.Fprintln(os.Stderr, "✓ Installed native launcher: "+appPath)
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "How to use:")
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, "  • Spotlight (⌘Space) → type \"Multica Open\" → Enter")
+	fmt.Fprintln(os.Stderr, "  • Raycast / Alfred → search \"Multica Open\"")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "To assign a global keyboard shortcut (e.g. "+shortcut+"):")
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  1. Open System Settings → Keyboard → Keyboard Shortcuts → Services")
-	fmt.Fprintln(os.Stderr, "  2. Find \""+serviceName+"\" under General")
-	fmt.Fprintln(os.Stderr, "  3. Click \"Add Shortcut\" and press your preferred key combination")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "Or use Spotlight / Raycast / Alfred to launch \"Multica Open\".")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "You can also run 'multica open' directly from any terminal.")
+	fmt.Fprintln(os.Stderr, "  1. Open Automator → File → New → Quick Action")
+	fmt.Fprintln(os.Stderr, "  2. Add \"Launch Application\" → select \"Multica Open\" from ~/Applications")
+	fmt.Fprintln(os.Stderr, "  3. Save as \"Multica Open\"")
+	fmt.Fprintln(os.Stderr, "  4. System Settings → Keyboard → Keyboard Shortcuts → Services")
+	fmt.Fprintln(os.Stderr, "     → find \"Multica Open\" → assign your shortcut")
 
 	return nil
 }
 
 func runLauncherUninstall(_ *cobra.Command, _ []string) error {
-	removed := 0
-
-	svcDir, err := servicesDir()
-	if err == nil {
-		wfPath := filepath.Join(svcDir, workflowDir)
-		if err := os.RemoveAll(wfPath); err == nil {
-			fmt.Fprintln(os.Stderr, "✓ Removed Quick Action: "+wfPath)
-			removed++
-		}
-	}
-
 	appDir, err := applicationsDir()
-	if err == nil {
-		appPath := filepath.Join(appDir, launchAppName)
-		if err := os.RemoveAll(appPath); err == nil {
-			fmt.Fprintln(os.Stderr, "✓ Removed launcher app: "+appPath)
-			removed++
-		}
+	if err != nil {
+		return err
 	}
 
-	if removed == 0 {
+	appPath := filepath.Join(appDir, launchAppName)
+	if _, err := os.Stat(appPath); os.IsNotExist(err) {
 		fmt.Fprintln(os.Stderr, "Nothing to remove — launcher is not installed.")
-	} else {
-		fmt.Fprintln(os.Stderr, "\nIf you assigned a keyboard shortcut, remove it in:")
-		fmt.Fprintln(os.Stderr, "  System Settings → Keyboard → Keyboard Shortcuts → Services")
+		return nil
 	}
 
+	if err := os.RemoveAll(appPath); err != nil {
+		return fmt.Errorf("remove app: %w", err)
+	}
+
+	fmt.Fprintln(os.Stderr, "✓ Removed launcher: "+appPath)
 	return nil
 }

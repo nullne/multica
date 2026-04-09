@@ -29,6 +29,8 @@ var openCmd = &cobra.Command{
 
 func init() {
 	openCmd.Flags().String("editor", "", "Editor to open projects in (default: cursor, fallback: code)")
+	openCmd.Flags().Bool("list", false, "Print project list as newline-separated strings and exit (for scripting)")
+	openCmd.Flags().String("project", "", "Skip picker and open a specific project (format: \"workspace / repo\")")
 }
 
 type project struct {
@@ -224,8 +226,9 @@ func openInEditor(editor, editorPath string) error {
 func runOpen(cmd *cobra.Command, _ []string) error {
 	profile := resolveProfile(cmd)
 	editor, _ := cmd.Flags().GetString("editor")
+	listOnly, _ := cmd.Flags().GetBool("list")
+	projectArg, _ := cmd.Flags().GetString("project")
 
-	fmt.Fprintf(os.Stderr, "Fetching workspaces...\n")
 	projects, err := fetchProjects(cmd)
 	if err != nil {
 		return err
@@ -234,31 +237,60 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("no repos found in any workspace.\nAdd repos to your workspace settings in the web app")
 	}
 
-	m := newOpenModel(projects, editor)
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	finalModel, err := p.Run()
-	if err != nil {
-		return fmt.Errorf("TUI error: %w", err)
-	}
-
-	result := finalModel.(openModel)
-	if result.selected == nil {
+	// --list: print project names and exit (used by the native macOS launcher)
+	if listOnly {
+		for _, p := range projects {
+			fmt.Printf("%s / %s\n", p.WorkspaceName, p.RepoName)
+		}
 		return nil
 	}
 
-	proj := result.selected
+	var proj *project
 
+	// --project: skip TUI, match by "workspace / repo" label
+	if projectArg != "" {
+		for i, p := range projects {
+			label := fmt.Sprintf("%s / %s", p.WorkspaceName, p.RepoName)
+			if label == projectArg {
+				proj = &projects[i]
+				break
+			}
+		}
+		if proj == nil {
+			return fmt.Errorf("project %q not found", projectArg)
+		}
+	} else {
+		// Interactive TUI picker
+		fmt.Fprintf(os.Stderr, "Fetching workspaces...\n")
+		m := newOpenModel(projects, editor)
+		p := tea.NewProgram(m, tea.WithAltScreen())
+		finalModel, err := p.Run()
+		if err != nil {
+			return fmt.Errorf("TUI error: %w", err)
+		}
+
+		result := finalModel.(openModel)
+		if result.selected == nil {
+			return nil
+		}
+		proj = result.selected
+	}
+
+	return cloneAndOpen(profile, editor, *proj)
+}
+
+func cloneAndOpen(profile, editor string, proj project) error {
 	wsRoot, err := workspacesRoot(profile)
 	if err != nil {
 		return fmt.Errorf("resolve workspaces root: %w", err)
 	}
 
-	bare := barePath(wsRoot, *proj)
+	bare := barePath(wsRoot, proj)
 	if err := ensureBareClone(proj.RepoURL, bare); err != nil {
 		return err
 	}
 
-	wtPath, err := createWorktree(bare, wsRoot, *proj)
+	wtPath, err := createWorktree(bare, wsRoot, proj)
 	if err != nil {
 		return err
 	}
