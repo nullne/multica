@@ -78,8 +78,7 @@ setup: ## First-time setup: install deps, start DB, run migrations
 	@echo "✓ Setup complete! Run 'make dev' to start developing."
 
 dev: ## Start local dev with hot-reload (Docker-only, no local toolchain needed)
-	@$(DEV_COMPOSE) up --build
-	@trap '$(DEV_COMPOSE) down' EXIT
+	@$(DEV_COMPOSE) up --build; $(DEV_COMPOSE) down
 
 dev-local: ## Start local dev with hot-reload (requires Go + Node)
 	$(REQUIRE_ENV)
