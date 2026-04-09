@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
   workflow_call:
 
 concurrency:
@@ -72,7 +72,7 @@ jobs:
 
   # Build and push Docker images to GHCR (only on main push)
   images:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging')
     needs: [frontend, backend]
     runs-on: ubuntu-latest
     permissions:
@@ -108,7 +108,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
           tags: |
             type=sha,prefix=
-            type=raw,value=latest
+            type=raw,value=${{ github.ref == 'refs/heads/main' && 'latest' || 'staging' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
