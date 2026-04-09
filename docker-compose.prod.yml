@@ -49,10 +49,15 @@ services:
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+      MULTICA_GITHUB_APP_ID: ${MULTICA_GITHUB_APP_ID:-}
+      MULTICA_GITHUB_APP_SLUG: ${MULTICA_GITHUB_APP_SLUG:-}
+      MULTICA_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github-app-key.pem
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
       http_proxy: ""
       https_proxy: ""
+    volumes:
+      - ./secrets/github-app-key.pem:/run/secrets/github-app-key.pem:ro
     depends_on:
       migrate:
         condition: service_completed_successfully

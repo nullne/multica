@@ -34,6 +34,8 @@ type Task struct {
 	PriorSessionID   string         `json:"prior_session_id,omitempty"`   // Claude session ID from a previous task on this issue
 	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`     // work_dir from a previous task on this issue
 	TriggerCommentID string         `json:"trigger_comment_id,omitempty"` // comment that triggered this task
+	GitHubToken      string         `json:"github_token,omitempty"`
+	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
 }
 
 // AgentData holds agent details returned by the claim endpoint.

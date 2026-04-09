@@ -236,6 +236,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 
 	// Build response with fresh agent data (name + skills).
 	resp := taskToResponse(*task)
+	var agentCodeAccess string
 	if agent, err := h.Queries.GetAgent(r.Context(), task.AgentID); err == nil {
 		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
 		resp.Agent = &TaskAgentData{
@@ -244,15 +245,30 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			Instructions: agent.Instructions,
 			Skills:       skills,
 		}
+		agentCodeAccess = agent.GithubCodeAccess
 	}
 
 	// Include workspace ID and repos so the daemon can set up worktrees.
+	// Also generate a scoped GitHub token if a GitHub App is configured.
 	if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
 		resp.WorkspaceID = uuidToString(issue.WorkspaceID)
-		if ws, err := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID); err == nil && ws.Repos != nil {
-			var repos []RepoData
-			if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
-				resp.Repos = repos
+		if ws, err := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID); err == nil {
+			if ws.Repos != nil {
+				var repos []RepoData
+				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+					resp.Repos = repos
+				}
+			}
+			// Generate scoped GitHub installation token for the agent.
+			if agentCodeAccess != "" {
+				var repoURLs []string
+				for _, r := range resp.Repos {
+					repoURLs = append(repoURLs, r.URL)
+				}
+				if token := h.generateGitHubTokenForAgent(r, ws, agentCodeAccess, repoURLs); token != "" {
+					resp.GitHubToken = token
+					resp.GitHubCodeAccess = agentCodeAccess
+				}
 			}
 		}
 	}

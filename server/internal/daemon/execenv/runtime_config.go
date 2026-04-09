@@ -141,6 +141,22 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- **Agent**: `[@Name](mention://agent/<agent-id>)` — renders as a styled mention\n\n")
 	b.WriteString("Use `multica issue list --output json` to look up issue IDs, and `multica workspace members --output json` for member IDs.\n\n")
 
+	// Inject GitHub code access restrictions.
+	if ctx.GitHubCodeAccess != "" {
+		b.WriteString("## GitHub Access\n\n")
+		switch ctx.GitHubCodeAccess {
+		case "read":
+			b.WriteString("You have **read-only** access to code repositories. ")
+			b.WriteString("Do not attempt to push commits or merge pull requests. ")
+			b.WriteString("You can create issues and comment on issues/PRs.\n\n")
+		case "write":
+			b.WriteString("You can push code and create pull requests. ")
+			b.WriteString("You **MUST NOT** merge pull requests — create PRs for review only.\n\n")
+		case "admin":
+			b.WriteString("You have full access: push code, create pull requests, and merge them.\n\n")
+		}
+	}
+
 	b.WriteString("## Output\n\n")
 	b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")
 	b.WriteString("Good: \"Fixed the login redirect. PR: https://...\"\n")

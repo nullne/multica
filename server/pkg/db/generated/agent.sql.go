@@ -14,7 +14,7 @@ import (
 const archiveAgent = `-- name: ArchiveAgent :one
 UPDATE agent SET archived_at = now(), archived_by = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access
 `
 
 type ArchiveAgentParams struct {
@@ -45,6 +45,7 @@ func (q *Queries) ArchiveAgent(ctx context.Context, arg ArchiveAgentParams) (Age
 		&i.Instructions,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+		&i.GithubCodeAccess,
 	)
 	return i, err
 }
@@ -207,9 +208,9 @@ const createAgent = `-- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, runtime_mode,
     runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
-    tools, triggers, instructions
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by
+    tools, triggers, instructions, github_code_access
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access
 `
 
 type CreateAgentParams struct {
@@ -226,6 +227,7 @@ type CreateAgentParams struct {
 	Tools              []byte      `json:"tools"`
 	Triggers           []byte      `json:"triggers"`
 	Instructions       string      `json:"instructions"`
+	GithubCodeAccess   string      `json:"github_code_access"`
 }
 
 func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error) {
@@ -243,6 +245,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		arg.Tools,
 		arg.Triggers,
 		arg.Instructions,
+		arg.GithubCodeAccess,
 	)
 	var i Agent
 	err := row.Scan(
@@ -265,6 +268,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.Instructions,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+		&i.GithubCodeAccess,
 	)
 	return i, err
 }
@@ -394,7 +398,7 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access FROM agent
 WHERE id = $1
 `
 
@@ -421,12 +425,13 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.Instructions,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+		&i.GithubCodeAccess,
 	)
 	return i, err
 }
 
 const getAgentInWorkspace = `-- name: GetAgentInWorkspace :one
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access FROM agent
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -458,6 +463,7 @@ func (q *Queries) GetAgentInWorkspace(ctx context.Context, arg GetAgentInWorkspa
 		&i.Instructions,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+		&i.GithubCodeAccess,
 	)
 	return i, err
 }
@@ -652,7 +658,7 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
 ORDER BY created_at ASC
 `
@@ -686,6 +692,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 			&i.Instructions,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
+			&i.GithubCodeAccess,
 		); err != nil {
 			return nil, err
 		}
@@ -698,7 +705,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 }
 
 const listAllAgents = `-- name: ListAllAgents :many
-SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by FROM agent
+SELECT id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access FROM agent
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -732,6 +739,7 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.Instructions,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
+			&i.GithubCodeAccess,
 		); err != nil {
 			return nil, err
 		}
@@ -832,7 +840,7 @@ func (q *Queries) ListTasksByIssue(ctx context.Context, issueID pgtype.UUID) ([]
 const restoreAgent = `-- name: RestoreAgent :one
 UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access
 `
 
 func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -858,6 +866,7 @@ func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.Instructions,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+		&i.GithubCodeAccess,
 	)
 	return i, err
 }
@@ -907,9 +916,10 @@ UPDATE agent SET
     tools = COALESCE($11, tools),
     triggers = COALESCE($12, triggers),
     instructions = COALESCE($13, instructions),
+    github_code_access = COALESCE($14, github_code_access),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access
 `
 
 type UpdateAgentParams struct {
@@ -926,6 +936,7 @@ type UpdateAgentParams struct {
 	Tools              []byte      `json:"tools"`
 	Triggers           []byte      `json:"triggers"`
 	Instructions       pgtype.Text `json:"instructions"`
+	GithubCodeAccess   pgtype.Text `json:"github_code_access"`
 }
 
 func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error) {
@@ -943,6 +954,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		arg.Tools,
 		arg.Triggers,
 		arg.Instructions,
+		arg.GithubCodeAccess,
 	)
 	var i Agent
 	err := row.Scan(
@@ -965,6 +977,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.Instructions,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+		&i.GithubCodeAccess,
 	)
 	return i, err
 }
@@ -972,7 +985,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agent SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by
+RETURNING id, workspace_id, name, avatar_url, runtime_mode, runtime_config, visibility, status, max_concurrent_tasks, owner_id, created_at, updated_at, description, tools, triggers, runtime_id, instructions, archived_at, archived_by, github_code_access
 `
 
 type UpdateAgentStatusParams struct {
@@ -1003,6 +1016,7 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.Instructions,
 		&i.ArchivedAt,
 		&i.ArchivedBy,
+		&i.GithubCodeAccess,
 	)
 	return i, err
 }
