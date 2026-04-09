@@ -204,6 +204,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [detailsOpen, setDetailsOpen] = useState(true);
+  const [criteriaOpen, setCriteriaOpen] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -1108,6 +1109,46 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   </PropRow>
                 </div>}
               </div>
+
+              {/* Acceptance Criteria section */}
+              {issue.acceptance_criteria?.length > 0 && (
+                <div>
+                  <button
+                    className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${criteriaOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => setCriteriaOpen(!criteriaOpen)}
+                  >
+                    <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${criteriaOpen ? "rotate-90" : ""}`} />
+                    Acceptance Criteria
+                    <span className="ml-auto text-muted-foreground font-normal">{issue.acceptance_criteria.length}</span>
+                  </button>
+
+                  {criteriaOpen && (
+                    <div className="space-y-2 pl-2">
+                      {issue.acceptance_criteria.map((ac) => {
+                        const severity = String(ac.severity ?? "");
+                        const check = String(ac.check ?? "");
+                        const title = String(ac.title ?? ac.description ?? "");
+                        return (
+                          <div key={ac.id} className="rounded-md border px-3 py-2 text-xs">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <span className="font-mono text-muted-foreground">{ac.id}</span>
+                              {severity && (
+                                <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${severity === "must" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
+                                  {severity}
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-medium mb-0.5">{title}</div>
+                            {check && (
+                              <div className="text-muted-foreground leading-relaxed">{check}</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
             </div>
           </div>
