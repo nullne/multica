@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,7 +23,7 @@ import (
 var openCmd = &cobra.Command{
 	Use:   "open",
 	Short: "Interactive project picker — select a project and open it in your editor",
-	Long:  "Scan local workspace repositories and present an interactive picker.\nSelect a project to open it in Cursor (or another configured editor).",
+	Long:  "Fetch workspaces and repos from the server, present an interactive picker,\nclone if needed, and open in Cursor (or another configured editor).",
 	RunE:  runOpen,
 }
 
@@ -28,74 +31,61 @@ func init() {
 	openCmd.Flags().String("editor", "", "Editor to open projects in (default: cursor, fallback: code)")
 }
 
-// project represents a locally available repository within a workspace.
 type project struct {
 	WorkspaceName string
 	WorkspaceID   string
 	RepoName      string
-	Path          string // bare repo path under .repos/
+	RepoURL       string
+	Description   string
 }
 
-func scanProjects(profile string) ([]project, error) {
-	cfg, err := cli.LoadCLIConfigForProfile(profile)
-	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+func repoNameFromURL(repoURL string) string {
+	name := path.Base(repoURL)
+	if idx := strings.LastIndex(name, ":"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	name = strings.TrimSuffix(name, ".git")
+	if name == "" || name == "." {
+		return "repo"
+	}
+	return name
+}
+
+func fetchProjects(cmd *cobra.Command) ([]project, error) {
+	serverURL := resolveServerURL(cmd)
+	token := resolveToken(cmd)
+	if token == "" {
+		return nil, fmt.Errorf("not authenticated: run 'multica login' first")
 	}
 
-	wsNames := make(map[string]string)
-	for _, w := range cfg.WatchedWorkspaces {
-		wsNames[w.ID] = w.Name
-	}
+	client := cli.NewAPIClient(serverURL, "", token)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve home dir: %w", err)
+	var workspaces []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Repos []struct {
+			URL         string `json:"url"`
+			Description string `json:"description"`
+		} `json:"repos"`
 	}
-
-	suffix := ""
-	if profile != "" {
-		suffix = "_" + profile
-	}
-	wsRoot := os.Getenv("MULTICA_WORKSPACES_ROOT")
-	if wsRoot == "" {
-		wsRoot = filepath.Join(home, "multica_workspaces"+suffix)
-	}
-
-	reposRoot := filepath.Join(wsRoot, ".repos")
-	entries, err := os.ReadDir(reposRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read repos dir: %w", err)
+	if err := client.GetJSON(ctx, "/api/workspaces", &workspaces); err != nil {
+		return nil, fmt.Errorf("list workspaces: %w", err)
 	}
 
 	var projects []project
-	for _, wsDir := range entries {
-		if !wsDir.IsDir() {
-			continue
-		}
-		wsID := wsDir.Name()
-		wsName := wsNames[wsID]
-		if wsName == "" {
-			wsName = wsID[:min(8, len(wsID))]
-		}
-
-		repos, err := os.ReadDir(filepath.Join(reposRoot, wsID))
-		if err != nil {
-			continue
-		}
-		for _, repo := range repos {
-			if !repo.IsDir() {
+	for _, ws := range workspaces {
+		for _, repo := range ws.Repos {
+			if repo.URL == "" {
 				continue
 			}
-			name := repo.Name()
-			displayName := strings.TrimSuffix(name, ".git")
 			projects = append(projects, project{
-				WorkspaceName: wsName,
-				WorkspaceID:   wsID,
-				RepoName:      displayName,
-				Path:          filepath.Join(reposRoot, wsID, name),
+				WorkspaceName: ws.Name,
+				WorkspaceID:   ws.ID,
+				RepoName:      repoNameFromURL(repo.URL),
+				RepoURL:       repo.URL,
+				Description:   repo.Description,
 			})
 		}
 	}
@@ -110,26 +100,55 @@ func scanProjects(profile string) ([]project, error) {
 	return projects, nil
 }
 
-// findWorktrees locates existing git worktrees for a bare repo.
-func findWorktrees(barePath string) []string {
-	out, err := exec.Command("git", "-C", barePath, "worktree", "list", "--porcelain").Output()
+// localRepoPath returns the path where a repo would be cloned locally.
+// Layout: ~/multica_workspaces/{workspace-name}/{repo-name}
+func localRepoPath(profile string, proj project) (string, error) {
+	home, err := os.UserHomeDir()
 	if err != nil {
+		return "", err
+	}
+	suffix := ""
+	if profile != "" {
+		suffix = "_" + profile
+	}
+	wsRoot := os.Getenv("MULTICA_WORKSPACES_ROOT")
+	if wsRoot == "" {
+		wsRoot = filepath.Join(home, "multica_workspaces"+suffix)
+	}
+	return filepath.Join(wsRoot, sanitizeDirName(proj.WorkspaceName), proj.RepoName), nil
+}
+
+func sanitizeDirName(name string) string {
+	name = strings.ToLower(name)
+	name = strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, name)
+	return strings.Trim(name, "-")
+}
+
+// ensureCloned clones the repo if it doesn't exist locally. Returns the local path.
+func ensureCloned(repoURL, localPath string) error {
+	if _, err := os.Stat(filepath.Join(localPath, ".git")); err == nil {
 		return nil
 	}
 
-	var paths []string
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "worktree ") {
-			wt := strings.TrimPrefix(line, "worktree ")
-			if wt != barePath {
-				paths = append(paths, wt)
-			}
-		}
+	fmt.Fprintf(os.Stderr, "Cloning %s...\n", repoURL)
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return fmt.Errorf("create parent dir: %w", err)
 	}
-	return paths
+	cmd := exec.Command("git", "clone", repoURL, localPath)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git clone failed: %w", err)
+	}
+	return nil
 }
 
-func openInEditor(editor, path string) error {
+func openInEditor(editor, editorPath string) error {
 	if editor == "" {
 		if p, err := exec.LookPath("cursor"); err == nil {
 			editor = p
@@ -139,7 +158,7 @@ func openInEditor(editor, path string) error {
 	}
 
 	if editor != "" {
-		cmd := exec.Command(editor, path)
+		cmd := exec.Command(editor, editorPath)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd.Start()
@@ -147,7 +166,7 @@ func openInEditor(editor, path string) error {
 
 	if runtime.GOOS == "darwin" {
 		for _, app := range []string{"Cursor", "Visual Studio Code"} {
-			cmd := exec.Command("open", "-a", app, path)
+			cmd := exec.Command("open", "-a", app, editorPath)
 			if err := cmd.Run(); err == nil {
 				return nil
 			}
@@ -161,12 +180,13 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 	profile := resolveProfile(cmd)
 	editor, _ := cmd.Flags().GetString("editor")
 
-	projects, err := scanProjects(profile)
+	fmt.Fprintf(os.Stderr, "Fetching workspaces...\n")
+	projects, err := fetchProjects(cmd)
 	if err != nil {
 		return err
 	}
 	if len(projects) == 0 {
-		return fmt.Errorf("no local projects found.\nRun 'multica daemon start' to sync repos, or 'multica workspace watch <id>' to add workspaces")
+		return fmt.Errorf("no repos found in any workspace.\nAdd repos to your workspace settings in the web app")
 	}
 
 	m := newOpenModel(projects, editor)
@@ -182,20 +202,24 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 	}
 
 	proj := result.selected
-	targetPath := result.openPath
 
-	if targetPath == "" {
-		return fmt.Errorf("no working directory available for %s/%s", proj.WorkspaceName, proj.RepoName)
+	localPath, err := localRepoPath(profile, *proj)
+	if err != nil {
+		return fmt.Errorf("resolve local path: %w", err)
+	}
+
+	if err := ensureCloned(proj.RepoURL, localPath); err != nil {
+		return err
 	}
 
 	editorName := "editor"
 	if editor != "" {
 		editorName = filepath.Base(editor)
-	} else if p, _ := exec.LookPath("cursor"); p != "" {
+	} else if _, lookErr := exec.LookPath("cursor"); lookErr == nil {
 		editorName = "Cursor"
 	}
 	fmt.Fprintf(os.Stderr, "Opening %s/%s in %s...\n", proj.WorkspaceName, proj.RepoName, editorName)
-	return openInEditor(editor, targetPath)
+	return openInEditor(editor, localPath)
 }
 
 // --- Bubbletea TUI Model ---
@@ -223,25 +247,19 @@ var (
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
 
-	worktreeStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243"))
-
-	activeWorktreeStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("42"))
+	descStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("245")).
+			PaddingLeft(4)
 )
 
 type openModel struct {
-	projects  []project
-	filtered  []int // indices into projects
-	cursor    int
-	filter    textinput.Model
-	selected  *project
-	openPath  string
-	editor    string
-	quitting  bool
-	wtExpand  int // index in filtered of expanded worktree list, -1 = none
-	wtList    []string
-	wtCursor  int
+	projects []project
+	filtered []int
+	cursor   int
+	filter   textinput.Model
+	selected *project
+	editor   string
+	quitting bool
 }
 
 func newOpenModel(projects []project, editor string) openModel {
@@ -261,7 +279,6 @@ func newOpenModel(projects []project, editor string) openModel {
 		filtered: indices,
 		filter:   ti,
 		editor:   editor,
-		wtExpand: -1,
 	}
 }
 
@@ -278,20 +295,12 @@ func (m openModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "up", "ctrl+p":
-			if m.wtExpand >= 0 {
-				if m.wtCursor > 0 {
-					m.wtCursor--
-				}
-			} else if m.cursor > 0 {
+			if m.cursor > 0 {
 				m.cursor--
 			}
 
 		case "down", "ctrl+n":
-			if m.wtExpand >= 0 {
-				if m.wtCursor < len(m.wtList)-1 {
-					m.wtCursor++
-				}
-			} else if m.cursor < len(m.filtered)-1 {
+			if m.cursor < len(m.filtered)-1 {
 				m.cursor++
 			}
 
@@ -299,57 +308,20 @@ func (m openModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.filtered) == 0 {
 				break
 			}
-
-			if m.wtExpand >= 0 {
-				proj := m.projects[m.filtered[m.wtExpand]]
-				m.selected = &proj
-				if m.wtCursor < len(m.wtList) {
-					m.openPath = m.wtList[m.wtCursor]
-				}
-				return m, tea.Quit
-			}
-
 			idx := m.filtered[m.cursor]
 			proj := m.projects[idx]
-			worktrees := findWorktrees(proj.Path)
-
-			if len(worktrees) == 0 {
-				m.selected = &proj
-				m.openPath = proj.Path
-				return m, tea.Quit
-			}
-
-			if len(worktrees) == 1 {
-				m.selected = &proj
-				m.openPath = worktrees[0]
-				return m, tea.Quit
-			}
-
-			m.wtExpand = m.cursor
-			m.wtList = worktrees
-			m.wtCursor = 0
-
-		case "backspace":
-			if m.wtExpand >= 0 {
-				m.wtExpand = -1
-				m.wtList = nil
-				m.wtCursor = 0
-				return m, nil
-			}
+			m.selected = &proj
+			return m, tea.Quit
 		}
 	}
 
-	if m.wtExpand < 0 {
-		var cmd tea.Cmd
-		oldVal := m.filter.Value()
-		m.filter, cmd = m.filter.Update(msg)
-		if m.filter.Value() != oldVal {
-			m.applyFilter()
-		}
-		return m, cmd
+	var cmd tea.Cmd
+	oldVal := m.filter.Value()
+	m.filter, cmd = m.filter.Update(msg)
+	if m.filter.Value() != oldVal {
+		m.applyFilter()
 	}
-
-	return m, nil
+	return m, cmd
 }
 
 func (m *openModel) applyFilter() {
@@ -362,7 +334,7 @@ func (m *openModel) applyFilter() {
 	} else {
 		m.filtered = m.filtered[:0]
 		for i, p := range m.projects {
-			haystack := strings.ToLower(p.WorkspaceName + " " + p.RepoName)
+			haystack := strings.ToLower(p.WorkspaceName + " " + p.RepoName + " " + p.Description)
 			if strings.Contains(haystack, query) {
 				m.filtered = append(m.filtered, i)
 			}
@@ -385,21 +357,7 @@ func (m openModel) View() string {
 	b.WriteString(m.filter.View())
 	b.WriteString("\n\n")
 
-	if m.wtExpand >= 0 {
-		proj := m.projects[m.filtered[m.wtExpand]]
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  %s / %s — select worktree:", proj.WorkspaceName, proj.RepoName)))
-		b.WriteString("\n")
-		for i, wt := range m.wtList {
-			display := filepath.Base(filepath.Dir(wt)) + "/" + filepath.Base(wt)
-			if i == m.wtCursor {
-				b.WriteString(activeWorktreeStyle.Render("▸ " + display))
-			} else {
-				b.WriteString(worktreeStyle.Render("  " + display))
-			}
-			b.WriteString("\n")
-		}
-		b.WriteString(helpStyle.Render("  ↑/↓ navigate • enter open • backspace back • esc quit"))
-	} else if len(m.filtered) == 0 {
+	if len(m.filtered) == 0 {
 		b.WriteString(dimStyle.Render("  No matching projects."))
 		b.WriteString("\n")
 		b.WriteString(helpStyle.Render("  esc quit"))
@@ -416,6 +374,10 @@ func (m openModel) View() string {
 			label := fmt.Sprintf("%s / %s", p.WorkspaceName, p.RepoName)
 			if i == m.cursor {
 				b.WriteString(selectedStyle.Render("▸ " + label))
+				if p.Description != "" {
+					b.WriteString("\n")
+					b.WriteString(descStyle.Render(p.Description))
+				}
 			} else {
 				b.WriteString(normalStyle.Render("  " + label))
 			}
