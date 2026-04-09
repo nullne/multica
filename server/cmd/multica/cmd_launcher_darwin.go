@@ -13,12 +13,12 @@ import (
 
 var launcherCmd = &cobra.Command{
 	Use:   "launcher",
-	Short: "Manage macOS native project picker app (macOS only)",
+	Short: "Manage macOS launcher for the project picker (macOS only)",
 }
 
 var launcherInstallCmd = &cobra.Command{
 	Use:   "install",
-	Short: "Install a native macOS app that shows a project picker dialog",
+	Short: "Install a macOS app that opens the terminal-based project picker",
 	RunE:  runLauncherInstall,
 }
 
@@ -30,7 +30,6 @@ var launcherUninstallCmd = &cobra.Command{
 
 func init() {
 	launcherInstallCmd.Flags().String("editor", "", "Editor to open projects in (passed to 'multica open --editor')")
-	launcherInstallCmd.Flags().String("shortcut", "⌃⌥M", "Suggested keyboard shortcut (displayed in instructions)")
 
 	launcherCmd.AddCommand(launcherInstallCmd)
 	launcherCmd.AddCommand(launcherUninstallCmd)
@@ -48,7 +47,6 @@ func applicationsDir() (string, error) {
 
 func runLauncherInstall(cmd *cobra.Command, _ []string) error {
 	editor, _ := cmd.Flags().GetString("editor")
-	shortcut, _ := cmd.Flags().GetString("shortcut")
 
 	multicaPath, err := exec.LookPath("multica")
 	if err != nil {
@@ -69,54 +67,21 @@ func runLauncherInstall(cmd *cobra.Command, _ []string) error {
 		profileFlag = " --profile " + profile
 	}
 
-	baseCmd := multicaPath + " open" + profileFlag
-	listCmd := baseCmd + " --list"
-	openCmd := baseCmd + editorFlag + " --project"
+	openCommand := multicaPath + " open" + profileFlag + editorFlag
 
-	// AppleScript that:
-	// 1. Calls `multica open --list` to get project names
-	// 2. Shows a native macOS "choose from list" dialog
-	// 3. Calls `multica open --project <selection>` to clone + open in editor
-	appleScript := fmt.Sprintf(`#!/usr/bin/osascript
-on run
-	try
-		set projectText to do shell script "%s"
-	on error errMsg
-		display dialog "Failed to fetch projects:" & return & return & errMsg with title "Multica" buttons {"OK"} default button "OK" with icon stop
-		return
-	end try
+	launcherScript := fmt.Sprintf(`#!/bin/bash
+osascript -e '
+tell application "Terminal"
+    activate
+    do script "%s"
+end tell'
+`, openCommand)
 
-	if projectText is "" then
-		display dialog "No projects found." & return & return & "Add repos to your workspace settings in the web app." with title "Multica" buttons {"OK"} default button "OK" with icon note
-		return
-	end if
-
-	set oldDelims to AppleScript's text item delimiters
-	set AppleScript's text item delimiters to linefeed
-	set projectList to text items of projectText
-	set AppleScript's text item delimiters to oldDelims
-
-	set selectedProject to choose from list projectList with title "Multica — Open Project" with prompt "Select a project to open in your editor:" OK button name "Open" cancel button name "Cancel"
-
-	if selectedProject is false then return
-
-	set chosenProject to item 1 of selectedProject
-
-	try
-		do shell script "%s " & quoted form of chosenProject & " > /dev/null 2>&1 &"
-	on error errMsg
-		display dialog "Failed to open project:" & return & return & errMsg with title "Multica" buttons {"OK"} default button "OK" with icon stop
-	end try
-end run
-`, listCmd, openCmd)
-
-	// Create .app bundle
 	appDir, err := applicationsDir()
 	if err != nil {
 		return err
 	}
 
-	// Remove old version if present
 	appPath := filepath.Join(appDir, launchAppName)
 	os.RemoveAll(appPath)
 
@@ -125,8 +90,7 @@ end run
 		return fmt.Errorf("create app bundle: %w", err)
 	}
 
-	scriptPath := filepath.Join(scriptDir, "launcher")
-	if err := os.WriteFile(scriptPath, []byte(appleScript), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(scriptDir, "launcher"), []byte(launcherScript), 0o755); err != nil {
 		return fmt.Errorf("write launcher script: %w", err)
 	}
 
@@ -147,25 +111,15 @@ end run
 </dict>
 </plist>`
 
-	contentsDir := filepath.Join(appPath, "Contents")
-	if err := os.WriteFile(filepath.Join(contentsDir, "Info.plist"), []byte(appInfoPlist), 0o644); err != nil {
-		return fmt.Errorf("write app Info.plist: %w", err)
+	if err := os.WriteFile(filepath.Join(appPath, "Contents", "Info.plist"), []byte(appInfoPlist), 0o644); err != nil {
+		return fmt.Errorf("write Info.plist: %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "✓ Installed native launcher: "+appPath)
+	fmt.Fprintln(os.Stderr, "✓ Installed launcher: "+appPath)
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "How to use:")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  • Spotlight (⌘Space) → type \"Multica Open\" → Enter")
-	fmt.Fprintln(os.Stderr, "  • Raycast / Alfred → search \"Multica Open\"")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "To assign a global keyboard shortcut (e.g. "+shortcut+"):")
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, "  1. Open Automator → File → New → Quick Action")
-	fmt.Fprintln(os.Stderr, "  2. Add \"Launch Application\" → select \"Multica Open\" from ~/Applications")
-	fmt.Fprintln(os.Stderr, "  3. Save as \"Multica Open\"")
-	fmt.Fprintln(os.Stderr, "  4. System Settings → Keyboard → Keyboard Shortcuts → Services")
-	fmt.Fprintln(os.Stderr, "     → find \"Multica Open\" → assign your shortcut")
+	fmt.Fprintln(os.Stderr, "Usage:")
+	fmt.Fprintln(os.Stderr, "  • Spotlight (⌘Space) → \"Multica Open\" → Enter")
+	fmt.Fprintln(os.Stderr, "  • Or run 'multica open' directly in any terminal")
 
 	return nil
 }
