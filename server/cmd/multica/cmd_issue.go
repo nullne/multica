@@ -138,6 +138,7 @@ func init() {
 	issueCreateCmd.Flags().String("status", "", "Issue status")
 	issueCreateCmd.Flags().String("priority", "", "Issue priority")
 	issueCreateCmd.Flags().String("assignee", "", "Assignee name (member or agent)")
+	issueCreateCmd.Flags().String("verifier", "", "Verifier agent name")
 	issueCreateCmd.Flags().String("parent", "", "Parent issue ID")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (RFC3339 format)")
 	issueCreateCmd.Flags().String("output", "json", "Output format: table or json")
@@ -149,6 +150,8 @@ func init() {
 	issueUpdateCmd.Flags().String("status", "", "New status")
 	issueUpdateCmd.Flags().String("priority", "", "New priority")
 	issueUpdateCmd.Flags().String("assignee", "", "New assignee name (member or agent)")
+	issueUpdateCmd.Flags().String("verifier", "", "New verifier agent name")
+	issueUpdateCmd.Flags().Bool("clear-verifier", false, "Clear verifier agent")
 	issueUpdateCmd.Flags().String("due-date", "", "New due date (RFC3339 format)")
 	issueUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
@@ -335,6 +338,13 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 		body["assignee_type"] = aType
 		body["assignee_id"] = aID
 	}
+	if v, _ := cmd.Flags().GetString("verifier"); v != "" {
+		verifierID, resolveErr := resolveAgent(ctx, client, v)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve verifier: %w", resolveErr)
+		}
+		body["verifier_agent_id"] = verifierID
+	}
 
 	var result map[string]any
 	if err := client.PostJSON(ctx, "/api/issues", body, &result); err != nil {
@@ -408,6 +418,20 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 		}
 		body["assignee_type"] = aType
 		body["assignee_id"] = aID
+	}
+	if cmd.Flags().Changed("verifier") {
+		v, _ := cmd.Flags().GetString("verifier")
+		verifierID, resolveErr := resolveAgent(ctx, client, v)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve verifier: %w", resolveErr)
+		}
+		body["verifier_agent_id"] = verifierID
+	}
+	if clearVerifier, _ := cmd.Flags().GetBool("clear-verifier"); clearVerifier {
+		if cmd.Flags().Changed("verifier") {
+			return fmt.Errorf("--verifier and --clear-verifier are mutually exclusive")
+		}
+		body["verifier_agent_id"] = nil
 	}
 
 	if len(body) == 0 {
@@ -823,6 +847,17 @@ func resolveAssignee(ctx context.Context, client *cli.APIClient, name string) (s
 		}
 		return "", "", fmt.Errorf("ambiguous assignee %q; matches:\n%s", name, strings.Join(parts, "\n"))
 	}
+}
+
+func resolveAgent(ctx context.Context, client *cli.APIClient, name string) (string, error) {
+	aType, aID, err := resolveAssignee(ctx, client, name)
+	if err != nil {
+		return "", err
+	}
+	if aType != "agent" {
+		return "", fmt.Errorf("%q resolves to a member, but verifier must be an agent", name)
+	}
+	return aID, nil
 }
 
 func formatAssignee(issue map[string]any) string {
