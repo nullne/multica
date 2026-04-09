@@ -454,6 +454,13 @@ export class ApiClient {
     return this.fetch(`/api/workspaces/${workspaceId}/github/status`);
   }
 
+  async connectGitHub(workspaceId: string, installationId: number): Promise<Workspace> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/connect`, {
+      method: "POST",
+      body: JSON.stringify({ installation_id: installationId }),
+    });
+  }
+
   async disconnectGitHub(workspaceId: string): Promise<Workspace> {
     return this.fetch(`/api/workspaces/${workspaceId}/github`, {
       method: "DELETE",
