@@ -20,6 +20,12 @@ export interface IssueReaction {
   created_at: string;
 }
 
+export interface AcceptanceCriterion {
+  id: string;
+  description: string;
+  [key: string]: unknown;
+}
+
 export interface Issue {
   id: string;
   workspace_id: string;
@@ -31,9 +37,12 @@ export interface Issue {
   priority: IssuePriority;
   assignee_type: IssueAssigneeType | null;
   assignee_id: string | null;
+  verifier_agent_id: string | null;
+  max_verification_rounds: number | null;
   creator_type: IssueAssigneeType;
   creator_id: string;
   parent_issue_id: string | null;
+  acceptance_criteria: AcceptanceCriterion[];
   position: number;
   due_date: string | null;
   reactions?: IssueReaction[];

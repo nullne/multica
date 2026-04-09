@@ -59,7 +59,7 @@ import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import type { UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
-import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, canAssignAgent } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent } from "@/features/issues/components";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
@@ -1048,6 +1048,36 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                       onUpdate={handleUpdateField}
                     />
                   </PropRow>
+
+                  {/* Verifier — only when assignee is an agent */}
+                  {issue.assignee_type === "agent" && issue.assignee_id && (
+                    <PropRow label="Verifier">
+                      <VerifierPicker
+                        verifierAgentId={issue.verifier_agent_id}
+                        assigneeId={issue.assignee_id}
+                        onUpdate={handleUpdateField}
+                        align="start"
+                      />
+                    </PropRow>
+                  )}
+
+                  {/* Max verification rounds — only when verifier is set */}
+                  {issue.verifier_agent_id && (
+                    <PropRow label="Max rounds">
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={issue.max_verification_rounds ?? ""}
+                        placeholder="5"
+                        onChange={(e) => {
+                          const v = e.target.value ? parseInt(e.target.value, 10) : null;
+                          handleUpdateField({ max_verification_rounds: v && v > 0 ? v : null });
+                        }}
+                        className="w-14 rounded border px-1.5 py-0.5 text-xs text-right bg-transparent outline-none focus:ring-1 focus:ring-ring"
+                      />
+                    </PropRow>
+                  )}
                 </div>}
               </div>
 

@@ -429,8 +429,12 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(feedback), "comment", task.TriggerCommentID)
 
 			round := maxRound(taskCtx.Round)
-			if round >= defaultVerificationRounds {
-				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(fmt.Sprintf("自动修复达到最大轮次（%d），已停止自动回流。", defaultVerificationRounds)), "system", task.TriggerCommentID)
+			maxRounds := defaultVerificationRounds
+			if issue.MaxVerificationRounds.Valid && issue.MaxVerificationRounds.Int32 > 0 {
+				maxRounds = int(issue.MaxVerificationRounds.Int32)
+			}
+			if round >= maxRounds {
+				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(fmt.Sprintf("自动修复达到最大轮次（%d），已停止自动回流。", maxRounds)), "system", task.TriggerCommentID)
 				return nil
 			}
 

@@ -9,6 +9,8 @@ interface IssueDraft {
   priority: IssuePriority;
   assigneeType?: IssueAssigneeType;
   assigneeId?: string;
+  verifierAgentId?: string;
+  maxVerificationRounds?: number;
   dueDate: string | null;
 }
 
@@ -19,6 +21,8 @@ const EMPTY_DRAFT: IssueDraft = {
   priority: "none",
   assigneeType: undefined,
   assigneeId: undefined,
+  verifierAgentId: undefined,
+  maxVerificationRounds: undefined,
   dueDate: null,
 };
 

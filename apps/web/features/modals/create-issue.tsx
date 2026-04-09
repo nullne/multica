@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, Check, ChevronRight, Maximize2, Minimize2, UserMinus, X as XIcon } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, Maximize2, Minimize2, ShieldCheck, ShieldOff, UserMinus, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { IssueStatus, IssuePriority, IssueAssigneeType } from "@/shared/types";
@@ -27,8 +27,9 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Button } from "@/components/ui/button";
 import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
 import { TitleEditor } from "@/components/common/title-editor";
-import { StatusIcon, PriorityIcon } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, canAssignAgent } from "@/features/issues/components";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
+import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useIssueStore } from "@/features/issues";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
@@ -84,11 +85,17 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [assigneeType, setAssigneeType] = useState<IssueAssigneeType | undefined>(draft.assigneeType);
   const [assigneeId, setAssigneeId] = useState<string | undefined>(draft.assigneeId);
   const [dueDate, setDueDate] = useState<string | null>(draft.dueDate);
+  const [verifierAgentId, setVerifierAgentId] = useState<string | undefined>(draft.verifierAgentId);
+  const [maxVerificationRounds, setMaxVerificationRounds] = useState<number | undefined>(draft.maxVerificationRounds);
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Assignee popover
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [assigneeFilter, setAssigneeFilter] = useState("");
+
+  // Verifier popover
+  const [verifierOpen, setVerifierOpen] = useState(false);
+  const [verifierFilter, setVerifierFilter] = useState("");
 
   // Due date popover
   const [dueDateOpen, setDueDateOpen] = useState(false);
@@ -97,14 +104,29 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const { uploadWithToast } = useFileUpload();
   const handleUpload = (file: File) => uploadWithToast(file);
 
+  const user = useAuthStore((s) => s.user);
+  const currentMember = members.find((m) => m.user_id === user?.id);
+  const memberRole = currentMember?.role;
+
   const assigneeQuery = assigneeFilter.toLowerCase();
   const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(assigneeQuery));
   const filteredAgents = agents.filter((a) => a.name.toLowerCase().includes(assigneeQuery));
+
+  const verifierQuery = verifierFilter.toLowerCase();
+  const filteredVerifierAgents = agents.filter(
+    (a) => !a.archived_at && a.name.toLowerCase().includes(verifierQuery) && a.id !== assigneeId,
+  );
 
   const assigneeLabel =
     assigneeType && assigneeId
       ? getActorName(assigneeType, assigneeId)
       : "Assignee";
+
+  const verifierLabel = verifierAgentId
+    ? getActorName("agent", verifierAgentId)
+    : "Verifier";
+
+  const showVerifierOption = assigneeType === "agent" && assigneeId;
 
   const dueDateObj = dueDate ? new Date(dueDate) : undefined;
 
@@ -115,8 +137,18 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const updateAssignee = (type?: IssueAssigneeType, id?: string) => {
     setAssigneeType(type); setAssigneeId(id);
     setDraft({ assigneeType: type, assigneeId: id });
+    if (type !== "agent" || !id) {
+      setVerifierAgentId(undefined);
+      setMaxVerificationRounds(undefined);
+      setDraft({ verifierAgentId: undefined, maxVerificationRounds: undefined });
+    } else if (verifierAgentId === id) {
+      setVerifierAgentId(undefined);
+      setDraft({ verifierAgentId: undefined });
+    }
   };
   const updateDueDate = (v: string | null) => { setDueDate(v); setDraft({ dueDate: v }); };
+  const updateVerifier = (id?: string) => { setVerifierAgentId(id); setDraft({ verifierAgentId: id }); };
+  const updateMaxRounds = (v?: number) => { setMaxVerificationRounds(v); setDraft({ maxVerificationRounds: v }); };
 
   const handleSubmit = async () => {
     if (!title.trim() || submitting) return;
@@ -129,6 +161,8 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         priority,
         assignee_type: assigneeType,
         assignee_id: assigneeId,
+        verifier_agent_id: verifierAgentId,
+        max_verification_rounds: maxVerificationRounds,
         due_date: dueDate || undefined,
       });
       useIssueStore.getState().addIssue(issue);
@@ -373,6 +407,105 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
               </div>
             </PopoverContent>
           </Popover>
+
+          {/* Verifier — only visible when assignee is an agent */}
+          {showVerifierOption && (
+            <Popover open={verifierOpen} onOpenChange={(v) => { setVerifierOpen(v); if (!v) setVerifierFilter(""); }}>
+              <PopoverTrigger
+                render={
+                  <PillButton>
+                    {verifierAgentId ? (
+                      <>
+                        <ShieldCheck className="size-3.5 text-primary" />
+                        <span>{verifierLabel}</span>
+                      </>
+                    ) : (
+                      <>
+                        <ShieldOff className="size-3.5 text-muted-foreground" />
+                        <span className="text-muted-foreground">Verifier</span>
+                      </>
+                    )}
+                  </PillButton>
+                }
+              />
+              <PopoverContent align="start" className="w-52 p-0">
+                <div className="px-2 py-1.5 border-b">
+                  <input
+                    type="text"
+                    value={verifierFilter}
+                    onChange={(e) => setVerifierFilter(e.target.value)}
+                    placeholder="Select verifier..."
+                    className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
+                  />
+                </div>
+                <div className="p-1 max-h-60 overflow-y-auto">
+                  {/* No verifier */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateVerifier(undefined);
+                      updateMaxRounds(undefined);
+                      setVerifierOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+                  >
+                    <ShieldOff className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-muted-foreground">No verifier</span>
+                  </button>
+
+                  {filteredVerifierAgents.length > 0 && (
+                    <>
+                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Agents</div>
+                      {filteredVerifierAgents.map((a) => {
+                        const allowed = canAssignAgent(a, user?.id, memberRole);
+                        return (
+                          <button
+                            type="button"
+                            key={a.id}
+                            disabled={!allowed}
+                            onClick={() => {
+                              if (!allowed) return;
+                              updateVerifier(a.id);
+                              setVerifierOpen(false);
+                            }}
+                            className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${allowed ? "hover:bg-accent" : "opacity-50 cursor-not-allowed"}`}
+                          >
+                            <ActorAvatar actorType="agent" actorId={a.id} size={16} />
+                            <span>{a.name}</span>
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {filteredVerifierAgents.length === 0 && verifierFilter && (
+                    <div className="px-2 py-3 text-center text-sm text-muted-foreground">No results</div>
+                  )}
+                </div>
+
+                {/* Max rounds config */}
+                {verifierAgentId && (
+                  <div className="border-t px-3 py-2">
+                    <label className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Max rounds</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={maxVerificationRounds ?? ""}
+                        placeholder="5"
+                        onChange={(e) => {
+                          const v = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                          updateMaxRounds(v && v > 0 ? v : undefined);
+                        }}
+                        className="w-14 rounded border px-1.5 py-0.5 text-xs text-right bg-transparent outline-none focus:ring-1 focus:ring-ring"
+                      />
+                    </label>
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+          )}
 
           {/* Due date */}
           <Popover open={dueDateOpen} onOpenChange={setDueDateOpen}>

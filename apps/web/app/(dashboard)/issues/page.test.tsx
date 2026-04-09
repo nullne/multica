@@ -220,6 +220,9 @@ vi.mock("@dnd-kit/utilities", () => ({
 
 const issueDefaults = {
   parent_issue_id: null,
+  verifier_agent_id: null,
+  max_verification_rounds: null,
+  acceptance_criteria: [],
   position: 0,
 };
 
