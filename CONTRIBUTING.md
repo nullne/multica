@@ -25,10 +25,11 @@ This keeps Docker simple while still isolating schema and data.
 
 ## Prerequisites
 
-- Node.js `v20+`
-- `pnpm` `v10.28+`
-- Go `v1.26+`
-- Docker
+- Docker (required for all workflows)
+- Node.js `v20+` and `pnpm` `v10.28+` (for `make dev-local`)
+- Go `v1.26+` (for `make dev-local`)
+
+> **Note:** `make dev` uses Docker exclusively — no local Go or Node toolchain needed.
 
 ## Important Rules
 
@@ -100,10 +101,10 @@ From the main checkout:
 
 ```bash
 cp .env.example .env
-make setup-main
+make setup
 ```
 
-What `make setup-main` does:
+What `make setup` does:
 
 - installs JavaScript dependencies with `pnpm install`
 - ensures the shared PostgreSQL container is running
@@ -113,29 +114,20 @@ What `make setup-main` does:
 Start the app:
 
 ```bash
-make start-main
+make dev
 ```
-
-Stop the app processes:
-
-```bash
-make stop-main
-```
-
-This does not stop PostgreSQL.
 
 ### Worktree
 
 From the worktree directory:
 
 ```bash
-make worktree-env
 make setup-worktree
 ```
 
 What `make setup-worktree` does:
 
-- uses `.env.worktree`
+- generates `.env.worktree` with unique ports
 - ensures the shared PostgreSQL container is running
 - creates the worktree database if it does not exist
 - runs migrations against the worktree database
@@ -143,45 +135,32 @@ What `make setup-worktree` does:
 Start the worktree app:
 
 ```bash
-make start-worktree
-```
-
-Stop the worktree app processes:
-
-```bash
-make stop-worktree
+make dev-worktree
 ```
 
 ## Recommended Daily Workflow
 
 ### Main Checkout
 
-Use the main checkout when you want a stable local environment for `main`.
-
 ```bash
-make start-main
-make stop-main
-make check-main
+make dev              # Start dev environment
+make test             # Run full test suite
 ```
 
 ### Feature Worktree
 
-Use a worktree when you want isolated data and separate app ports.
-
 ```bash
 git worktree add ../multica-feature -b feat/my-change main
 cd ../multica-feature
-make worktree-env
 make setup-worktree
-make start-worktree
+make dev-worktree
 ```
 
 After that, day-to-day commands are:
 
 ```bash
-make start-worktree
-make stop-worktree
-make check-worktree
+make dev-worktree
+make test
 ```
 
 ## Running Main and Worktree at the Same Time
@@ -208,60 +187,55 @@ But they do not share application data, because each uses a different database.
 
 ## Command Reference
 
-### Shared Infrastructure
+Run `make` (no arguments) to see all available targets with descriptions.
 
-Start the shared PostgreSQL container:
-
-```bash
-make db-up
-```
-
-Stop the shared PostgreSQL container:
+### Lifecycle
 
 ```bash
-make db-down
+make setup            # First-time setup: install deps, DB, migrations
+make dev              # Start dev via Docker (no local toolchain needed)
+make dev-local        # Start dev locally (requires Go + Node)
+make up               # Start production-like services via Docker
+make down             # Stop all services
+make clean            # Stop services and destroy ALL local state
+make logs             # Stream production service logs
 ```
 
-Important:
-
-- `make db-down` stops the container but keeps the Docker volume
-- your local databases are preserved
-
-### App Lifecycle
-
-Main checkout:
+### Testing
 
 ```bash
-make setup-main
-make start-main
-make stop-main
-make check-main
+make test             # Run full test suite (typecheck + TS + Go + E2E)
+make test-go          # Go tests only
+make test-ts          # TypeScript tests only
+make test-e2e         # E2E tests only
+make check            # TypeScript typecheck only
 ```
 
-Worktree:
+### Build
 
 ```bash
-make worktree-env
-make setup-worktree
-make start-worktree
-make stop-worktree
-make check-worktree
+make build            # Build all services
+make build-backend    # Build Go binaries to server/bin/
+make build-frontend   # Build frontend Docker image
 ```
 
-Generic targets for the current checkout:
+### Database
 
 ```bash
-make setup
-make start
-make stop
-make check
-make dev
-make test
-make migrate-up
-make migrate-down
+make db-up            # Start shared PostgreSQL container
+make db-down          # Stop shared PostgreSQL container
+make migrate-up       # Run database migrations
+make migrate-down     # Rollback migrations
+make sqlc             # Regenerate sqlc code
 ```
 
-These generic targets require a valid env file in the current directory.
+### Worktree
+
+```bash
+make worktree-env     # Generate .env.worktree with unique DB/ports
+make setup-worktree   # Setup worktree (generate env + setup)
+make dev-worktree     # Start dev using worktree config
+```
 
 ## How Database Creation Works
 
@@ -270,27 +244,20 @@ Database creation is automatic.
 The following commands all ensure the target database exists before they continue:
 
 - `make setup`
-- `make start`
-- `make dev`
+- `make dev-local`
 - `make test`
+- `make test-go`
 - `make migrate-up`
 - `make migrate-down`
-- `make check`
 
 That logic lives in `scripts/ensure-postgres.sh`.
 
 ## Testing
 
-Run all local checks:
+Run the full test suite:
 
 ```bash
-make check-main
-```
-
-Or from a worktree:
-
-```bash
-make check-worktree
+make test
 ```
 
 This runs:
@@ -304,7 +271,7 @@ Notes:
 
 - Go tests create their own fixture data
 - E2E tests create their own workspace and issue fixtures
-- the check flow starts backend/frontend only if they are not already running
+- the test flow starts backend/frontend only if they are not already running
 
 ## Local Codex Daemon
 
@@ -378,20 +345,13 @@ It should not.
 The safe worktree setup is:
 
 ```bash
-make worktree-env
 make setup-worktree
-make start-worktree
+make dev-worktree
 ```
 
 ### App Stops but PostgreSQL Keeps Running
 
-That is expected.
-
-- `make stop`
-- `make stop-main`
-- `make stop-worktree`
-
-only stop backend/frontend processes.
+That is expected. `make down` stops backend/frontend processes but preserves the shared PostgreSQL container.
 
 To stop the shared PostgreSQL container:
 
@@ -407,17 +367,16 @@ If you want to stop PostgreSQL and keep your local databases:
 make db-down
 ```
 
-If you want to wipe all local PostgreSQL data for this repo:
+If you want to wipe all local state (containers, volumes, caches, build artifacts):
 
 ```bash
-docker compose down -v
+make clean
 ```
 
 Warning:
 
-- this deletes the shared Docker volume
-- this deletes the main database and every worktree database in that volume
-- after that you must run `make setup-main` or `make setup-worktree` again
+- `make clean` removes Docker volumes, which deletes all local databases
+- after that you must run `make setup` or `make setup-worktree` again
 
 ## Typical Flows
 
@@ -425,8 +384,8 @@ Warning:
 
 ```bash
 cp .env.example .env
-make setup-main
-make start-main
+make setup
+make dev
 ```
 
 ### Feature Worktree
@@ -434,28 +393,19 @@ make start-main
 ```bash
 git worktree add ../multica-feature -b feat/my-change main
 cd ../multica-feature
-make worktree-env
 make setup-worktree
-make start-worktree
+make dev-worktree
 ```
 
 ### Return to a Previously Configured Worktree
 
 ```bash
 cd ../multica-feature
-make start-worktree
+make dev-worktree
 ```
 
 ### Validate Before Pushing
 
-Main checkout:
-
 ```bash
-make check-main
-```
-
-Worktree:
-
-```bash
-make check-worktree
+make test
 ```
