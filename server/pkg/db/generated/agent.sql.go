@@ -690,6 +690,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 			&i.Instructions,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
+			&i.GithubCodeAccess,
 		); err != nil {
 			return nil, err
 		}
@@ -736,6 +737,7 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.Instructions,
 			&i.ArchivedAt,
 			&i.ArchivedBy,
+			&i.GithubCodeAccess,
 		); err != nil {
 			return nil, err
 		}
