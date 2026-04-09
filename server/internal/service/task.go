@@ -6,8 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
+	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -30,6 +31,46 @@ func NewTaskService(q *db.Queries, hub *realtime.Hub, bus *events.Bus) *TaskServ
 	return &TaskService{Queries: q, Hub: hub, Bus: bus}
 }
 
+const (
+	verificationFlowName      = "verification_loop"
+	taskRoleCriteria          = "criteria"
+	taskRoleExecutor          = "executor"
+	taskRoleValidator         = "validator"
+	taskRoleRework            = "rework"
+	defaultVerificationRounds = 5
+)
+
+var (
+	criteriaBlockPattern     = regexp.MustCompile(`(?s)<!--\s*multica:criteria\s*(\{.*?\})\s*-->`)
+	verificationBlockPattern = regexp.MustCompile(`(?s)<!--\s*multica:verification\s*(\{.*?\})\s*-->`)
+)
+
+type verificationTaskContext struct {
+	Flow                string                    `json:"flow,omitempty"`
+	Role                string                    `json:"role,omitempty"`
+	Round               int                       `json:"round,omitempty"`
+	ExecutorAgentID     string                    `json:"executor_agent_id,omitempty"`
+	VerifierAgentID     string                    `json:"verifier_agent_id,omitempty"`
+	AcceptanceCriteria  []map[string]any          `json:"acceptance_criteria,omitempty"`
+	VerificationSummary string                    `json:"verification_summary,omitempty"`
+	FailedChecks        []verificationFailedCheck `json:"failed_checks,omitempty"`
+}
+
+type criteriaPayload struct {
+	Criteria []map[string]any `json:"criteria"`
+}
+
+type verificationPayload struct {
+	Decision     string                    `json:"decision"`
+	Summary      string                    `json:"summary"`
+	FailedChecks []verificationFailedCheck `json:"failed_checks"`
+}
+
+type verificationFailedCheck struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
 // EnqueueTaskForIssue creates a queued task for an agent-assigned issue.
 // No context snapshot is stored — the agent fetches all data it needs at
 // runtime via the multica CLI.
@@ -39,45 +80,49 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
 	}
 
-	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil {
-		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
-	}
-	if agent.ArchivedAt.Valid {
-		slog.Debug("task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agent.ID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
-	}
-	if !agent.RuntimeID.Valid {
-		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "agent has no runtime")
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
-	}
-
 	var commentID pgtype.UUID
 	if len(triggerCommentID) > 0 {
 		commentID = triggerCommentID[0]
 	}
 
-	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
-		AgentID:          issue.AssigneeID,
-		RuntimeID:        agent.RuntimeID,
-		IssueID:          issue.ID,
-		Priority:         priorityToInt(issue.Priority),
-		TriggerCommentID: commentID,
-	})
-	if err != nil {
-		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
-		return db.AgentTaskQueue{}, fmt.Errorf("create task: %w", err)
+	// Verification loop applies only to assignment-triggered tasks.
+	if !commentID.Valid &&
+		issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" &&
+		issue.VerifierAgentID.Valid &&
+		util.UUIDToString(issue.VerifierAgentID) != util.UUIDToString(issue.AssigneeID) {
+		if criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria); len(criteria) == 0 {
+			contextData := buildVerificationTaskContext(verificationTaskContext{
+				Flow:            verificationFlowName,
+				Role:            taskRoleCriteria,
+				Round:           1,
+				ExecutorAgentID: util.UUIDToString(issue.AssigneeID),
+				VerifierAgentID: util.UUIDToString(issue.VerifierAgentID),
+			})
+			return s.enqueueTaskToAgent(ctx, issue, issue.VerifierAgentID, commentID, contextData, "criteria task enqueued")
+		}
+
+		contextData := buildVerificationTaskContext(verificationTaskContext{
+			Flow:               verificationFlowName,
+			Role:               taskRoleExecutor,
+			Round:              1,
+			ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
+			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
+			AcceptanceCriteria: decodeAcceptanceCriteria(issue.AcceptanceCriteria),
+		})
+		return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, contextData, "executor task enqueued")
 	}
 
-	slog.Info("task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(issue.AssigneeID))
-	return task, nil
+	return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, nil, "task enqueued")
 }
 
 // EnqueueTaskForMention creates a queued task for a mentioned agent on an issue.
 // Unlike EnqueueTaskForIssue, this takes an explicit agent ID rather than
 // deriving it from the issue assignee.
 func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueTaskToAgent(ctx, issue, agentID, triggerCommentID, nil, "mention task enqueued")
+}
+
+func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, agentID, triggerCommentID pgtype.UUID, contextData []byte, logMsg string) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		slog.Error("mention task enqueue failed: agent not found", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -98,13 +143,14 @@ func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue,
 		IssueID:          issue.ID,
 		Priority:         priorityToInt(issue.Priority),
 		TriggerCommentID: triggerCommentID,
+		Context:          contextData,
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("create task: %w", err)
 	}
 
-	slog.Info("mention task enqueued", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
+	slog.Info(logMsg, "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
 	return task, nil
 }
 
@@ -238,16 +284,27 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 
-	// Post agent output as a comment, but only for assignment-triggered tasks.
+	var payload protocol.TaskCompletedPayload
+	if err := json.Unmarshal(result, &payload); err != nil {
+		slog.Debug("task completion payload parse failed", "task_id", util.UUIDToString(task.ID), "error", err)
+	}
+	output := redact.Text(payload.Output)
+
+	taskCtx := parseVerificationTaskContext(task.Context)
+	handledByVerificationFlow := false
+	if taskCtx.Flow == verificationFlowName && taskCtx.Role != "" {
+		handledByVerificationFlow = true
+		if err := s.handleVerificationCompletion(ctx, task, taskCtx, output); err != nil {
+			slog.Warn("verification completion handling failed", "task_id", util.UUIDToString(task.ID), "role", taskCtx.Role, "error", err)
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("Verification flow handling failed: "+err.Error()), "system", task.TriggerCommentID)
+		}
+	}
+
+	// Post agent output as a comment for non-verification-flow assignment tasks.
 	// Comment-triggered tasks: the agent replies via CLI with --parent, so
 	// posting here would create a duplicate.
-	if !task.TriggerCommentID.Valid {
-		var payload protocol.TaskCompletedPayload
-		if err := json.Unmarshal(result, &payload); err == nil {
-			if payload.Output != "" {
-				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(payload.Output), "comment", task.TriggerCommentID)
-			}
-		}
+	if !handledByVerificationFlow && !task.TriggerCommentID.Valid && output != "" {
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, output, "comment", task.TriggerCommentID)
 	}
 
 	// Reconcile agent status
@@ -257,6 +314,146 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	s.broadcastTaskEvent(ctx, protocol.EventTaskCompleted, task)
 
 	return &task, nil
+}
+
+func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.AgentTaskQueue, taskCtx verificationTaskContext, output string) error {
+	switch taskCtx.Role {
+	case taskRoleCriteria:
+		criteria, err := extractCriteriaPayload(output)
+		if err != nil || len(criteria) == 0 {
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("验收标准解析失败：请按 `<!--multica:criteria ... -->` 结构化格式输出。"), "system", task.TriggerCommentID)
+			return nil
+		}
+
+		criteriaJSON, err := json.Marshal(criteria)
+		if err != nil {
+			return fmt.Errorf("marshal criteria: %w", err)
+		}
+		issue, err := s.Queries.UpdateIssueAcceptanceCriteria(ctx, db.UpdateIssueAcceptanceCriteriaParams{
+			ID:                 task.IssueID,
+			AcceptanceCriteria: criteriaJSON,
+		})
+		if err != nil {
+			return fmt.Errorf("save acceptance criteria: %w", err)
+		}
+
+		comment := stripMachineBlocks(output)
+		if comment == "" {
+			comment = "验收标准已确认。"
+		}
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), "comment", task.TriggerCommentID)
+
+		if !issue.AssigneeID.Valid {
+			return nil
+		}
+		nextCtx := buildVerificationTaskContext(verificationTaskContext{
+			Flow:               verificationFlowName,
+			Role:               taskRoleExecutor,
+			Round:              maxRound(taskCtx.Round),
+			ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
+			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
+			AcceptanceCriteria: criteria,
+		})
+		_, err = s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, pgtype.UUID{}, nextCtx, "executor task enqueued")
+		return err
+
+	case taskRoleExecutor, taskRoleRework:
+		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+		if err != nil {
+			return fmt.Errorf("load issue: %w", err)
+		}
+		if output != "" {
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, output, "comment", task.TriggerCommentID)
+		}
+
+		if !issue.VerifierAgentID.Valid || !issue.AssigneeID.Valid ||
+			util.UUIDToString(issue.VerifierAgentID) == util.UUIDToString(issue.AssigneeID) {
+			return nil
+		}
+		nextCtx := buildVerificationTaskContext(verificationTaskContext{
+			Flow:               verificationFlowName,
+			Role:               taskRoleValidator,
+			Round:              maxRound(taskCtx.Round),
+			ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
+			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
+			AcceptanceCriteria: decodeAcceptanceCriteria(issue.AcceptanceCriteria),
+		})
+		_, err = s.enqueueTaskToAgent(ctx, issue, issue.VerifierAgentID, pgtype.UUID{}, nextCtx, "validator task enqueued")
+		return err
+
+	case taskRoleValidator:
+		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
+		if err != nil {
+			return fmt.Errorf("load issue: %w", err)
+		}
+
+		result, err := extractVerificationPayload(output)
+		if err != nil {
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("验收结果解析失败：请按 `<!--multica:verification ... -->` 结构化格式输出。"), "system", task.TriggerCommentID)
+			return nil
+		}
+
+		decision := strings.ToLower(strings.TrimSpace(result.Decision))
+		humanOutput := stripMachineBlocks(output)
+		if humanOutput == "" {
+			humanOutput = output
+		}
+
+		switch decision {
+		case "pass":
+			if humanOutput == "" {
+				humanOutput = "验收通过。"
+			}
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(humanOutput), "comment", task.TriggerCommentID)
+			if issue.Status == "in_review" {
+				if updated, err := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: issue.ID, Status: "done"}); err == nil {
+					s.broadcastIssueUpdated(updated)
+				}
+			}
+			return nil
+
+		case "fail":
+			if !issue.AssigneeID.Valid {
+				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("验收未通过，但当前 issue 没有执行 agent，无法自动回流。"), "system", task.TriggerCommentID)
+				return nil
+			}
+
+			assigneeMention := fmt.Sprintf("[@执行Agent](mention://agent/%s)", util.UUIDToString(issue.AssigneeID))
+			feedback := strings.TrimSpace(humanOutput)
+			if feedback == "" {
+				feedback = "验收未通过。"
+			}
+			if !strings.Contains(feedback, "mention://agent/"+util.UUIDToString(issue.AssigneeID)) {
+				feedback += "\n\n请修复后再次提交：" + assigneeMention
+			}
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(feedback), "comment", task.TriggerCommentID)
+
+			round := maxRound(taskCtx.Round)
+			if round >= defaultVerificationRounds {
+				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(fmt.Sprintf("自动修复达到最大轮次（%d），已停止自动回流。", defaultVerificationRounds)), "system", task.TriggerCommentID)
+				return nil
+			}
+
+			nextCtx := buildVerificationTaskContext(verificationTaskContext{
+				Flow:                verificationFlowName,
+				Role:                taskRoleRework,
+				Round:               round + 1,
+				ExecutorAgentID:     util.UUIDToString(issue.AssigneeID),
+				VerifierAgentID:     util.UUIDToString(task.AgentID),
+				AcceptanceCriteria:  decodeAcceptanceCriteria(issue.AcceptanceCriteria),
+				VerificationSummary: result.Summary,
+				FailedChecks:        result.FailedChecks,
+			})
+			_, err = s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, pgtype.UUID{}, nextCtx, "rework task enqueued")
+			return err
+
+		default:
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("验收结果中 decision 必须为 pass 或 fail。"), "system", task.TriggerCommentID)
+			return nil
+		}
+	}
+
+	return nil
 }
 
 // FailTask marks a task as failed.
@@ -374,6 +571,79 @@ type AgentSkillData struct {
 type AgentSkillFileData struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+}
+
+func parseVerificationTaskContext(raw []byte) verificationTaskContext {
+	if len(raw) == 0 {
+		return verificationTaskContext{}
+	}
+	var ctx verificationTaskContext
+	if err := json.Unmarshal(raw, &ctx); err != nil {
+		return verificationTaskContext{}
+	}
+	return ctx
+}
+
+func buildVerificationTaskContext(ctx verificationTaskContext) []byte {
+	if ctx.Role == "" {
+		return nil
+	}
+	b, err := json.Marshal(ctx)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func decodeAcceptanceCriteria(raw []byte) []map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var criteria []map[string]any
+	if err := json.Unmarshal(raw, &criteria); err != nil {
+		return nil
+	}
+	return criteria
+}
+
+func extractCriteriaPayload(output string) ([]map[string]any, error) {
+	m := criteriaBlockPattern.FindStringSubmatch(output)
+	if len(m) < 2 {
+		return nil, fmt.Errorf("criteria block not found")
+	}
+	var payload criteriaPayload
+	if err := json.Unmarshal([]byte(strings.TrimSpace(m[1])), &payload); err != nil {
+		return nil, fmt.Errorf("parse criteria payload: %w", err)
+	}
+	return payload.Criteria, nil
+}
+
+func extractVerificationPayload(output string) (verificationPayload, error) {
+	m := verificationBlockPattern.FindStringSubmatch(output)
+	if len(m) < 2 {
+		return verificationPayload{}, fmt.Errorf("verification block not found")
+	}
+	var payload verificationPayload
+	if err := json.Unmarshal([]byte(strings.TrimSpace(m[1])), &payload); err != nil {
+		return verificationPayload{}, fmt.Errorf("parse verification payload: %w", err)
+	}
+	return payload, nil
+}
+
+func stripMachineBlocks(output string) string {
+	if output == "" {
+		return ""
+	}
+	stripped := criteriaBlockPattern.ReplaceAllString(output, "")
+	stripped = verificationBlockPattern.ReplaceAllString(stripped, "")
+	return strings.TrimSpace(stripped)
+}
+
+func maxRound(v int) int {
+	if v < 1 {
+		return 1
+	}
+	return v
 }
 
 func priorityToInt(p string) int32 {
@@ -504,24 +774,30 @@ func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID p
 }
 
 func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
+	acceptanceCriteria := []any{}
+	if issue.AcceptanceCriteria != nil {
+		_ = json.Unmarshal(issue.AcceptanceCriteria, &acceptanceCriteria)
+	}
 	return map[string]any{
-		"id":              util.UUIDToString(issue.ID),
-		"workspace_id":    util.UUIDToString(issue.WorkspaceID),
-		"number":          issue.Number,
-		"identifier":      issuePrefix + "-" + strconv.Itoa(int(issue.Number)),
-		"title":           issue.Title,
-		"description":     util.TextToPtr(issue.Description),
-		"status":          issue.Status,
-		"priority":        issue.Priority,
-		"assignee_type":   util.TextToPtr(issue.AssigneeType),
-		"assignee_id":     util.UUIDToPtr(issue.AssigneeID),
-		"creator_type":    issue.CreatorType,
-		"creator_id":      util.UUIDToString(issue.CreatorID),
-		"parent_issue_id": util.UUIDToPtr(issue.ParentIssueID),
-		"position":        issue.Position,
-		"due_date":        util.TimestampToPtr(issue.DueDate),
-		"created_at":      util.TimestampToString(issue.CreatedAt),
-		"updated_at":      util.TimestampToString(issue.UpdatedAt),
+		"id":                  util.UUIDToString(issue.ID),
+		"workspace_id":        util.UUIDToString(issue.WorkspaceID),
+		"number":              issue.Number,
+		"identifier":          issuePrefix + "-" + strconv.Itoa(int(issue.Number)),
+		"title":               issue.Title,
+		"description":         util.TextToPtr(issue.Description),
+		"status":              issue.Status,
+		"priority":            issue.Priority,
+		"assignee_type":       util.TextToPtr(issue.AssigneeType),
+		"assignee_id":         util.UUIDToPtr(issue.AssigneeID),
+		"verifier_agent_id":   util.UUIDToPtr(issue.VerifierAgentID),
+		"creator_type":        issue.CreatorType,
+		"creator_id":          util.UUIDToString(issue.CreatorID),
+		"parent_issue_id":     util.UUIDToPtr(issue.ParentIssueID),
+		"acceptance_criteria": acceptanceCriteria,
+		"position":            issue.Position,
+		"due_date":            util.TimestampToPtr(issue.DueDate),
+		"created_at":          util.TimestampToString(issue.CreatedAt),
+		"updated_at":          util.TimestampToString(issue.UpdatedAt),
 	}
 }
 

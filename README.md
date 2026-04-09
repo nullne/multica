@@ -59,9 +59,8 @@ cd multica
 cp .env.example .env
 # Edit .env — at minimum, change JWT_SECRET
 
-docker compose up -d                              # Start PostgreSQL
-cd server && go run ./cmd/migrate up && cd ..     # Run migrations
-make start                                         # Start the app
+make setup                                        # Install deps, start PostgreSQL, run migrations
+make start                                        # Start backend + frontend
 ```
 
 See the [Self-Hosting Guide](SELF_HOSTING.md) for full instructions.

@@ -53,7 +53,7 @@ func TestMain(m *testing.M) {
 	go hub.Run()
 	bus := events.New()
 	emailSvc := service.NewEmailService()
-	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil)
+	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, nil)
 	testPool = pool
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
@@ -333,6 +333,97 @@ func TestAgentCRUD(t *testing.T) {
 	}
 	if updated.Name != agents[0].Name {
 		t.Fatalf("UpdateAgent: name should be preserved, got '%s'", updated.Name)
+	}
+}
+
+func TestAgentGitHubCodeAccess(t *testing.T) {
+	// List agents to get an existing agent.
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/agents?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListAgents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgents: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var agents []AgentResponse
+	json.NewDecoder(w.Body).Decode(&agents)
+	if len(agents) == 0 {
+		t.Fatal("need at least 1 agent")
+	}
+	agentID := agents[0].ID
+
+	// Default should be "write".
+	if agents[0].GitHubCodeAccess != "write" {
+		t.Errorf("default github_code_access = %q, want 'write'", agents[0].GitHubCodeAccess)
+	}
+
+	// Update to "read".
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
+		"github_code_access": "read",
+	})
+	req = withURLParam(req, "id", agentID)
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent(read): expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated AgentResponse
+	json.NewDecoder(w.Body).Decode(&updated)
+	if updated.GitHubCodeAccess != "read" {
+		t.Errorf("after update: github_code_access = %q, want 'read'", updated.GitHubCodeAccess)
+	}
+
+	// Update to "admin".
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
+		"github_code_access": "admin",
+	})
+	req = withURLParam(req, "id", agentID)
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent(admin): expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	json.NewDecoder(w.Body).Decode(&updated)
+	if updated.GitHubCodeAccess != "admin" {
+		t.Errorf("after update: github_code_access = %q, want 'admin'", updated.GitHubCodeAccess)
+	}
+
+	// Invalid value should be rejected.
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
+		"github_code_access": "invalid",
+	})
+	req = withURLParam(req, "id", agentID)
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateAgent(invalid): expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Restore to default.
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
+		"github_code_access": "write",
+	})
+	req = withURLParam(req, "id", agentID)
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent(restore): expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWorkspaceGitHubConnected(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/workspaces", nil)
+	testHandler.ListWorkspaces(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListWorkspaces: expected 200, got %d", w.Code)
+	}
+	var workspaces []WorkspaceResponse
+	json.NewDecoder(w.Body).Decode(&workspaces)
+	if len(workspaces) == 0 {
+		t.Fatal("need at least 1 workspace")
+	}
+	if workspaces[0].GitHubConnected {
+		t.Error("new workspace should not have github_connected=true")
 	}
 }
 

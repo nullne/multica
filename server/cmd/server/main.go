@@ -17,6 +17,11 @@ import (
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 func main() {
 	logger.Init()
 

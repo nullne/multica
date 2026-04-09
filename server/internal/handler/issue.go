@@ -28,9 +28,11 @@ type IssueResponse struct {
 	Priority           string                  `json:"priority"`
 	AssigneeType       *string                 `json:"assignee_type"`
 	AssigneeID         *string                 `json:"assignee_id"`
+	VerifierAgentID    *string                 `json:"verifier_agent_id"`
 	CreatorType        string                  `json:"creator_type"`
 	CreatorID          string                  `json:"creator_id"`
 	ParentIssueID      *string                 `json:"parent_issue_id"`
+	AcceptanceCriteria []any                   `json:"acceptance_criteria"`
 	Position           float64                 `json:"position"`
 	DueDate            *string                 `json:"due_date"`
 	CreatedAt          string                  `json:"created_at"`
@@ -58,24 +60,32 @@ func defaultAgentTriggers() []byte {
 
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
+	acceptanceCriteria := []any{}
+	if len(i.AcceptanceCriteria) > 0 {
+		if err := json.Unmarshal(i.AcceptanceCriteria, &acceptanceCriteria); err != nil {
+			acceptanceCriteria = []any{}
+		}
+	}
 	return IssueResponse{
-		ID:            uuidToString(i.ID),
-		WorkspaceID:   uuidToString(i.WorkspaceID),
-		Number:        i.Number,
-		Identifier:    identifier,
-		Title:         i.Title,
-		Description:   textToPtr(i.Description),
-		Status:        i.Status,
-		Priority:      i.Priority,
-		AssigneeType:  textToPtr(i.AssigneeType),
-		AssigneeID:    uuidToPtr(i.AssigneeID),
-		CreatorType:   i.CreatorType,
-		CreatorID:     uuidToString(i.CreatorID),
-		ParentIssueID: uuidToPtr(i.ParentIssueID),
-		Position:      i.Position,
-		DueDate:       timestampToPtr(i.DueDate),
-		CreatedAt:     timestampToString(i.CreatedAt),
-		UpdatedAt:     timestampToString(i.UpdatedAt),
+		ID:                 uuidToString(i.ID),
+		WorkspaceID:        uuidToString(i.WorkspaceID),
+		Number:             i.Number,
+		Identifier:         identifier,
+		Title:              i.Title,
+		Description:        textToPtr(i.Description),
+		Status:             i.Status,
+		Priority:           i.Priority,
+		AssigneeType:       textToPtr(i.AssigneeType),
+		AssigneeID:         uuidToPtr(i.AssigneeID),
+		VerifierAgentID:    uuidToPtr(i.VerifierAgentID),
+		CreatorType:        i.CreatorType,
+		CreatorID:          uuidToString(i.CreatorID),
+		ParentIssueID:      uuidToPtr(i.ParentIssueID),
+		AcceptanceCriteria: acceptanceCriteria,
+		Position:           i.Position,
+		DueDate:            timestampToPtr(i.DueDate),
+		CreatedAt:          timestampToString(i.CreatedAt),
+		UpdatedAt:          timestampToString(i.UpdatedAt),
 	}
 }
 
@@ -170,14 +180,15 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateIssueRequest struct {
-	Title              string  `json:"title"`
-	Description        *string `json:"description"`
-	Status             string  `json:"status"`
-	Priority           string  `json:"priority"`
-	AssigneeType       *string `json:"assignee_type"`
-	AssigneeID         *string `json:"assignee_id"`
-	ParentIssueID      *string `json:"parent_issue_id"`
-	DueDate            *string `json:"due_date"`
+	Title           string  `json:"title"`
+	Description     *string `json:"description"`
+	Status          string  `json:"status"`
+	Priority        string  `json:"priority"`
+	AssigneeType    *string `json:"assignee_type"`
+	AssigneeID      *string `json:"assignee_id"`
+	VerifierAgentID *string `json:"verifier_agent_id"`
+	ParentIssueID   *string `json:"parent_issue_id"`
+	DueDate         *string `json:"due_date"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -211,11 +222,15 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	var assigneeType pgtype.Text
 	var assigneeID pgtype.UUID
+	var verifierAgentID pgtype.UUID
 	if req.AssigneeType != nil {
 		assigneeType = pgtype.Text{String: *req.AssigneeType, Valid: true}
 	}
 	if req.AssigneeID != nil {
 		assigneeID = parseUUID(*req.AssigneeID)
+	}
+	if req.VerifierAgentID != nil {
+		verifierAgentID = parseUUID(*req.VerifierAgentID)
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
@@ -224,6 +239,20 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, msg)
 			return
 		}
+	}
+	// Enforce verifier visibility/scope.
+	if req.VerifierAgentID != nil {
+		if ok, msg := h.canAssignAgent(r.Context(), r, *req.VerifierAgentID, workspaceID); !ok {
+			writeError(w, http.StatusForbidden, msg)
+			return
+		}
+	}
+	// Verifier must be different from the assignee agent.
+	if req.VerifierAgentID != nil &&
+		req.AssigneeType != nil && *req.AssigneeType == "agent" &&
+		req.AssigneeID != nil && *req.VerifierAgentID == *req.AssigneeID {
+		writeError(w, http.StatusBadRequest, "verifier_agent_id cannot be the same as assignee_id")
+		return
 	}
 
 	var parentIssueID pgtype.UUID
@@ -262,19 +291,20 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
 	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
-		WorkspaceID:        parseUUID(workspaceID),
-		Title:              req.Title,
-		Description:        ptrToText(req.Description),
-		Status:             status,
-		Priority:           priority,
-		AssigneeType:       assigneeType,
-		AssigneeID:         assigneeID,
-		CreatorType:        creatorType,
-		CreatorID:          parseUUID(actualCreatorID),
-		ParentIssueID:      parentIssueID,
-		Position:           0,
-		DueDate:            dueDate,
-		Number:             issueNumber,
+		WorkspaceID:     parseUUID(workspaceID),
+		Title:           req.Title,
+		Description:     ptrToText(req.Description),
+		Status:          status,
+		Priority:        priority,
+		AssigneeType:    assigneeType,
+		AssigneeID:      assigneeID,
+		CreatorType:     creatorType,
+		CreatorID:       parseUUID(actualCreatorID),
+		VerifierAgentID: verifierAgentID,
+		ParentIssueID:   parentIssueID,
+		Position:        0,
+		DueDate:         dueDate,
+		Number:          issueNumber,
 	})
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -303,14 +333,15 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateIssueRequest struct {
-	Title              *string  `json:"title"`
-	Description        *string  `json:"description"`
-	Status             *string  `json:"status"`
-	Priority           *string  `json:"priority"`
-	AssigneeType       *string  `json:"assignee_type"`
-	AssigneeID         *string  `json:"assignee_id"`
-	Position           *float64 `json:"position"`
-	DueDate            *string  `json:"due_date"`
+	Title           *string  `json:"title"`
+	Description     *string  `json:"description"`
+	Status          *string  `json:"status"`
+	Priority        *string  `json:"priority"`
+	AssigneeType    *string  `json:"assignee_type"`
+	AssigneeID      *string  `json:"assignee_id"`
+	VerifierAgentID *string  `json:"verifier_agent_id"`
+	Position        *float64 `json:"position"`
+	DueDate         *string  `json:"due_date"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -341,10 +372,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Pre-fill nullable fields (bare sqlc.narg) with current values
 	params := db.UpdateIssueParams{
-		ID:           prevIssue.ID,
-		AssigneeType: prevIssue.AssigneeType,
-		AssigneeID:   prevIssue.AssigneeID,
-		DueDate:      prevIssue.DueDate,
+		ID:              prevIssue.ID,
+		AssigneeType:    prevIssue.AssigneeType,
+		AssigneeID:      prevIssue.AssigneeID,
+		VerifierAgentID: prevIssue.VerifierAgentID,
+		DueDate:         prevIssue.DueDate,
 	}
 
 	// COALESCE fields — only set when explicitly provided
@@ -378,6 +410,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			params.AssigneeID = pgtype.UUID{Valid: false} // explicit null = unassign
 		}
 	}
+	if _, ok := rawFields["verifier_agent_id"]; ok {
+		if req.VerifierAgentID != nil {
+			params.VerifierAgentID = parseUUID(*req.VerifierAgentID)
+		} else {
+			params.VerifierAgentID = pgtype.UUID{Valid: false} // explicit null = clear verifier
+		}
+	}
 	if _, ok := rawFields["due_date"]; ok {
 		if req.DueDate != nil && *req.DueDate != "" {
 			t, err := time.Parse(time.RFC3339, *req.DueDate)
@@ -398,6 +437,21 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Enforce verifier visibility/scope.
+	if _, ok := rawFields["verifier_agent_id"]; ok && req.VerifierAgentID != nil {
+		if ok, msg := h.canAssignAgent(r.Context(), r, *req.VerifierAgentID, workspaceID); !ok {
+			writeError(w, http.StatusForbidden, msg)
+			return
+		}
+	}
+	// Verifier must be different from assignee agent.
+	if params.VerifierAgentID.Valid &&
+		params.AssigneeType.Valid && params.AssigneeType.String == "agent" &&
+		params.AssigneeID.Valid &&
+		uuidToString(params.VerifierAgentID) == uuidToString(params.AssigneeID) {
+		writeError(w, http.StatusBadRequest, "verifier_agent_id cannot be the same as assignee_id")
+		return
+	}
 
 	issue, err := h.Queries.UpdateIssue(r.Context(), params)
 	if err != nil {
@@ -410,8 +464,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	resp := issueToResponse(issue, prefix)
 	slog.Info("issue updated", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
 
+	_, verifierFieldPresent := rawFields["verifier_agent_id"]
 	assigneeChanged := (req.AssigneeType != nil || req.AssigneeID != nil) &&
 		(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
+	verifierChanged := verifierFieldPresent &&
+		uuidToString(prevIssue.VerifierAgentID) != uuidToString(issue.VerifierAgentID)
 	statusChanged := req.Status != nil && prevIssue.Status != issue.Status
 	priorityChanged := req.Priority != nil && prevIssue.Priority != issue.Priority
 	descriptionChanged := req.Description != nil && textToPtr(prevIssue.Description) != resp.Description
@@ -424,27 +481,29 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
-		"issue":               resp,
-		"assignee_changed":    assigneeChanged,
-		"status_changed":      statusChanged,
-		"priority_changed":    priorityChanged,
-		"due_date_changed":    dueDateChanged,
-		"description_changed": descriptionChanged,
-		"title_changed":       titleChanged,
-		"prev_title":          prevIssue.Title,
-		"prev_assignee_type":  textToPtr(prevIssue.AssigneeType),
-		"prev_assignee_id":    uuidToPtr(prevIssue.AssigneeID),
-		"prev_status":         prevIssue.Status,
-		"prev_priority":       prevIssue.Priority,
-		"prev_due_date":       prevDueDate,
-		"prev_description":    textToPtr(prevIssue.Description),
-		"creator_type":        prevIssue.CreatorType,
-		"creator_id":          uuidToString(prevIssue.CreatorID),
+		"issue":                  resp,
+		"assignee_changed":       assigneeChanged,
+		"verifier_changed":       verifierChanged,
+		"status_changed":         statusChanged,
+		"priority_changed":       priorityChanged,
+		"due_date_changed":       dueDateChanged,
+		"description_changed":    descriptionChanged,
+		"title_changed":          titleChanged,
+		"prev_title":             prevIssue.Title,
+		"prev_assignee_type":     textToPtr(prevIssue.AssigneeType),
+		"prev_assignee_id":       uuidToPtr(prevIssue.AssigneeID),
+		"prev_verifier_agent_id": uuidToPtr(prevIssue.VerifierAgentID),
+		"prev_status":            prevIssue.Status,
+		"prev_priority":          prevIssue.Priority,
+		"prev_due_date":          prevDueDate,
+		"prev_description":       textToPtr(prevIssue.Description),
+		"creator_type":           prevIssue.CreatorType,
+		"creator_id":             uuidToString(prevIssue.CreatorID),
 	})
 
 	// Reconcile task queue when assignee changes (not on status changes —
 	// agents manage issue status themselves via the CLI).
-	if assigneeChanged {
+	if assigneeChanged || verifierChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
@@ -645,10 +704,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		params := db.UpdateIssueParams{
-			ID:           prevIssue.ID,
-			AssigneeType: prevIssue.AssigneeType,
-			AssigneeID:   prevIssue.AssigneeID,
-			DueDate:      prevIssue.DueDate,
+			ID:              prevIssue.ID,
+			AssigneeType:    prevIssue.AssigneeType,
+			AssigneeID:      prevIssue.AssigneeID,
+			VerifierAgentID: prevIssue.VerifierAgentID,
+			DueDate:         prevIssue.DueDate,
 		}
 
 		if req.Updates.Title != nil {
@@ -680,6 +740,13 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				params.AssigneeID = pgtype.UUID{Valid: false}
 			}
 		}
+		if _, ok := rawUpdates["verifier_agent_id"]; ok {
+			if req.Updates.VerifierAgentID != nil {
+				params.VerifierAgentID = parseUUID(*req.Updates.VerifierAgentID)
+			} else {
+				params.VerifierAgentID = pgtype.UUID{Valid: false}
+			}
+		}
 		if _, ok := rawUpdates["due_date"]; ok {
 			if req.Updates.DueDate != nil && *req.Updates.DueDate != "" {
 				t, err := time.Parse(time.RFC3339, *req.Updates.DueDate)
@@ -698,6 +765,19 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		// Enforce verifier visibility for batch update.
+		if _, ok := rawUpdates["verifier_agent_id"]; ok && req.Updates.VerifierAgentID != nil {
+			if ok, _ := h.canAssignAgent(r.Context(), r, *req.Updates.VerifierAgentID, workspaceID); !ok {
+				continue
+			}
+		}
+		// Verifier must be different from assignee agent.
+		if params.VerifierAgentID.Valid &&
+			params.AssigneeType.Valid && params.AssigneeType.String == "agent" &&
+			params.AssigneeID.Valid &&
+			uuidToString(params.VerifierAgentID) == uuidToString(params.AssigneeID) {
+			continue
+		}
 
 		issue, err := h.Queries.UpdateIssue(r.Context(), params)
 		if err != nil {
@@ -711,17 +791,21 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil) &&
 			(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
+		_, verifierFieldPresent := rawUpdates["verifier_agent_id"]
+		verifierChanged := verifierFieldPresent &&
+			uuidToString(prevIssue.VerifierAgentID) != uuidToString(issue.VerifierAgentID)
 		statusChanged := req.Updates.Status != nil && prevIssue.Status != issue.Status
 		priorityChanged := req.Updates.Priority != nil && prevIssue.Priority != issue.Priority
 
 		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
 			"issue":            resp,
 			"assignee_changed": assigneeChanged,
+			"verifier_changed": verifierChanged,
 			"status_changed":   statusChanged,
 			"priority_changed": priorityChanged,
 		})
 
-		if assigneeChanged {
+		if assigneeChanged || verifierChanged {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 			if h.shouldEnqueueAgentTask(r.Context(), issue) {
 				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)

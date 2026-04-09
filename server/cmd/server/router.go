@@ -14,6 +14,7 @@ import (
 
 	"github.com/nullne/multica/server/internal/auth"
 	"github.com/nullne/multica/server/internal/events"
+	gh "github.com/nullne/multica/server/internal/github"
 	"github.com/nullne/multica/server/internal/handler"
 	"github.com/nullne/multica/server/internal/middleware"
 	"github.com/nullne/multica/server/internal/realtime"
@@ -51,7 +52,8 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	emailSvc := service.NewEmailService()
 	s3 := storage.NewS3StorageFromEnv()
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
-	h := handler.New(queries, pool, hub, bus, emailSvc, s3, cfSigner)
+	githubApp := gh.NewAppFromEnv()
+	h := handler.New(queries, pool, hub, bus, emailSvc, s3, cfSigner, githubApp)
 
 	r := chi.NewRouter()
 
@@ -70,7 +72,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	// Health check
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		w.Write([]byte(`{"status":"ok","version":"` + version + `"}`))
 	})
 
 	// WebSocket
@@ -127,12 +129,16 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/members", h.ListMembersWithUser)
 					r.Post("/leave", h.LeaveWorkspace)
 				})
-				// Admin-level access
-				r.Group(func(r chi.Router) {
-					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
-					r.Put("/", h.UpdateWorkspace)
-					r.Patch("/", h.UpdateWorkspace)
-					r.Post("/members", h.CreateMember)
+			// Admin-level access
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+				r.Put("/", h.UpdateWorkspace)
+				r.Patch("/", h.UpdateWorkspace)
+				r.Post("/members", h.CreateMember)
+				r.Get("/github/install-url", h.GitHubInstallURL)
+				r.Get("/github/status", h.GitHubStatus)
+				r.Post("/github/connect", h.GitHubConnect)
+				r.Delete("/github", h.GitHubDisconnect)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
 						r.Delete("/", h.DeleteMember)

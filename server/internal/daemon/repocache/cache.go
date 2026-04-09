@@ -3,6 +3,7 @@
 package repocache
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -43,6 +44,11 @@ func New(root string, logger *slog.Logger) *Cache {
 // Repos no longer in the list are left in place (cheap to keep, avoids re-cloning
 // if a repo is temporarily removed and re-added).
 func (c *Cache) Sync(workspaceID string, repos []RepoInfo) error {
+	return c.SyncWithToken(workspaceID, repos, "")
+}
+
+// SyncWithToken is like Sync but uses the given GitHub token for authentication.
+func (c *Cache) SyncWithToken(workspaceID string, repos []RepoInfo, token string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -59,18 +65,16 @@ func (c *Cache) Sync(workspaceID string, repos []RepoInfo) error {
 		barePath := filepath.Join(wsDir, bareDirName(repo.URL))
 
 		if isBareRepo(barePath) {
-			// Already cached — fetch latest.
 			c.logger.Info("repo cache: fetching", "url", repo.URL, "path", barePath)
-			if err := gitFetch(barePath); err != nil {
+			if err := gitFetchWithToken(barePath, token); err != nil {
 				c.logger.Warn("repo cache: fetch failed", "url", repo.URL, "error", err)
 				if firstErr == nil {
 					firstErr = err
 				}
 			}
 		} else {
-			// Not cached — bare clone.
 			c.logger.Info("repo cache: cloning", "url", repo.URL, "path", barePath)
-			if err := gitCloneBare(repo.URL, barePath); err != nil {
+			if err := gitCloneBareWithToken(repo.URL, barePath, token); err != nil {
 				c.logger.Error("repo cache: clone failed", "url", repo.URL, "error", err)
 				if firstErr == nil {
 					firstErr = err
@@ -94,6 +98,11 @@ func (c *Cache) Lookup(workspaceID, url string) string {
 // Fetch runs `git fetch origin` on a cached bare clone to get latest refs.
 func (c *Cache) Fetch(barePath string) error {
 	return gitFetch(barePath)
+}
+
+// FetchWithToken runs `git fetch origin` with a GitHub token for auth.
+func (c *Cache) FetchWithToken(barePath, token string) error {
+	return gitFetchWithToken(barePath, token)
 }
 
 // bareDirName derives a directory name from a repo URL.
@@ -128,14 +137,25 @@ func isBareRepo(path string) bool {
 }
 
 func gitCloneBare(url, dest string) error {
-	cmd := exec.Command("git", "clone", "--bare", url, dest)
+	return gitCloneBareWithToken(url, dest, "")
+}
+
+func gitCloneBareWithToken(url, dest, token string) error {
+	args := []string{"clone", "--bare"}
+	if token != "" {
+		args = append(args,
+			"-c", fmt.Sprintf("http.extraHeader=Authorization: Basic %s", basicAuth(token)),
+		)
+	}
+	args = append(args, url, dest)
+	cmd := exec.Command("git", args...)
+	if token != "" {
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
-		// Clean up partial clone.
 		os.RemoveAll(dest)
 		return fmt.Errorf("git clone --bare: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	// Ensure fetch refspec is configured so `git fetch` updates local branches.
-	// `git clone --bare` doesn't set this by default.
 	cmd = exec.Command("git", "-C", dest, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("configure fetch refspec: %s: %w", strings.TrimSpace(string(out)), err)
@@ -144,11 +164,30 @@ func gitCloneBare(url, dest string) error {
 }
 
 func gitFetch(barePath string) error {
-	cmd := exec.Command("git", "-C", barePath, "fetch", "origin")
+	return gitFetchWithToken(barePath, "")
+}
+
+func gitFetchWithToken(barePath, token string) error {
+	args := []string{"-C", barePath}
+	if token != "" {
+		args = append(args,
+			"-c", fmt.Sprintf("http.extraHeader=Authorization: Basic %s", basicAuth(token)),
+		)
+	}
+	args = append(args, "fetch", "origin")
+	cmd := exec.Command("git", args...)
+	if token != "" {
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// basicAuth encodes "x-access-token:{token}" for GitHub App installation tokens.
+func basicAuth(token string) string {
+	return base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 }
 
 // WorktreeParams holds inputs for creating a worktree from a cached bare clone.

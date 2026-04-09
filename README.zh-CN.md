@@ -59,9 +59,8 @@ cd multica
 cp .env.example .env
 # 编辑 .env — 至少修改 JWT_SECRET
 
-docker compose up -d                              # 启动 PostgreSQL
-cd server && go run ./cmd/migrate up && cd ..     # 运行数据库迁移
-make start                                         # 启动应用
+make setup                                        # 安装依赖、启动 PostgreSQL 并执行迁移
+make start                                        # 启动后端和前端
 ```
 
 完整部署文档请参阅 [自部署指南](SELF_HOSTING.md)。

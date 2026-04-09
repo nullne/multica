@@ -34,5 +34,15 @@ UPDATE workspace SET issue_counter = issue_counter + 1
 WHERE id = $1
 RETURNING issue_counter;
 
+-- name: SetGitHubInstallation :one
+UPDATE workspace SET github_installation_id = $2, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ClearGitHubInstallation :one
+UPDATE workspace SET github_installation_id = NULL, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: DeleteWorkspace :exec
 DELETE FROM workspace WHERE id = $1;

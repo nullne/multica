@@ -3,10 +3,10 @@ name: Deploy
 on:
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "Image tag to deploy (default: latest)"
-        required: false
-        default: "latest"
+      version:
+        description: "Version to deploy (e.g. v0.2.2). Must be a released tag with built images."
+        required: true
+        type: string
       clean:
         description: "Clean deploy: remove existing database and start fresh"
         required: false
@@ -21,12 +21,40 @@ env:
   LISTEN_PORT: ${{ vars.LISTEN_PORT || '80' }}
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      image_exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify image exists
+        id: check
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}/backend:${{ inputs.version }}"
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "Image $IMAGE found"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Image $IMAGE not found. Available versions:"
+            echo "::error::Check https://github.com/${{ github.repository }}/pkgs/container/multica%2Fbackend for available tags."
+            exit 1
+          fi
+
   deploy:
+    needs: verify
     runs-on: self-hosted
     environment: prod
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
 
       - name: Login to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -49,10 +77,18 @@ jobs:
           CLOUDFRONT_DOMAIN=${{ secrets.CLOUDFRONT_DOMAIN }}
           CLOUDFRONT_KEY_PAIR_ID=${{ secrets.CLOUDFRONT_KEY_PAIR_ID }}
           CLOUDFRONT_PRIVATE_KEY=${{ secrets.CLOUDFRONT_PRIVATE_KEY }}
+          MULTICA_GITHUB_APP_ID=${{ vars.MULTICA_GITHUB_APP_ID }}
+          MULTICA_GITHUB_APP_SLUG=${{ vars.MULTICA_GITHUB_APP_SLUG }}
           LISTEN_PORT=${{ vars.LISTEN_PORT || '80' }}
           PGDATA_DIR=${{ vars.PGDATA_DIR || './data/postgres' }}
-          IMAGE_TAG=${{ inputs.image_tag || 'latest' }}
+          IMAGE_TAG=${{ inputs.version }}
           ENVEOF
+
+      - name: Write GitHub App private key file
+        run: |
+          mkdir -p secrets
+          printf '%s' '${{ secrets.MULTICA_GITHUB_APP_PRIVATE_KEY }}' > secrets/github-app-key.pem
+          chmod 600 secrets/github-app-key.pem
 
       - name: Clean existing data
         if: inputs.clean
@@ -91,6 +127,14 @@ jobs:
           docker compose -f docker-compose.prod.yml --env-file .env.prod logs --tail=100
           exit 1
 
-      - name: Cleanup env file
+      - name: Verify deployed version
+        run: |
+          DEPLOYED=$(curl -sf http://localhost:${LISTEN_PORT}/health | jq -r '.version // "unknown"')
+          echo "Deployed version: $DEPLOYED"
+          echo "Expected version: ${{ inputs.version }}"
+
+      - name: Cleanup secrets
         if: always()
-        run: rm -f .env.prod
+        run: |
+          rm -f .env.prod
+          rm -rf secrets/
