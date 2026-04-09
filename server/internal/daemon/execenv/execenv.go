@@ -34,6 +34,7 @@ type TaskContextForEnv struct {
 	AgentInstructions string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentSkills       []SkillContextForEnv
 	Repos             []RepoContextForEnv // workspace repos available for checkout
+	GitHubCodeAccess  string              // "read", "write", or "admin" — controls merge instruction injection
 }
 
 // SkillContextForEnv represents a skill to be written into the execution environment.

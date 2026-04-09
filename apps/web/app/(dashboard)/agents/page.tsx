@@ -1194,6 +1194,7 @@ function SettingsTab({
   const [description, setDescription] = useState(agent.description ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
   const [maxTasks, setMaxTasks] = useState(agent.max_concurrent_tasks);
+  const [codeAccess, setCodeAccess] = useState(agent.github_code_access ?? "write");
   const [saving, setSaving] = useState(false);
   const { upload, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1216,7 +1217,8 @@ function SettingsTab({
     name !== agent.name ||
     description !== (agent.description ?? "") ||
     visibility !== agent.visibility ||
-    maxTasks !== agent.max_concurrent_tasks;
+    maxTasks !== agent.max_concurrent_tasks ||
+    codeAccess !== (agent.github_code_access ?? "write");
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -1225,7 +1227,7 @@ function SettingsTab({
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, max_concurrent_tasks: maxTasks });
+      await onSave({ name: name.trim(), description, visibility, max_concurrent_tasks: maxTasks, github_code_access: codeAccess as Agent["github_code_access"] });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1334,6 +1336,36 @@ function SettingsTab({
           onChange={(e) => setMaxTasks(Number(e.target.value))}
           className="mt-1 w-24"
         />
+      </div>
+
+      <div>
+        <Label className="text-xs text-muted-foreground">GitHub Code Access</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+          Controls what the agent can do with repository code when a GitHub App is connected.
+        </p>
+        <div className="mt-1.5 flex gap-2">
+          {([
+            { value: "read", label: "Read", desc: "Read-only code access" },
+            { value: "write", label: "Write", desc: "Push code, create PRs" },
+            { value: "admin", label: "Admin", desc: "Push, create & merge PRs" },
+          ] as const).map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setCodeAccess(opt.value)}
+              className={`flex flex-1 items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
+                codeAccess === opt.value
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:bg-muted"
+              }`}
+            >
+              <div className="text-left">
+                <div className="font-medium">{opt.label}</div>
+                <div className="text-xs text-muted-foreground">{opt.desc}</div>
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
 
       <div>

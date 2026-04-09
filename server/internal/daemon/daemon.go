@@ -878,6 +878,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		AgentInstructions: instructions,
 		AgentSkills:       convertSkillsForEnv(skills),
 		Repos:             convertReposForEnv(task.Repos),
+		GitHubCodeAccess:  task.GitHubCodeAccess,
 	}
 
 	// Try to reuse the workdir from a previous task on the same (agent, issue) pair.
@@ -925,6 +926,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	// without polluting the system ~/.codex/skills/.
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
+	}
+	// Inject GitHub token for authenticated git operations and `gh` CLI.
+	if task.GitHubToken != "" {
+		agentEnv["GITHUB_TOKEN"] = task.GitHubToken
+		agentEnv["GH_TOKEN"] = task.GitHubToken
+		if askpassPath, err := execenv.WriteGitAskPass(env.WorkDir, task.GitHubToken); err == nil {
+			agentEnv["GIT_ASKPASS"] = askpassPath
+			agentEnv["GIT_TERMINAL_PROMPT"] = "0"
+		}
 	}
 	backend, err := agent.New(provider, agent.Config{
 		ExecutablePath: entry.Path,

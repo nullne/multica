@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Save, Plus, Trash2 } from "lucide-react";
+import { Save, Plus, Trash2, Github, Unplug, ExternalLink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
@@ -19,6 +20,8 @@ export function RepositoriesTab() {
 
   const [repos, setRepos] = useState<WorkspaceRepo[]>(workspace?.repos ?? []);
   const [saving, setSaving] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "admin";
@@ -53,10 +56,87 @@ export function RepositoriesTab() {
     setRepos(repos.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
   };
 
+  const handleConnectGitHub = async () => {
+    if (!workspace) return;
+    setConnecting(true);
+    try {
+      const { url } = await api.getGitHubInstallURL(workspace.id);
+      window.open(url, "_blank");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to get install URL");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnectGitHub = async () => {
+    if (!workspace) return;
+    setDisconnecting(true);
+    try {
+      const updated = await api.disconnectGitHub(workspace.id);
+      updateWorkspace(updated);
+      toast.success("GitHub disconnected");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to disconnect");
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
   if (!workspace) return null;
 
   return (
     <div className="space-y-8">
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold">GitHub Integration</h2>
+
+        <Card>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Github className="h-4 w-4" />
+                <span className="text-sm font-medium">GitHub App</span>
+                {workspace.github_connected ? (
+                  <Badge variant="secondary" className="text-xs">Connected</Badge>
+                ) : (
+                  <Badge variant="outline" className="text-xs">Not connected</Badge>
+                )}
+              </div>
+              {canManageWorkspace && (
+                <div>
+                  {workspace.github_connected ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDisconnectGitHub}
+                      disabled={disconnecting}
+                    >
+                      <Unplug className="h-3 w-3" />
+                      {disconnecting ? "Disconnecting..." : "Disconnect"}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleConnectGitHub}
+                      disabled={connecting}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      {connecting ? "Opening..." : "Connect GitHub"}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {workspace.github_connected
+                ? "Agents receive scoped GitHub tokens automatically. Each agent's code access level controls what it can do."
+                : "Connect a GitHub App to give agents scoped access tokens for repositories. Without this, agents rely on host-level git credentials."}
+            </p>
+          </CardContent>
+        </Card>
+      </section>
+
       <section className="space-y-4">
         <h2 className="text-sm font-semibold">Repositories</h2>
 
