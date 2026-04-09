@@ -48,3 +48,4 @@ server/server
 
 # deployment data
 data/
+secrets/
