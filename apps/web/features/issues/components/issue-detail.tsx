@@ -57,7 +57,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { ActorAvatar } from "@/components/common/actor-avatar";
-import type { UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
+import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent } from "@/features/issues/components";
 import { CommentCard } from "./comment-card";
@@ -74,6 +74,74 @@ import { ReactionBar } from "@/components/common/reaction-bar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { timeAgo } from "@/shared/utils";
+
+function CriteriaApprovalActions({ issueId, onUpdate }: { issueId: string; onUpdate: (issue: Issue) => void }) {
+  const [rejecting, setRejecting] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleApprove = async () => {
+    setSubmitting(true);
+    try {
+      const updated = await api.approveCriteria(issueId);
+      onUpdate(updated);
+      toast.success("Criteria approved — executor task enqueued");
+    } catch {
+      toast.error("Failed to approve criteria");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReject = async () => {
+    setSubmitting(true);
+    try {
+      const updated = await api.rejectCriteria(issueId, feedback);
+      onUpdate(updated);
+      setRejecting(false);
+      setFeedback("");
+      toast.success("Criteria rejected — verifier will regenerate");
+    } catch {
+      toast.error("Failed to reject criteria");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (rejecting) {
+    return (
+      <div className="space-y-2 pt-1">
+        <textarea
+          value={feedback}
+          onChange={(e) => setFeedback(e.target.value)}
+          placeholder="What should be changed..."
+          className="w-full rounded-md border px-2.5 py-1.5 text-xs bg-transparent outline-none focus:ring-1 focus:ring-ring resize-none"
+          rows={3}
+          autoFocus
+        />
+        <div className="flex items-center gap-1.5">
+          <Button size="xs" variant="destructive" onClick={handleReject} disabled={submitting}>
+            {submitting ? "Sending..." : "Request Changes"}
+          </Button>
+          <Button size="xs" variant="ghost" onClick={() => { setRejecting(false); setFeedback(""); }} disabled={submitting}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 pt-1">
+      <Button size="xs" onClick={handleApprove} disabled={submitting} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+        {submitting ? "Approving..." : "Approve"}
+      </Button>
+      <Button size="xs" variant="outline" onClick={() => setRejecting(true)} disabled={submitting}>
+        Request Changes
+      </Button>
+    </div>
+  );
+}
 
 function shortDate(date: string | null): string {
   if (!date) return "—";
@@ -1119,6 +1187,12 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   >
                     <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${criteriaOpen ? "rotate-90" : ""}`} />
                     Acceptance Criteria
+                    {issue.criteria_status === "approved" && (
+                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-600">Approved</span>
+                    )}
+                    {issue.criteria_status === "pending" && (
+                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-600">Pending</span>
+                    )}
                     <span className="ml-auto text-muted-foreground font-normal">{issue.acceptance_criteria.length}</span>
                   </button>
 
@@ -1145,6 +1219,10 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                           </div>
                         );
                       })}
+
+                      {issue.criteria_status === "pending" && (
+                        <CriteriaApprovalActions issueId={id} onUpdate={(updated) => useIssueStore.getState().updateIssue(updated.id, updated)} />
+                      )}
                     </div>
                   )}
                 </div>

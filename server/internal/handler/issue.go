@@ -34,6 +34,7 @@ type IssueResponse struct {
 	CreatorID             string                  `json:"creator_id"`
 	ParentIssueID         *string                 `json:"parent_issue_id"`
 	AcceptanceCriteria    []any                   `json:"acceptance_criteria"`
+	CriteriaStatus        *string                 `json:"criteria_status"`
 	Position              float64                 `json:"position"`
 	DueDate               *string                 `json:"due_date"`
 	CreatedAt             string                  `json:"created_at"`
@@ -88,6 +89,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		CreatorID:             uuidToString(i.CreatorID),
 		ParentIssueID:         uuidToPtr(i.ParentIssueID),
 		AcceptanceCriteria:    acceptanceCriteria,
+		CriteriaStatus:        textToPtr(i.CriteriaStatus),
 		Position:              i.Position,
 		DueDate:               timestampToPtr(i.DueDate),
 		CreatedAt:             timestampToString(i.CreatedAt),
@@ -646,6 +648,115 @@ func agentHasTriggerEnabled(raw []byte, triggerType string) bool {
 		}
 	}
 	return true // Trigger type not configured = enabled by default
+}
+
+// ---------------------------------------------------------------------------
+// Criteria approval
+// ---------------------------------------------------------------------------
+
+func (h *Handler) ApproveCriteria(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	if !issue.CriteriaStatus.Valid || issue.CriteriaStatus.String != "pending" {
+		writeError(w, http.StatusBadRequest, "criteria are not pending approval")
+		return
+	}
+	if len(decodeAcceptanceCriteria(issue.AcceptanceCriteria)) == 0 {
+		writeError(w, http.StatusBadRequest, "no acceptance criteria to approve")
+		return
+	}
+
+	updated, err := h.Queries.UpdateIssueCriteriaStatus(r.Context(), db.UpdateIssueCriteriaStatusParams{
+		ID:             issue.ID,
+		CriteriaStatus: pgtype.Text{String: "approved", Valid: true},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to approve criteria")
+		return
+	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := issueToResponse(updated, prefix)
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
+
+	if h.shouldEnqueueAgentTask(r.Context(), updated) {
+		h.TaskService.EnqueueExecutorForApprovedCriteria(r.Context(), updated)
+	}
+
+	slog.Info("criteria approved", "issue_id", id, "workspace_id", workspaceID)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+type RejectCriteriaRequest struct {
+	Feedback string `json:"feedback"`
+}
+
+func (h *Handler) RejectCriteria(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	if !issue.CriteriaStatus.Valid || issue.CriteriaStatus.String != "pending" {
+		writeError(w, http.StatusBadRequest, "criteria are not pending approval")
+		return
+	}
+
+	var req RejectCriteriaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Clear criteria and reset status so verifier can regenerate.
+	updated, err := h.Queries.UpdateIssueAcceptanceCriteria(r.Context(), db.UpdateIssueAcceptanceCriteriaParams{
+		ID:                 issue.ID,
+		AcceptanceCriteria: []byte("[]"),
+		CriteriaStatus:     pgtype.Text{Valid: false},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reject criteria")
+		return
+	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := issueToResponse(updated, prefix)
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
+
+	feedback := req.Feedback
+	if feedback == "" {
+		feedback = "验收标准需要修改，请重新生成。"
+	}
+
+	// Re-enqueue criteria task to verifier with feedback.
+	if issue.VerifierAgentID.Valid && issue.AssigneeID.Valid {
+		h.TaskService.EnqueueTaskForIssue(r.Context(), updated)
+	}
+
+	slog.Info("criteria rejected", "issue_id", id, "workspace_id", workspaceID)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func decodeAcceptanceCriteria(raw []byte) []map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var criteria []map[string]any
+	if err := json.Unmarshal(raw, &criteria); err != nil {
+		return nil
+	}
+	return criteria
 }
 
 func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {

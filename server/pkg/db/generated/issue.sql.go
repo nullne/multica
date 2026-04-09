@@ -19,7 +19,7 @@ INSERT INTO issue (
     max_verification_rounds
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status
 `
 
 type CreateIssueParams struct {
@@ -80,6 +80,7 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.Number,
 		&i.VerifierAgentID,
 		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
 	)
 	return i, err
 }
@@ -94,7 +95,7 @@ func (q *Queries) DeleteIssue(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getIssue = `-- name: GetIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status FROM issue
 WHERE id = $1
 `
 
@@ -122,12 +123,13 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 		&i.Number,
 		&i.VerifierAgentID,
 		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
 	)
 	return i, err
 }
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status FROM issue
 WHERE workspace_id = $1 AND number = $2
 `
 
@@ -160,12 +162,13 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.Number,
 		&i.VerifierAgentID,
 		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
 	)
 	return i, err
 }
 
 const getIssueInWorkspace = `-- name: GetIssueInWorkspace :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status FROM issue
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -198,12 +201,13 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 		&i.Number,
 		&i.VerifierAgentID,
 		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
 	)
 	return i, err
 }
 
 const listIssues = `-- name: ListIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status FROM issue
 WHERE workspace_id = $1
   AND ($4::text IS NULL OR status = $4)
   AND ($5::text IS NULL OR priority = $5)
@@ -258,6 +262,7 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]Issue
 			&i.Number,
 			&i.VerifierAgentID,
 			&i.MaxVerificationRounds,
+			&i.CriteriaStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -283,7 +288,7 @@ UPDATE issue SET
     max_verification_rounds = $11,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status
 `
 
 type UpdateIssueParams struct {
@@ -336,6 +341,7 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		&i.Number,
 		&i.VerifierAgentID,
 		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
 	)
 	return i, err
 }
@@ -343,18 +349,20 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 const updateIssueAcceptanceCriteria = `-- name: UpdateIssueAcceptanceCriteria :one
 UPDATE issue SET
     acceptance_criteria = $2,
+    criteria_status = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status
 `
 
 type UpdateIssueAcceptanceCriteriaParams struct {
 	ID                 pgtype.UUID `json:"id"`
 	AcceptanceCriteria []byte      `json:"acceptance_criteria"`
+	CriteriaStatus     pgtype.Text `json:"criteria_status"`
 }
 
 func (q *Queries) UpdateIssueAcceptanceCriteria(ctx context.Context, arg UpdateIssueAcceptanceCriteriaParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, updateIssueAcceptanceCriteria, arg.ID, arg.AcceptanceCriteria)
+	row := q.db.QueryRow(ctx, updateIssueAcceptanceCriteria, arg.ID, arg.AcceptanceCriteria, arg.CriteriaStatus)
 	var i Issue
 	err := row.Scan(
 		&i.ID,
@@ -377,6 +385,49 @@ func (q *Queries) UpdateIssueAcceptanceCriteria(ctx context.Context, arg UpdateI
 		&i.Number,
 		&i.VerifierAgentID,
 		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
+	)
+	return i, err
+}
+
+const updateIssueCriteriaStatus = `-- name: UpdateIssueCriteriaStatus :one
+UPDATE issue SET
+    criteria_status = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status
+`
+
+type UpdateIssueCriteriaStatusParams struct {
+	ID             pgtype.UUID `json:"id"`
+	CriteriaStatus pgtype.Text `json:"criteria_status"`
+}
+
+func (q *Queries) UpdateIssueCriteriaStatus(ctx context.Context, arg UpdateIssueCriteriaStatusParams) (Issue, error) {
+	row := q.db.QueryRow(ctx, updateIssueCriteriaStatus, arg.ID, arg.CriteriaStatus)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.VerifierAgentID,
+		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
 	)
 	return i, err
 }
@@ -386,7 +437,7 @@ UPDATE issue SET
     status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status
 `
 
 type UpdateIssueStatusParams struct {
@@ -418,6 +469,7 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.Number,
 		&i.VerifierAgentID,
 		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
 	)
 	return i, err
 }

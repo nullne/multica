@@ -223,6 +223,7 @@ const issueDefaults = {
   verifier_agent_id: null,
   max_verification_rounds: null,
   acceptance_criteria: [],
+  criteria_status: null,
   position: 0,
 };
 

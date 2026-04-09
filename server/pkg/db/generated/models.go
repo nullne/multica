@@ -178,6 +178,7 @@ type Issue struct {
 	Number                int32              `json:"number"`
 	VerifierAgentID       pgtype.UUID        `json:"verifier_agent_id"`
 	MaxVerificationRounds pgtype.Int4        `json:"max_verification_rounds"`
+	CriteriaStatus        pgtype.Text        `json:"criteria_status"`
 }
 
 type IssueDependency struct {

@@ -26,6 +26,8 @@ export interface AcceptanceCriterion {
   [key: string]: unknown;
 }
 
+export type CriteriaStatus = "pending" | "approved";
+
 export interface Issue {
   id: string;
   workspace_id: string;
@@ -43,6 +45,7 @@ export interface Issue {
   creator_id: string;
   parent_issue_id: string | null;
   acceptance_criteria: AcceptanceCriterion[];
+  criteria_status: CriteriaStatus | null;
   position: number;
   due_date: string | null;
   reactions?: IssueReaction[];

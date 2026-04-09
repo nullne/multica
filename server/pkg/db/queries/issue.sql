@@ -48,6 +48,14 @@ RETURNING *;
 -- name: UpdateIssueAcceptanceCriteria :one
 UPDATE issue SET
     acceptance_criteria = $2,
+    criteria_status = sqlc.narg('criteria_status'),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateIssueCriteriaStatus :one
+UPDATE issue SET
+    criteria_status = sqlc.narg('criteria_status'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
