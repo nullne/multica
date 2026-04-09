@@ -136,6 +136,7 @@ func sanitizeDirName(name string) string {
 }
 
 // ensureBareClone creates or updates a bare clone for caching.
+// Uses refs/remotes/origin/* so fetches never conflict with checked-out worktrees.
 func ensureBareClone(repoURL, bare string) error {
 	if _, err := os.Stat(filepath.Join(bare, "HEAD")); err == nil {
 		fmt.Fprintf(os.Stderr, "Updating %s...\n", filepath.Base(bare))
@@ -156,19 +157,33 @@ func ensureBareClone(repoURL, bare string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git clone --bare failed: %w", err)
 	}
-	// Enable full fetch refspec so worktrees see all branches.
-	exec.Command("git", "-C", bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*").Run()
+	// Use remotes refspec so fetch never conflicts with checked-out worktree branches.
+	exec.Command("git", "-C", bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*").Run()
+	// Fetch once with the new refspec to populate refs/remotes/origin/*.
+	exec.Command("git", "-C", bare, "fetch", "origin").Run()
 	return nil
 }
 
-// defaultBranch returns the default branch of a bare repo (main, master, etc.)
-func defaultBranch(bare string) string {
+// defaultBranchRef returns the remote ref for the default branch (e.g. "origin/main").
+func defaultBranchRef(bare string) string {
+	// Try symbolic-ref HEAD → refs/heads/main → check origin/main
 	out, err := exec.Command("git", "-C", bare, "symbolic-ref", "HEAD").Output()
 	if err == nil {
-		ref := strings.TrimSpace(string(out))
-		return strings.TrimPrefix(ref, "refs/heads/")
+		branch := strings.TrimPrefix(strings.TrimSpace(string(out)), "refs/heads/")
+		remoteRef := "refs/remotes/origin/" + branch
+		if exec.Command("git", "-C", bare, "rev-parse", "--verify", remoteRef).Run() == nil {
+			return remoteRef
+		}
+		// Fall back to the local branch ref if remote doesn't exist yet
+		if exec.Command("git", "-C", bare, "rev-parse", "--verify", branch).Run() == nil {
+			return branch
+		}
 	}
 	for _, name := range []string{"main", "master"} {
+		ref := "refs/remotes/origin/" + name
+		if exec.Command("git", "-C", bare, "rev-parse", "--verify", ref).Run() == nil {
+			return ref
+		}
 		if exec.Command("git", "-C", bare, "rev-parse", "--verify", name).Run() == nil {
 			return name
 		}
@@ -176,17 +191,18 @@ func defaultBranch(bare string) string {
 	return "HEAD"
 }
 
-// createWorktree creates a new worktree from the bare clone.
+// createWorktree creates a new worktree from the bare clone with a unique branch.
 // Layout: ~/multica_workspaces/{workspace-name}/{repo-name}-{timestamp}/
 func createWorktree(bare, wsRoot string, proj project) (string, error) {
 	ts := time.Now().Format("20060102-150405")
 	dirName := fmt.Sprintf("%s-%s", proj.RepoName, ts)
 	wtPath := filepath.Join(wsRoot, sanitizeDirName(proj.WorkspaceName), dirName)
 
-	branch := defaultBranch(bare)
+	baseRef := defaultBranchRef(bare)
+	branchName := fmt.Sprintf("open/%s-%s", proj.RepoName, ts)
 
-	fmt.Fprintf(os.Stderr, "Creating worktree at %s (branch: %s)...\n", dirName, branch)
-	cmd := exec.Command("git", "-C", bare, "worktree", "add", wtPath, branch)
+	fmt.Fprintf(os.Stderr, "Creating worktree at %s...\n", dirName)
+	cmd := exec.Command("git", "-C", bare, "worktree", "add", "-b", branchName, wtPath, baseRef)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
