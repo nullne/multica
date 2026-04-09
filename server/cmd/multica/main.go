@@ -35,6 +35,8 @@ func init() {
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(openCmd)
+	rootCmd.AddCommand(launcherCmd)
 }
 
 func main() {
