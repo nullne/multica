@@ -14,7 +14,7 @@ import (
 const createWorkspace = `-- name: CreateWorkspace :one
 INSERT INTO workspace (name, slug, description, context, issue_prefix)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id
 `
 
 type CreateWorkspaceParams struct {
@@ -46,6 +46,33 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		&i.Repos,
 		&i.IssuePrefix,
 		&i.IssueCounter,
+		&i.GithubInstallationID,
+	)
+	return i, err
+}
+
+const clearGitHubInstallation = `-- name: ClearGitHubInstallation :one
+UPDATE workspace SET github_installation_id = NULL, updated_at = now()
+WHERE id = $1
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id
+`
+
+func (q *Queries) ClearGitHubInstallation(ctx context.Context, id pgtype.UUID) (Workspace, error) {
+	row := q.db.QueryRow(ctx, clearGitHubInstallation, id)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Context,
+		&i.Repos,
+		&i.IssuePrefix,
+		&i.IssueCounter,
+		&i.GithubInstallationID,
 	)
 	return i, err
 }
@@ -60,7 +87,7 @@ func (q *Queries) DeleteWorkspace(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getWorkspace = `-- name: GetWorkspace :one
-SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter FROM workspace
+SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id FROM workspace
 WHERE id = $1
 `
 
@@ -79,12 +106,13 @@ func (q *Queries) GetWorkspace(ctx context.Context, id pgtype.UUID) (Workspace, 
 		&i.Repos,
 		&i.IssuePrefix,
 		&i.IssueCounter,
+		&i.GithubInstallationID,
 	)
 	return i, err
 }
 
 const getWorkspaceBySlug = `-- name: GetWorkspaceBySlug :one
-SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter FROM workspace
+SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id FROM workspace
 WHERE slug = $1
 `
 
@@ -103,6 +131,7 @@ func (q *Queries) GetWorkspaceBySlug(ctx context.Context, slug string) (Workspac
 		&i.Repos,
 		&i.IssuePrefix,
 		&i.IssueCounter,
+		&i.GithubInstallationID,
 	)
 	return i, err
 }
@@ -121,7 +150,7 @@ func (q *Queries) IncrementIssueCounter(ctx context.Context, id pgtype.UUID) (in
 }
 
 const listWorkspaces = `-- name: ListWorkspaces :many
-SELECT w.id, w.name, w.slug, w.description, w.settings, w.created_at, w.updated_at, w.context, w.repos, w.issue_prefix, w.issue_counter FROM workspace w
+SELECT w.id, w.name, w.slug, w.description, w.settings, w.created_at, w.updated_at, w.context, w.repos, w.issue_prefix, w.issue_counter, w.github_installation_id FROM workspace w
 JOIN member m ON m.workspace_id = w.id
 WHERE m.user_id = $1
 ORDER BY w.created_at ASC
@@ -148,6 +177,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID pgtype.UUID) ([]Wor
 			&i.Repos,
 			&i.IssuePrefix,
 			&i.IssueCounter,
+			&i.GithubInstallationID,
 		); err != nil {
 			return nil, err
 		}
@@ -157,6 +187,37 @@ func (q *Queries) ListWorkspaces(ctx context.Context, userID pgtype.UUID) ([]Wor
 		return nil, err
 	}
 	return items, nil
+}
+
+const setGitHubInstallation = `-- name: SetGitHubInstallation :one
+UPDATE workspace SET github_installation_id = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id
+`
+
+type SetGitHubInstallationParams struct {
+	ID                   pgtype.UUID `json:"id"`
+	GithubInstallationID pgtype.Int8 `json:"github_installation_id"`
+}
+
+func (q *Queries) SetGitHubInstallation(ctx context.Context, arg SetGitHubInstallationParams) (Workspace, error) {
+	row := q.db.QueryRow(ctx, setGitHubInstallation, arg.ID, arg.GithubInstallationID)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Context,
+		&i.Repos,
+		&i.IssuePrefix,
+		&i.IssueCounter,
+		&i.GithubInstallationID,
+	)
+	return i, err
 }
 
 const updateWorkspace = `-- name: UpdateWorkspace :one
@@ -169,7 +230,7 @@ UPDATE workspace SET
     issue_prefix = COALESCE($7, issue_prefix),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id
 `
 
 type UpdateWorkspaceParams struct {
@@ -205,6 +266,7 @@ func (q *Queries) UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams
 		&i.Repos,
 		&i.IssuePrefix,
 		&i.IssueCounter,
+		&i.GithubInstallationID,
 	)
 	return i, err
 }

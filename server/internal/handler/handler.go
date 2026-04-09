@@ -14,6 +14,7 @@ import (
 	db "github.com/nullne/multica/server/pkg/db/generated"
 	"github.com/nullne/multica/server/internal/auth"
 	"github.com/nullne/multica/server/internal/events"
+	gh "github.com/nullne/multica/server/internal/github"
 	"github.com/nullne/multica/server/internal/middleware"
 	"github.com/nullne/multica/server/internal/realtime"
 	"github.com/nullne/multica/server/internal/service"
@@ -43,9 +44,10 @@ type Handler struct {
 	UpdateStore  *UpdateStore
 	Storage      *storage.S3Storage
 	CFSigner     *auth.CloudFrontSigner
+	GitHubApp    *gh.App
 }
 
-func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, s3 *storage.S3Storage, cfSigner *auth.CloudFrontSigner) *Handler {
+func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, s3 *storage.S3Storage, cfSigner *auth.CloudFrontSigner, githubApp *gh.App) *Handler {
 	var executor dbExecutor
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
@@ -63,6 +65,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		UpdateStore:  NewUpdateStore(),
 		Storage:      s3,
 		CFSigner:     cfSigner,
+		GitHubApp:    githubApp,
 	}
 }
 

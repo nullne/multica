@@ -6,6 +6,8 @@ export type AgentVisibility = "workspace" | "private";
 
 export type AgentTriggerType = "on_assign" | "on_comment" | "scheduled";
 
+export type GitHubCodeAccess = "read" | "write" | "admin";
+
 export interface RuntimeDevice {
   id: string;
   workspace_id: string;
@@ -71,6 +73,7 @@ export interface Agent {
   skills: Skill[];
   tools: AgentTool[];
   triggers: AgentTrigger[];
+  github_code_access: GitHubCodeAccess;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -88,6 +91,7 @@ export interface CreateAgentRequest {
   max_concurrent_tasks?: number;
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
+  github_code_access?: GitHubCodeAccess;
 }
 
 export interface UpdateAgentRequest {
@@ -102,6 +106,7 @@ export interface UpdateAgentRequest {
   max_concurrent_tasks?: number;
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
+  github_code_access?: GitHubCodeAccess;
 }
 
 // Skills

@@ -860,3 +860,90 @@ func TestEnsureSymlinkRepairsBrokenLink(t *testing.T) {
 		t.Errorf("content = %q, want %q", data, "real")
 	}
 }
+
+func TestWriteGitAskPass(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	path, err := WriteGitAskPass(dir, "ghs_test_token")
+	if err != nil {
+		t.Fatalf("WriteGitAskPass: %v", err)
+	}
+	if filepath.Dir(path) != dir {
+		t.Errorf("script not in workdir: %s", path)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read script: %v", err)
+	}
+	if !strings.Contains(string(content), "ghs_test_token") {
+		t.Error("script should contain the token")
+	}
+	if !strings.HasPrefix(string(content), "#!/bin/sh") {
+		t.Error("script should start with shebang")
+	}
+
+	info, _ := os.Stat(path)
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Error("script should be executable")
+	}
+}
+
+func TestInjectRuntimeConfig_GitHubCodeAccess(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		level    string
+		contains string
+		absent   string
+	}{
+		{"read", "read-only", "MUST NOT"},
+		{"write", "MUST NOT", "full access"},
+		{"admin", "full access", "MUST NOT"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.level, func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := TaskContextForEnv{
+				IssueID:          "test-issue",
+				GitHubCodeAccess: tt.level,
+			}
+
+			if err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+				t.Fatalf("InjectRuntimeConfig: %v", err)
+			}
+
+			content, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+			if err != nil {
+				t.Fatalf("read CLAUDE.md: %v", err)
+			}
+			s := string(content)
+			if !strings.Contains(s, "## GitHub Access") {
+				t.Error("should contain GitHub Access section")
+			}
+			if !strings.Contains(s, tt.contains) {
+				t.Errorf("should contain %q for level=%s", tt.contains, tt.level)
+			}
+			if tt.absent != "" && tt.level != "write" && strings.Contains(s, tt.absent) {
+				t.Errorf("should not contain %q for level=%s", tt.absent, tt.level)
+			}
+		})
+	}
+}
+
+func TestInjectRuntimeConfig_NoGitHubSection(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ctx := TaskContextForEnv{IssueID: "test-issue"}
+	if err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig: %v", err)
+	}
+
+	content, _ := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	if strings.Contains(string(content), "## GitHub Access") {
+		t.Error("should not contain GitHub Access section when GitHubCodeAccess is empty")
+	}
+}

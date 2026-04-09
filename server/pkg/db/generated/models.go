@@ -39,6 +39,7 @@ type Agent struct {
 	Instructions       string             `json:"instructions"`
 	ArchivedAt         pgtype.Timestamptz `json:"archived_at"`
 	ArchivedBy         pgtype.UUID        `json:"archived_by"`
+	GithubCodeAccess   string             `json:"github_code_access"`
 }
 
 type AgentRuntime struct {
@@ -301,15 +302,16 @@ type VerificationCode struct {
 }
 
 type Workspace struct {
-	ID           pgtype.UUID        `json:"id"`
-	Name         string             `json:"name"`
-	Slug         string             `json:"slug"`
-	Description  pgtype.Text        `json:"description"`
-	Settings     []byte             `json:"settings"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	Context      pgtype.Text        `json:"context"`
-	Repos        []byte             `json:"repos"`
-	IssuePrefix  string             `json:"issue_prefix"`
-	IssueCounter int32              `json:"issue_counter"`
+	ID                   pgtype.UUID        `json:"id"`
+	Name                 string             `json:"name"`
+	Slug                 string             `json:"slug"`
+	Description          pgtype.Text        `json:"description"`
+	Settings             []byte             `json:"settings"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	Context              pgtype.Text        `json:"context"`
+	Repos                []byte             `json:"repos"`
+	IssuePrefix          string             `json:"issue_prefix"`
+	IssueCounter         int32              `json:"issue_counter"`
+	GithubInstallationID pgtype.Int8        `json:"github_installation_id"`
 }

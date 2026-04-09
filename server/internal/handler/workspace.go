@@ -31,16 +31,17 @@ func generateIssuePrefix(name string) string {
 }
 
 type WorkspaceResponse struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Slug        string  `json:"slug"`
-	Description *string `json:"description"`
-	Context     *string `json:"context"`
-	Settings    any     `json:"settings"`
-	Repos       any     `json:"repos"`
-	IssuePrefix string  `json:"issue_prefix"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	Slug            string  `json:"slug"`
+	Description     *string `json:"description"`
+	Context         *string `json:"context"`
+	Settings        any     `json:"settings"`
+	Repos           any     `json:"repos"`
+	IssuePrefix     string  `json:"issue_prefix"`
+	GitHubConnected bool    `json:"github_connected"`
+	CreatedAt       string  `json:"created_at"`
+	UpdatedAt       string  `json:"updated_at"`
 }
 
 func workspaceToResponse(w db.Workspace) WorkspaceResponse {
@@ -59,16 +60,17 @@ func workspaceToResponse(w db.Workspace) WorkspaceResponse {
 		repos = []any{}
 	}
 	return WorkspaceResponse{
-		ID:          uuidToString(w.ID),
-		Name:        w.Name,
-		Slug:        w.Slug,
-		Description: textToPtr(w.Description),
-		Context:     textToPtr(w.Context),
-		Settings:    settings,
-		Repos:       repos,
-		IssuePrefix: w.IssuePrefix,
-		CreatedAt:   timestampToString(w.CreatedAt),
-		UpdatedAt:   timestampToString(w.UpdatedAt),
+		ID:              uuidToString(w.ID),
+		Name:            w.Name,
+		Slug:            w.Slug,
+		Description:     textToPtr(w.Description),
+		Context:         textToPtr(w.Context),
+		Settings:        settings,
+		Repos:           repos,
+		IssuePrefix:     w.IssuePrefix,
+		GitHubConnected: w.GithubInstallationID.Valid,
+		CreatedAt:       timestampToString(w.CreatedAt),
+		UpdatedAt:       timestampToString(w.UpdatedAt),
 	}
 }
 

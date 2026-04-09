@@ -445,6 +445,21 @@ export class ApiClient {
     });
   }
 
+  // GitHub App
+  async getGitHubInstallURL(workspaceId: string): Promise<{ url: string }> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/install-url`);
+  }
+
+  async getGitHubStatus(workspaceId: string): Promise<{ connected: boolean; installation_id: number | null; app_configured: boolean }> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/status`);
+  }
+
+  async disconnectGitHub(workspaceId: string): Promise<Workspace> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github`, {
+      method: "DELETE",
+    });
+  }
+
   // Members
   async listMembers(workspaceId: string): Promise<MemberWithUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/members`);

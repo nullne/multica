@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	gh "github.com/nullne/multica/server/internal/github"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/internal/service"
 	db "github.com/nullne/multica/server/pkg/db/generated"
@@ -30,6 +31,7 @@ type AgentResponse struct {
 	Skills             []SkillResponse `json:"skills"`
 	Tools              any             `json:"tools"`
 	Triggers           any             `json:"triggers"`
+	GitHubCodeAccess   string          `json:"github_code_access"`
 	CreatedAt          string          `json:"created_at"`
 	UpdatedAt          string          `json:"updated_at"`
 	ArchivedAt         *string         `json:"archived_at"`
@@ -78,6 +80,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Skills:             []SkillResponse{},
 		Tools:              tools,
 		Triggers:           triggers,
+		GitHubCodeAccess:   a.GithubCodeAccess,
 		CreatedAt:          timestampToString(a.CreatedAt),
 		UpdatedAt:          timestampToString(a.UpdatedAt),
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
@@ -108,9 +111,11 @@ type AgentTaskResponse struct {
 	Agent          *TaskAgentData `json:"agent,omitempty"`
 	Repos          []RepoData     `json:"repos,omitempty"`
 	CreatedAt      string         `json:"created_at"`
-	PriorSessionID   string         `json:"prior_session_id,omitempty"`    // session ID from a previous task on same issue
-	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`     // work_dir from a previous task on same issue
-	TriggerCommentID *string        `json:"trigger_comment_id,omitempty"` // comment that triggered this task
+	PriorSessionID   string         `json:"prior_session_id,omitempty"`
+	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`
+	TriggerCommentID *string        `json:"trigger_comment_id,omitempty"`
+	GitHubToken      string         `json:"github_token,omitempty"`
+	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
 }
 
 // TaskAgentData holds agent info included in claim responses so the daemon
@@ -223,6 +228,7 @@ type CreateAgentRequest struct {
 	MaxConcurrentTasks int32   `json:"max_concurrent_tasks"`
 	Tools              any     `json:"tools"`
 	Triggers           any     `json:"triggers"`
+	GitHubCodeAccess   string  `json:"github_code_access"`
 }
 
 func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +258,13 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxConcurrentTasks == 0 {
 		req.MaxConcurrentTasks = 6
+	}
+	if req.GitHubCodeAccess == "" {
+		req.GitHubCodeAccess = "write"
+	}
+	if !gh.ValidCodeAccess(req.GitHubCodeAccess) {
+		writeError(w, http.StatusBadRequest, "invalid github_code_access (must be read, write, or admin)")
+		return
 	}
 
 	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
@@ -292,6 +305,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		OwnerID:            parseUUID(ownerID),
 		Tools:              tools,
 		Triggers:           triggers,
+		GithubCodeAccess:   req.GitHubCodeAccess,
 	})
 	if err != nil {
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -325,6 +339,7 @@ type UpdateAgentRequest struct {
 	MaxConcurrentTasks *int32  `json:"max_concurrent_tasks"`
 	Tools              any     `json:"tools"`
 	Triggers           any     `json:"triggers"`
+	GitHubCodeAccess   *string `json:"github_code_access"`
 }
 
 // canManageAgent checks whether the current user can update or archive an agent.
@@ -408,6 +423,13 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Triggers != nil {
 		triggers, _ := json.Marshal(req.Triggers)
 		params.Triggers = triggers
+	}
+	if req.GitHubCodeAccess != nil {
+		if !gh.ValidCodeAccess(*req.GitHubCodeAccess) {
+			writeError(w, http.StatusBadRequest, "invalid github_code_access (must be read, write, or admin)")
+			return
+		}
+		params.GithubCodeAccess = pgtype.Text{String: *req.GitHubCodeAccess, Valid: true}
 	}
 
 	agent, err := h.Queries.UpdateAgent(r.Context(), params)

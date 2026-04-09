@@ -14,6 +14,7 @@ export interface Workspace {
   settings: Record<string, unknown>;
   repos: WorkspaceRepo[];
   issue_prefix: string;
+  github_connected: boolean;
   created_at: string;
   updated_at: string;
 }
