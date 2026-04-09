@@ -63,6 +63,7 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:${PORT:-8080}
       NEXT_PUBLIC_WS_URL: ws://localhost:${PORT:-8080}/ws
+      NEXT_PUBLIC_DEV_EMAIL: ${SEED_EMAIL:-dev@multica.local}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     volumes:
@@ -73,9 +74,49 @@ services:
       backend:
         condition: service_healthy
 
+  seed:
+    image: alpine:3.21
+    command: ["sh", "/scripts/seed-dev.sh"]
+    environment:
+      API_URL: http://backend:8080
+      SEED_EMAIL: ${SEED_EMAIL:-dev@multica.local}
+      no_proxy: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+      NO_PROXY: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+    volumes:
+      - ./scripts:/scripts:ro
+      - daemon-config:/root/.multica
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  daemon:
+    image: golang:1.26-alpine
+    working_dir: /app/server
+    command: >
+      sh -c "apk add --no-cache nodejs npm bubblewrap > /dev/null 2>&1 &&
+             npm install -g @openai/codex > /dev/null 2>&1 &&
+             printenv OPENAI_API_KEY | codex login --with-api-key &&
+             go build -o /usr/local/bin/multica ./cmd/multica &&
+             multica daemon start --foreground"
+    environment:
+      MULTICA_SERVER_URL: http://backend:8080
+      MULTICA_DAEMON_ID: dev-daemon
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      no_proxy: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+      NO_PROXY: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+    volumes:
+      - ./server:/app/server
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - daemon-config:/root/.multica
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
 volumes:
   pgdata:
   go-mod-cache:
   go-build-cache:
   node_modules:
   web_next:
+  daemon-config:
