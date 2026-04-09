@@ -100,22 +100,26 @@ func fetchProjects(cmd *cobra.Command) ([]project, error) {
 	return projects, nil
 }
 
-// localRepoPath returns the path where a repo would be cloned locally.
-// Layout: ~/multica_workspaces/{workspace-name}/{repo-name}
-func localRepoPath(profile string, proj project) (string, error) {
+func workspacesRoot(profile string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
+	}
+	if root := os.Getenv("MULTICA_WORKSPACES_ROOT"); root != "" {
+		return root, nil
 	}
 	suffix := ""
 	if profile != "" {
 		suffix = "_" + profile
 	}
-	wsRoot := os.Getenv("MULTICA_WORKSPACES_ROOT")
-	if wsRoot == "" {
-		wsRoot = filepath.Join(home, "multica_workspaces"+suffix)
-	}
-	return filepath.Join(wsRoot, sanitizeDirName(proj.WorkspaceName), proj.RepoName), nil
+	return filepath.Join(home, "multica_workspaces"+suffix), nil
+}
+
+// barePath returns the path for the bare clone cache.
+// Layout: ~/multica_workspaces/.repos/{workspaceID}/{repo-name}.git
+func barePath(wsRoot string, proj project) string {
+	name := proj.RepoName + ".git"
+	return filepath.Join(wsRoot, ".repos", proj.WorkspaceID, name)
 }
 
 func sanitizeDirName(name string) string {
@@ -129,23 +133,64 @@ func sanitizeDirName(name string) string {
 	return strings.Trim(name, "-")
 }
 
-// ensureCloned clones the repo if it doesn't exist locally. Returns the local path.
-func ensureCloned(repoURL, localPath string) error {
-	if _, err := os.Stat(filepath.Join(localPath, ".git")); err == nil {
+// ensureBareClone creates or updates a bare clone for caching.
+func ensureBareClone(repoURL, bare string) error {
+	if _, err := os.Stat(filepath.Join(bare, "HEAD")); err == nil {
+		fmt.Fprintf(os.Stderr, "Updating %s...\n", filepath.Base(bare))
+		cmd := exec.Command("git", "-C", bare, "fetch", "origin")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		cmd.Run() // best-effort
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Cloning %s...\n", repoURL)
-	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
-		return fmt.Errorf("create parent dir: %w", err)
+	fmt.Fprintf(os.Stderr, "Cloning %s (bare)...\n", repoURL)
+	if err := os.MkdirAll(filepath.Dir(bare), 0o755); err != nil {
+		return fmt.Errorf("create bare repo dir: %w", err)
 	}
-	cmd := exec.Command("git", "clone", repoURL, localPath)
+	cmd := exec.Command("git", "clone", "--bare", repoURL, bare)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git clone failed: %w", err)
+		return fmt.Errorf("git clone --bare failed: %w", err)
 	}
+	// Enable full fetch refspec so worktrees see all branches.
+	exec.Command("git", "-C", bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*").Run()
 	return nil
+}
+
+// defaultBranch returns the default branch of a bare repo (main, master, etc.)
+func defaultBranch(bare string) string {
+	out, err := exec.Command("git", "-C", bare, "symbolic-ref", "HEAD").Output()
+	if err == nil {
+		ref := strings.TrimSpace(string(out))
+		return strings.TrimPrefix(ref, "refs/heads/")
+	}
+	for _, name := range []string{"main", "master"} {
+		if exec.Command("git", "-C", bare, "rev-parse", "--verify", name).Run() == nil {
+			return name
+		}
+	}
+	return "HEAD"
+}
+
+// createWorktree creates a new worktree from the bare clone.
+// Layout: ~/multica_workspaces/{workspace-name}/{repo-name}-{timestamp}/
+func createWorktree(bare, wsRoot string, proj project) (string, error) {
+	ts := time.Now().Format("20060102-150405")
+	dirName := fmt.Sprintf("%s-%s", proj.RepoName, ts)
+	wtPath := filepath.Join(wsRoot, sanitizeDirName(proj.WorkspaceName), dirName)
+
+	branch := defaultBranch(bare)
+
+	fmt.Fprintf(os.Stderr, "Creating worktree at %s (branch: %s)...\n", dirName, branch)
+	cmd := exec.Command("git", "-C", bare, "worktree", "add", wtPath, branch)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git worktree add failed: %w", err)
+	}
+	return wtPath, nil
 }
 
 func openInEditor(editor, editorPath string) error {
@@ -203,12 +248,18 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 
 	proj := result.selected
 
-	localPath, err := localRepoPath(profile, *proj)
+	wsRoot, err := workspacesRoot(profile)
 	if err != nil {
-		return fmt.Errorf("resolve local path: %w", err)
+		return fmt.Errorf("resolve workspaces root: %w", err)
 	}
 
-	if err := ensureCloned(proj.RepoURL, localPath); err != nil {
+	bare := barePath(wsRoot, *proj)
+	if err := ensureBareClone(proj.RepoURL, bare); err != nil {
+		return err
+	}
+
+	wtPath, err := createWorktree(bare, wsRoot, *proj)
+	if err != nil {
 		return err
 	}
 
@@ -219,7 +270,7 @@ func runOpen(cmd *cobra.Command, _ []string) error {
 		editorName = "Cursor"
 	}
 	fmt.Fprintf(os.Stderr, "Opening %s/%s in %s...\n", proj.WorkspaceName, proj.RepoName, editorName)
-	return openInEditor(editor, localPath)
+	return openInEditor(editor, wtPath)
 }
 
 // --- Bubbletea TUI Model ---
