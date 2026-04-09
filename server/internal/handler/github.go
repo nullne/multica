@@ -1,9 +1,9 @@
 package handler
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	gh "github.com/nullne/multica/server/internal/github"
@@ -21,30 +21,28 @@ func (h *Handler) GitHubInstallURL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": url})
 }
 
-// GitHubCallback handles the redirect from GitHub after a user installs the App.
-func (h *Handler) GitHubCallback(w http.ResponseWriter, r *http.Request) {
+// GitHubConnect handles the POST request from the frontend after a user
+// completes the GitHub App installation flow. The frontend page at
+// /github/callback receives the redirect from GitHub (with installation_id
+// and state query params) and calls this endpoint.
+func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 	if h.GitHubApp == nil {
 		writeError(w, http.StatusNotImplemented, "GitHub App not configured")
 		return
 	}
 
-	installationIDStr := r.URL.Query().Get("installation_id")
-	workspaceID := r.URL.Query().Get("state")
-
-	if installationIDStr == "" || workspaceID == "" {
-		writeError(w, http.StatusBadRequest, "missing installation_id or state")
+	var body struct {
+		InstallationID int64 `json:"installation_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.InstallationID == 0 {
+		writeError(w, http.StatusBadRequest, "missing or invalid installation_id")
 		return
 	}
 
-	installationID, err := strconv.ParseInt(installationIDStr, 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid installation_id")
-		return
-	}
-
+	workspaceID := resolveWorkspaceID(r)
 	ws, err := h.Queries.SetGitHubInstallation(r.Context(), db.SetGitHubInstallationParams{
 		ID:                   parseUUID(workspaceID),
-		GithubInstallationID: pgtype.Int8{Int64: installationID, Valid: true},
+		GithubInstallationID: pgtype.Int8{Int64: body.InstallationID, Valid: true},
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save installation")

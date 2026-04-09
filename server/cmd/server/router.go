@@ -137,7 +137,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Post("/members", h.CreateMember)
 				r.Get("/github/install-url", h.GitHubInstallURL)
 				r.Get("/github/status", h.GitHubStatus)
-				r.Get("/github/callback", h.GitHubCallback)
+				r.Post("/github/connect", h.GitHubConnect)
 				r.Delete("/github", h.GitHubDisconnect)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
