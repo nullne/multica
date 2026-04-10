@@ -143,6 +143,150 @@ function CriteriaApprovalActions({ issueId, onUpdate }: { issueId: string; onUpd
   );
 }
 
+function CriteriaSection({ issue, issueId, criteriaOpen, setCriteriaOpen }: {
+  issue: Issue;
+  issueId: string;
+  criteriaOpen: boolean;
+  setCriteriaOpen: (v: boolean) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(issue.acceptance_criteria);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft(issue.acceptance_criteria);
+  }, [issue.acceptance_criteria]);
+
+  const updateField = (index: number, field: string, value: string) => {
+    setDraft((prev) => prev.map((ac, i) => i === index ? { ...ac, [field]: value } : ac));
+  };
+
+  const removeCriterion = (index: number) => {
+    setDraft((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const updated = await api.updateCriteria(issueId, draft);
+      useIssueStore.getState().updateIssue(updated.id, updated);
+      setEditing(false);
+      toast.success("Criteria updated");
+    } catch {
+      toast.error("Failed to update criteria");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setDraft(issue.acceptance_criteria);
+    setEditing(false);
+  };
+
+  return (
+    <div>
+      <button
+        className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${criteriaOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
+        onClick={() => setCriteriaOpen(!criteriaOpen)}
+      >
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${criteriaOpen ? "rotate-90" : ""}`} />
+        Acceptance Criteria
+        {issue.criteria_status === "approved" && (
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-600">Approved</span>
+        )}
+        {issue.criteria_status === "pending" && (
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-600">Pending</span>
+        )}
+        <span className="ml-auto text-muted-foreground font-normal">{issue.acceptance_criteria.length}</span>
+      </button>
+
+      {criteriaOpen && (
+        <div className="space-y-2 pl-2">
+          {(editing ? draft : issue.acceptance_criteria).map((ac, index) => {
+            const severity = String(ac.severity ?? "");
+            const check = String(ac.check ?? "");
+            const title = String(ac.title ?? ac.description ?? "");
+
+            if (editing) {
+              return (
+                <div key={ac.id ?? index} className="rounded-md border px-3 py-2 text-xs space-y-1.5 relative group">
+                  <button
+                    type="button"
+                    onClick={() => removeCriterion(index)}
+                    className="absolute top-1.5 right-1.5 p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="font-mono text-muted-foreground text-[10px]">{ac.id}</span>
+                    <button
+                      type="button"
+                      onClick={() => updateField(index, "severity", severity === "must" ? "should" : "must")}
+                      className={`rounded px-1 py-0.5 text-[10px] font-medium cursor-pointer transition-colors ${severity === "must" ? "bg-destructive/10 text-destructive hover:bg-destructive/20" : "bg-muted text-muted-foreground hover:bg-muted/80"}`}
+                    >
+                      {severity || "should"}
+                    </button>
+                  </div>
+                  <input
+                    value={title}
+                    onChange={(e) => updateField(index, ac.title !== undefined ? "title" : "description", e.target.value)}
+                    className="w-full font-medium bg-transparent border-b border-dashed border-muted-foreground/30 outline-none focus:border-primary pb-0.5 pr-5"
+                    placeholder="Title"
+                  />
+                  <textarea
+                    value={check}
+                    onChange={(e) => updateField(index, "check", e.target.value)}
+                    className="w-full bg-transparent border-b border-dashed border-muted-foreground/30 outline-none focus:border-primary text-muted-foreground resize-none leading-relaxed"
+                    placeholder="Check description"
+                    rows={5}
+                  />
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={ac.id}
+                className="rounded-md border px-3 py-2 text-xs cursor-pointer hover:border-primary/30 transition-colors"
+                onClick={() => { setEditing(true); setDraft(issue.acceptance_criteria); }}
+              >
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="font-mono text-muted-foreground">{ac.id}</span>
+                  {severity && (
+                    <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${severity === "must" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
+                      {severity}
+                    </span>
+                  )}
+                </div>
+                <div className="font-medium mb-0.5">{title}</div>
+                {check && (
+                  <div className="text-muted-foreground leading-relaxed">{check}</div>
+                )}
+              </div>
+            );
+          })}
+
+          {editing && (
+            <div className="flex items-center gap-1.5 pt-1">
+              <Button size="xs" onClick={handleSave} disabled={saving}>
+                {saving ? "Saving..." : "Save"}
+              </Button>
+              <Button size="xs" variant="ghost" onClick={handleCancel} disabled={saving}>
+                Cancel
+              </Button>
+            </div>
+          )}
+
+          {!editing && issue.criteria_status === "pending" && (
+            <CriteriaApprovalActions issueId={issueId} onUpdate={(updated) => useIssueStore.getState().updateIssue(updated.id, updated)} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function shortDate(date: string | null): string {
   if (!date) return "—";
   return new Date(date).toLocaleDateString("en-US", {
@@ -195,6 +339,8 @@ function formatActivity(
       return `renamed this issue from "${details.from ?? "?"}" to "${details.to ?? "?"}"`;
     case "description_updated":
       return "updated the description";
+    case "criteria_approved":
+      return "approved acceptance criteria";
     case "task_completed":
       return "completed the task";
     case "task_failed":
@@ -1180,52 +1326,12 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
 
               {/* Acceptance Criteria section */}
               {issue.acceptance_criteria?.length > 0 && (
-                <div>
-                  <button
-                    className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${criteriaOpen ? "" : "text-muted-foreground hover:text-foreground"}`}
-                    onClick={() => setCriteriaOpen(!criteriaOpen)}
-                  >
-                    <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${criteriaOpen ? "rotate-90" : ""}`} />
-                    Acceptance Criteria
-                    {issue.criteria_status === "approved" && (
-                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-600">Approved</span>
-                    )}
-                    {issue.criteria_status === "pending" && (
-                      <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-600">Pending</span>
-                    )}
-                    <span className="ml-auto text-muted-foreground font-normal">{issue.acceptance_criteria.length}</span>
-                  </button>
-
-                  {criteriaOpen && (
-                    <div className="space-y-2 pl-2">
-                      {issue.acceptance_criteria.map((ac) => {
-                        const severity = String(ac.severity ?? "");
-                        const check = String(ac.check ?? "");
-                        const title = String(ac.title ?? ac.description ?? "");
-                        return (
-                          <div key={ac.id} className="rounded-md border px-3 py-2 text-xs">
-                            <div className="flex items-center gap-1.5 mb-1">
-                              <span className="font-mono text-muted-foreground">{ac.id}</span>
-                              {severity && (
-                                <span className={`rounded px-1 py-0.5 text-[10px] font-medium ${severity === "must" ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground"}`}>
-                                  {severity}
-                                </span>
-                              )}
-                            </div>
-                            <div className="font-medium mb-0.5">{title}</div>
-                            {check && (
-                              <div className="text-muted-foreground leading-relaxed">{check}</div>
-                            )}
-                          </div>
-                        );
-                      })}
-
-                      {issue.criteria_status === "pending" && (
-                        <CriteriaApprovalActions issueId={id} onUpdate={(updated) => useIssueStore.getState().updateIssue(updated.id, updated)} />
-                      )}
-                    </div>
-                  )}
-                </div>
+                <CriteriaSection
+                  issue={issue}
+                  issueId={id}
+                  criteriaOpen={criteriaOpen}
+                  setCriteriaOpen={setCriteriaOpen}
+                />
               )}
 
             </div>

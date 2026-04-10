@@ -389,6 +389,13 @@ export class ApiClient {
     });
   }
 
+  async updateCriteria(issueId: string, criteria: unknown[]): Promise<Issue> {
+    return this.fetch(`/api/issues/${issueId}/criteria`, {
+      method: "PUT",
+      body: JSON.stringify({ criteria }),
+    });
+  }
+
   async approveCriteria(issueId: string): Promise<Issue> {
     return this.fetch(`/api/issues/${issueId}/criteria/approve`, {
       method: "POST",

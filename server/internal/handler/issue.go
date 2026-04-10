@@ -651,8 +651,52 @@ func agentHasTriggerEnabled(raw []byte, triggerType string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Criteria approval
+// Criteria CRUD + approval
 // ---------------------------------------------------------------------------
+
+type UpdateCriteriaRequest struct {
+	Criteria []any `json:"criteria"`
+}
+
+func (h *Handler) UpdateCriteria(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	var req UpdateCriteriaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	criteriaJSON, err := json.Marshal(req.Criteria)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid criteria format")
+		return
+	}
+
+	// Preserve current criteria_status (editing doesn't change approval state).
+	updated, err := h.Queries.UpdateIssueAcceptanceCriteria(r.Context(), db.UpdateIssueAcceptanceCriteriaParams{
+		ID:                 issue.ID,
+		AcceptanceCriteria: criteriaJSON,
+		CriteriaStatus:     issue.CriteriaStatus,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update criteria")
+		return
+	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := issueToResponse(updated, prefix)
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
+
+	writeJSON(w, http.StatusOK, resp)
+}
 
 func (h *Handler) ApproveCriteria(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -684,7 +728,10 @@ func (h *Handler) ApproveCriteria(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(updated, prefix)
-	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
+		"issue":            resp,
+		"criteria_approved": true,
+	})
 
 	if h.shouldEnqueueAgentTask(r.Context(), updated) {
 		h.TaskService.EnqueueExecutorForApprovedCriteria(r.Context(), updated)
