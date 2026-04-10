@@ -73,6 +73,33 @@ func (h *Handler) GitHubStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// GitHubRepositories lists repositories available to the workspace installation.
+func (h *Handler) GitHubRepositories(w http.ResponseWriter, r *http.Request) {
+	if h.GitHubApp == nil {
+		writeError(w, http.StatusNotImplemented, "GitHub App not configured")
+		return
+	}
+
+	workspaceID := resolveWorkspaceID(r)
+	ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if !ws.GithubInstallationID.Valid {
+		writeError(w, http.StatusBadRequest, "GitHub App not connected")
+		return
+	}
+
+	repos, err := h.GitHubApp.ListInstallationRepositories(r.Context(), ws.GithubInstallationID.Int64)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to list repositories")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, repos)
+}
+
 // GitHubDisconnect removes the GitHub App installation from the workspace.
 func (h *Handler) GitHubDisconnect(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)

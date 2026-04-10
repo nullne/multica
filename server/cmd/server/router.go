@@ -129,16 +129,17 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/members", h.ListMembersWithUser)
 					r.Post("/leave", h.LeaveWorkspace)
 				})
-			// Admin-level access
-			r.Group(func(r chi.Router) {
-				r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
-				r.Put("/", h.UpdateWorkspace)
-				r.Patch("/", h.UpdateWorkspace)
-				r.Post("/members", h.CreateMember)
-				r.Get("/github/install-url", h.GitHubInstallURL)
-				r.Get("/github/status", h.GitHubStatus)
-				r.Post("/github/connect", h.GitHubConnect)
-				r.Delete("/github", h.GitHubDisconnect)
+				// Admin-level access
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+					r.Put("/", h.UpdateWorkspace)
+					r.Patch("/", h.UpdateWorkspace)
+					r.Post("/members", h.CreateMember)
+					r.Get("/github/install-url", h.GitHubInstallURL)
+					r.Get("/github/status", h.GitHubStatus)
+					r.Get("/github/repositories", h.GitHubRepositories)
+					r.Post("/github/connect", h.GitHubConnect)
+					r.Delete("/github", h.GitHubDisconnect)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
 						r.Delete("/", h.DeleteMember)

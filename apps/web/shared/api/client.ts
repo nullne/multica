@@ -19,6 +19,7 @@ import type {
   IssueReaction,
   Workspace,
   WorkspaceRepo,
+  GitHubRepository,
   MemberWithUser,
   User,
   Skill,
@@ -452,6 +453,10 @@ export class ApiClient {
 
   async getGitHubStatus(workspaceId: string): Promise<{ connected: boolean; installation_id: number | null; app_configured: boolean }> {
     return this.fetch(`/api/workspaces/${workspaceId}/github/status`);
+  }
+
+  async listGitHubRepositories(workspaceId: string): Promise<GitHubRepository[]> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/repositories`);
   }
 
   async connectGitHub(workspaceId: string, installationId: number): Promise<Workspace> {

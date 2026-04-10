@@ -121,10 +121,24 @@ type InstallationToken struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// InstallationRepository is a repository visible to a GitHub App installation.
+type InstallationRepository struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	FullName    string `json:"full_name"`
+	HTMLURL     string `json:"html_url"`
+	Description string `json:"description"`
+	Private     bool   `json:"private"`
+}
+
 // tokenRequest is the request body for creating an installation token.
 type tokenRequest struct {
 	Permissions  map[string]string `json:"permissions,omitempty"`
 	Repositories []string          `json:"repositories,omitempty"`
+}
+
+type listInstallationRepositoriesResponse struct {
+	Repositories []InstallationRepository `json:"repositories"`
 }
 
 // CreateInstallationToken generates a short-lived access token for a GitHub
@@ -173,6 +187,51 @@ func (a *App) CreateInstallationToken(ctx context.Context, installationID int64,
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return &token, nil
+}
+
+// ListInstallationRepositories returns repositories accessible by the installation.
+func (a *App) ListInstallationRepositories(ctx context.Context, installationID int64) ([]InstallationRepository, error) {
+	token, err := a.CreateInstallationToken(ctx, installationID, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create installation token: %w", err)
+	}
+
+	const perPage = 100
+	repos := make([]InstallationRepository, 0)
+
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("%s/installation/repositories?per_page=%d&page=%d", a.baseURL, perPage, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token.Token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("request failed: %w", err)
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+
+		var payload listInstallationRepositoriesResponse
+		if err := json.Unmarshal(respBody, &payload); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+
+		repos = append(repos, payload.Repositories...)
+		if len(payload.Repositories) < perPage {
+			break
+		}
+	}
+
+	return repos, nil
 }
 
 // InstallURL returns the URL where a user can install or configure the

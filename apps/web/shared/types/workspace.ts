@@ -5,6 +5,15 @@ export interface WorkspaceRepo {
   description: string;
 }
 
+export interface GitHubRepository {
+  id: number;
+  name: string;
+  full_name: string;
+  html_url: string;
+  description: string;
+  private: boolean;
+}
+
 export interface Workspace {
   id: string;
   name: string;

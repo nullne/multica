@@ -1,16 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Save, Plus, Trash2, Unplug, ExternalLink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
-import type { WorkspaceRepo } from "@/shared/types";
+import type { WorkspaceRepo, GitHubRepository } from "@/shared/types";
+
+const normalizeRepoURL = (url: string) => url.trim().replace(/\/+$/, "").toLowerCase();
 
 export function RepositoriesTab() {
   const user = useAuthStore((s) => s.user);
@@ -22,6 +31,8 @@ export function RepositoriesTab() {
   const [saving, setSaving] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [githubRepos, setGitHubRepos] = useState<GitHubRepository[]>([]);
+  const [githubReposLoading, setGitHubReposLoading] = useState(false);
 
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
   const canManageWorkspace = currentMember?.role === "owner" || currentMember?.role === "admin";
@@ -29,6 +40,41 @@ export function RepositoriesTab() {
   useEffect(() => {
     setRepos(workspace?.repos ?? []);
   }, [workspace]);
+
+  useEffect(() => {
+    if (!workspace?.github_connected || !canManageWorkspace) {
+      setGitHubRepos([]);
+      setGitHubReposLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setGitHubReposLoading(true);
+
+    api
+      .listGitHubRepositories(workspace.id)
+      .then((list) => {
+        if (cancelled) return;
+        setGitHubRepos([...list].sort((a, b) => a.full_name.localeCompare(b.full_name)));
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setGitHubRepos([]);
+        toast.error(e instanceof Error ? e.message : "Failed to load GitHub repositories");
+      })
+      .finally(() => {
+        if (!cancelled) setGitHubReposLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace?.id, workspace?.github_connected, canManageWorkspace]);
+
+  const selectableGitHubRepos = useMemo(() => {
+    const existing = new Set(repos.map((repo) => normalizeRepoURL(repo.url)));
+    return githubRepos.filter((repo) => !existing.has(normalizeRepoURL(repo.html_url)));
+  }, [githubRepos, repos]);
 
   const handleSave = async () => {
     if (!workspace) return;
@@ -54,6 +100,26 @@ export function RepositoriesTab() {
 
   const handleRepoChange = (index: number, field: keyof WorkspaceRepo, value: string) => {
     setRepos(repos.map((r, i) => (i === index ? { ...r, [field]: value } : r)));
+  };
+
+  const handleAddGitHubRepo = (repoURL: string) => {
+    const selectedRepo = githubRepos.find((repo) => repo.html_url === repoURL);
+    if (!selectedRepo) return;
+
+    const normalizedURL = normalizeRepoURL(selectedRepo.html_url);
+    const alreadyAdded = repos.some((repo) => normalizeRepoURL(repo.url) === normalizedURL);
+    if (alreadyAdded) {
+      toast.info("Repository already added");
+      return;
+    }
+
+    setRepos([
+      ...repos,
+      {
+        url: selectedRepo.html_url,
+        description: selectedRepo.description ?? "",
+      },
+    ]);
   };
 
   const handleConnectGitHub = async () => {
@@ -145,6 +211,40 @@ export function RepositoriesTab() {
             <p className="text-xs text-muted-foreground">
               GitHub repositories associated with this workspace. Agents use these to clone and work on code.
             </p>
+
+            {workspace.github_connected && canManageWorkspace && (
+              <div className="space-y-2 rounded-md border border-dashed p-3">
+                <p className="text-xs text-muted-foreground">
+                  Choose repositories directly from your connected GitHub App installation.
+                </p>
+                {githubReposLoading ? (
+                  <p className="text-xs text-muted-foreground">Loading repositories...</p>
+                ) : selectableGitHubRepos.length > 0 ? (
+                  <Select
+                    onValueChange={(value) => {
+                      if (typeof value === "string" && value) {
+                        handleAddGitHubRepo(value);
+                      }
+                    }}
+                  >
+                    <SelectTrigger size="sm" className="w-full">
+                      <SelectValue placeholder="Select a GitHub repository" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectableGitHubRepos.map((repo) => (
+                        <SelectItem key={repo.id} value={repo.html_url}>
+                          {repo.full_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No additional repositories available to add from GitHub.
+                  </p>
+                )}
+              </div>
+            )}
 
             {repos.map((repo, index) => (
               <div key={index} className="flex gap-2">

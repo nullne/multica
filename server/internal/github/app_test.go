@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +191,111 @@ func TestCreateInstallationToken_NoRepos(t *testing.T) {
 	}
 	if capturedBody.Repositories != nil {
 		t.Errorf("expected nil repositories, got %v", capturedBody.Repositories)
+	}
+}
+
+func TestListInstallationRepositories_Success(t *testing.T) {
+	_, pemBytes := generateTestKey(t)
+
+	getCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/77/access_tokens":
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(InstallationToken{Token: "inst_tok", ExpiresAt: time.Now().Add(1 * time.Hour)})
+		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
+			getCalls++
+			page := r.URL.Query().Get("page")
+			if page == "1" {
+				repos := make([]InstallationRepository, 100)
+				for i := range repos {
+					idx := i + 1
+					repos[i] = InstallationRepository{
+						ID:       int64(idx),
+						Name:     fmt.Sprintf("repo-%d", idx),
+						FullName: fmt.Sprintf("org/repo-%d", idx),
+						HTMLURL:  fmt.Sprintf("https://github.com/org/repo-%d", idx),
+					}
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(listInstallationRepositoriesResponse{Repositories: repos})
+				return
+			}
+			if page == "2" {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(listInstallationRepositoriesResponse{
+					Repositories: []InstallationRepository{
+						{
+							ID:       101,
+							Name:     "repo-101",
+							FullName: "org/repo-101",
+							HTMLURL:  "https://github.com/org/repo-101",
+						},
+					},
+				})
+				return
+			}
+			t.Fatalf("unexpected page query: %s", page)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	app, err := NewApp(1, pemBytes)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.baseURL = server.URL
+
+	repos, err := app.ListInstallationRepositories(context.Background(), 77)
+	if err != nil {
+		t.Fatalf("ListInstallationRepositories: %v", err)
+	}
+
+	if getCalls != 2 {
+		t.Fatalf("expected 2 repository page calls, got %d", getCalls)
+	}
+	if len(repos) != 101 {
+		t.Fatalf("expected 101 repositories, got %d", len(repos))
+	}
+	if repos[0].FullName != "org/repo-1" {
+		t.Errorf("first repo full_name = %q, want org/repo-1", repos[0].FullName)
+	}
+	if repos[100].FullName != "org/repo-101" {
+		t.Errorf("last repo full_name = %q, want org/repo-101", repos[100].FullName)
+	}
+}
+
+func TestListInstallationRepositories_APIError(t *testing.T) {
+	_, pemBytes := generateTestKey(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/88/access_tokens":
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(InstallationToken{Token: "inst_tok", ExpiresAt: time.Now().Add(1 * time.Hour)})
+		case r.Method == http.MethodGet && r.URL.Path == "/installation/repositories":
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"message":"forbidden"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	app, err := NewApp(1, pemBytes)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.baseURL = server.URL
+
+	_, err = app.ListInstallationRepositories(context.Background(), 88)
+	if err == nil {
+		t.Fatal("expected error for non-200 repositories response")
+	}
+	if !strings.Contains(err.Error(), "GitHub API returned 403") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
