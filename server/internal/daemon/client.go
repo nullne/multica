@@ -153,6 +153,7 @@ type PendingPing struct {
 type PendingUpdate struct {
 	ID            string `json:"id"`
 	TargetVersion string `json:"target_version"`
+	UpdateClients *bool  `json:"update_clients,omitempty"`
 }
 
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {

@@ -3,6 +3,7 @@ package cli
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 )
+
+const managedClientCommandTimeout = 5 * time.Minute
 
 // GitHubRelease is the subset of the GitHub releases API response we need.
 type GitHubRelease struct {
@@ -165,6 +168,163 @@ func UpdateViaDownload(targetVersion string) (string, error) {
 	return fmt.Sprintf("Downloaded %s and replaced %s", assetName, exePath), nil
 }
 
+type managedClientSpec struct {
+	Name            string
+	Binary          string
+	InstallCommands [][]string
+	UpdateCommands  [][]string
+}
+
+type ManagedClientUpdateResult struct {
+	Name   string
+	Status string // installed, updated, failed
+	Output string
+	Err    error
+}
+
+type ManagedClientUpdateReport struct {
+	Results []ManagedClientUpdateResult
+}
+
+func (r ManagedClientUpdateReport) HasFailures() bool {
+	for _, res := range r.Results {
+		if res.Err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (r ManagedClientUpdateReport) String() string {
+	if len(r.Results) == 0 {
+		return "No managed clients configured."
+	}
+	var b strings.Builder
+	for i, res := range r.Results {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(res.Name)
+		b.WriteString(": ")
+		b.WriteString(res.Status)
+		if res.Err != nil {
+			b.WriteString(" (")
+			b.WriteString(res.Err.Error())
+			b.WriteString(")")
+		}
+	}
+	return b.String()
+}
+
+// UpdateManagedAgentClients installs or upgrades managed agent CLIs that are
+// commonly used by the daemon. Failures are reported per client.
+func UpdateManagedAgentClients() ManagedClientUpdateReport {
+	specs := []managedClientSpec{
+		{
+			Name:   "claude",
+			Binary: "claude",
+			InstallCommands: [][]string{
+				{"npm", "install", "-g", "@anthropic-ai/claude-code"},
+			},
+			UpdateCommands: [][]string{
+				{"claude", "update"},
+				{"npm", "install", "-g", "@anthropic-ai/claude-code"},
+			},
+		},
+		{
+			Name:   "codex",
+			Binary: "codex",
+			InstallCommands: [][]string{
+				{"npm", "install", "-g", "@openai/codex"},
+			},
+			UpdateCommands: [][]string{
+				{"npm", "install", "-g", "@openai/codex"},
+			},
+		},
+		{
+			Name:   "cursor",
+			Binary: "cursor-agent",
+			InstallCommands: [][]string{
+				{"sh", "-c", "curl https://cursor.com/install -fsS | bash"},
+			},
+			UpdateCommands: [][]string{
+				{"sh", "-c", "curl https://cursor.com/install -fsS | bash"},
+			},
+		},
+	}
+
+	results := make([]ManagedClientUpdateResult, 0, len(specs))
+	for _, spec := range specs {
+		hasBinary := commandExists(spec.Binary)
+		status := "installed"
+		commands := spec.InstallCommands
+		if hasBinary {
+			status = "updated"
+			commands = spec.UpdateCommands
+		}
+
+		var lastErr error
+		var lastOutput string
+		for _, args := range commands {
+			output, err := runUpdateCommand(args...)
+			if err == nil {
+				results = append(results, ManagedClientUpdateResult{
+					Name:   spec.Name,
+					Status: status,
+					Output: sanitizeCommandOutput(output),
+				})
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			lastOutput = output
+		}
+		if lastErr != nil {
+			results = append(results, ManagedClientUpdateResult{
+				Name:   spec.Name,
+				Status: "failed",
+				Output: sanitizeCommandOutput(lastOutput),
+				Err:    lastErr,
+			})
+		}
+	}
+
+	return ManagedClientUpdateReport{Results: results}
+}
+
+func runUpdateCommand(args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), managedClientCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return string(out), fmt.Errorf("timed out after %s", managedClientCommandTimeout)
+	}
+	if err != nil {
+		return string(out), err
+	}
+	return string(out), nil
+}
+
+func commandExists(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func sanitizeCommandOutput(output string) string {
+	s := strings.TrimSpace(output)
+	if len(s) <= 600 {
+		return s
+	}
+	return s[:600] + "...(truncated)"
+}
+
 // extractBinaryFromTarGz reads a .tar.gz stream and returns the contents of the
 // named file entry.
 func extractBinaryFromTarGz(r io.Reader, name string) ([]byte, error) {
@@ -193,4 +353,3 @@ func extractBinaryFromTarGz(r io.Reader, name string) ([]byte, error) {
 		}
 	}
 }
-

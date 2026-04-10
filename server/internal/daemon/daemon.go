@@ -550,6 +550,11 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	d.logger.Info("CLI update requested", "runtime_id", runtimeID, "update_id", update.ID, "target_version", update.TargetVersion)
 
+	updateClients := true
+	if update.UpdateClients != nil {
+		updateClients = *update.UpdateClients
+	}
+
 	// Report running status.
 	d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 		"status": "running",
@@ -583,10 +588,22 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 		}
 	}
 
-	d.logger.Info("CLI update completed successfully", "output", output)
+	resultSummary := fmt.Sprintf("Updated multica to %s", update.TargetVersion)
+	if updateClients {
+		d.logger.Info("updating managed clients", "runtime_id", runtimeID, "update_id", update.ID)
+		clientReport := cli.UpdateManagedAgentClients()
+		if clientReport.HasFailures() {
+			d.logger.Warn("managed client update finished with failures", "report", clientReport.String())
+		}
+		if len(clientReport.Results) > 0 {
+			resultSummary = resultSummary + "\n" + clientReport.String()
+		}
+	}
+
+	d.logger.Info("CLI update completed successfully", "output", output, "summary", resultSummary)
 	d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 		"status": "completed",
-		"output": fmt.Sprintf("Updated to %s", update.TargetVersion),
+		"output": resultSummary,
 	})
 
 	// Trigger daemon restart with the new binary.

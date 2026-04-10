@@ -194,6 +194,7 @@ export interface RuntimeUpdate {
   runtime_id: string;
   status: RuntimeUpdateStatus;
   target_version: string;
+  update_clients?: boolean;
   output?: string;
   error?: string;
   created_at: string;

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   AlertDialog,
@@ -33,6 +34,7 @@ export function WorkspaceTab() {
   const [name, setName] = useState(workspace?.name ?? "");
   const [description, setDescription] = useState(workspace?.description ?? "");
   const [context, setContext] = useState(workspace?.context ?? "");
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
@@ -50,6 +52,7 @@ export function WorkspaceTab() {
     setName(workspace?.name ?? "");
     setDescription(workspace?.description ?? "");
     setContext(workspace?.context ?? "");
+    setAutoUpdateEnabled(getRuntimeAutoUpdateEnabled(workspace?.settings));
   }, [workspace]);
 
   const handleSave = async () => {
@@ -60,6 +63,14 @@ export function WorkspaceTab() {
         name,
         description,
         context,
+        settings: {
+          ...(workspace.settings ?? {}),
+          runtime_auto_update: {
+            enabled: autoUpdateEnabled,
+            target_version: "latest",
+            update_clients: true,
+          },
+        },
       });
       updateWorkspace(updated);
       toast.success("Workspace settings saved");
@@ -156,6 +167,22 @@ export function WorkspaceTab() {
                 {workspace.slug}
               </div>
             </div>
+            <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+              <div>
+                <Label className="text-xs text-muted-foreground">
+                  Runtime Auto Update
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Server controls automatic runtime updates to the latest
+                  multica CLI and managed clients.
+                </p>
+              </div>
+              <Switch
+                checked={autoUpdateEnabled}
+                onCheckedChange={setAutoUpdateEnabled}
+                disabled={!canManageWorkspace}
+              />
+            </div>
             <div className="flex items-center justify-end gap-2 pt-1">
               <Button
                 size="sm"
@@ -245,4 +272,17 @@ export function WorkspaceTab() {
       </AlertDialog>
     </div>
   );
+}
+
+function getRuntimeAutoUpdateEnabled(
+  settings: Record<string, unknown> | undefined,
+): boolean {
+  if (!settings) return false;
+  const raw = settings.runtime_auto_update;
+  if (typeof raw === "boolean") return raw;
+  if (raw && typeof raw === "object") {
+    const enabled = (raw as { enabled?: unknown }).enabled;
+    return typeof enabled === "boolean" ? enabled : true;
+  }
+  return false;
 }

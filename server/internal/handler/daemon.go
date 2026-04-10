@@ -191,7 +191,7 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.Queries.UpdateAgentRuntimeHeartbeat(r.Context(), parseUUID(req.RuntimeID))
+	rt, err := h.Queries.UpdateAgentRuntimeHeartbeat(r.Context(), parseUUID(req.RuntimeID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "heartbeat failed")
 		return
@@ -208,9 +208,16 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	// Check for pending update requests for this runtime.
 	if pending := h.UpdateStore.PopPending(req.RuntimeID); pending != nil {
-		resp["pending_update"] = map[string]string{
+		resp["pending_update"] = map[string]any{
 			"id":             pending.ID,
 			"target_version": pending.TargetVersion,
+			"update_clients": pending.UpdateClients,
+		}
+	} else if auto := h.maybeCreateAutoUpdate(r, rt); auto != nil {
+		resp["pending_update"] = map[string]any{
+			"id":             auto.ID,
+			"target_version": auto.TargetVersion,
+			"update_clients": auto.UpdateClients,
 		}
 	}
 
