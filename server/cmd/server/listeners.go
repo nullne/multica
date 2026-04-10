@@ -25,7 +25,7 @@ func registerListeners(bus *events.Bus, hub *realtime.Hub) {
 		protocol.EventInboxBatchArchived: true,
 	}
 
-	// Helper: marshal event and send to a specific user.
+	// Helper: marshal event and send to a specific user within the event's workspace.
 	sendToRecipient := func(hub *realtime.Hub, e events.Event, recipientID string) {
 		if recipientID == "" {
 			return
@@ -34,7 +34,11 @@ func registerListeners(bus *events.Bus, hub *realtime.Hub) {
 		if err != nil {
 			return
 		}
-		hub.SendToUser(recipientID, data)
+		if e.WorkspaceID != "" {
+			hub.SendToUserInWorkspace(recipientID, e.WorkspaceID, data)
+		} else {
+			hub.SendToUser(recipientID, data)
+		}
 	}
 
 	// inbox:new — extract recipient from nested item
