@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -82,7 +83,7 @@ func TestProvidersCRUD(t *testing.T) {
 
 	// 4. Cleanup: reset settings to empty
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
+		testPool.Exec(context.Background(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
 	})
 }
 
@@ -115,7 +116,7 @@ func TestUpdateProviders_RedactedKeyPreservation(t *testing.T) {
 
 	// Step 3: Verify the original key was preserved in DB.
 	var rawSettings []byte
-	err := testPool.QueryRow(t.Context(), `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&rawSettings)
+	err := testPool.QueryRow(context.Background(), `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&rawSettings)
 	if err != nil {
 		t.Fatalf("failed to read workspace settings: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestUpdateProviders_RedactedKeyPreservation(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
+		testPool.Exec(context.Background(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
 	})
 }
 
@@ -163,7 +164,7 @@ func TestUpdateProviders_NewKeyReplacesOld(t *testing.T) {
 
 	// Verify new key in DB.
 	var rawSettings []byte
-	err := testPool.QueryRow(t.Context(), `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&rawSettings)
+	err := testPool.QueryRow(context.Background(), `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&rawSettings)
 	if err != nil {
 		t.Fatalf("read settings: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestUpdateProviders_NewKeyReplacesOld(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
+		testPool.Exec(context.Background(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
 	})
 }
 
@@ -199,7 +200,7 @@ func TestUpdateProviders_UnsupportedProvider(t *testing.T) {
 
 func TestUpdateProviders_PreservesOtherSettings(t *testing.T) {
 	// Store a non-provider setting first.
-	_, err := testPool.Exec(t.Context(),
+	_, err := testPool.Exec(context.Background(),
 		`UPDATE workspace SET settings = '{"custom_field": "keep_me"}'::jsonb WHERE id = $1`,
 		testWorkspaceID,
 	)
@@ -222,7 +223,7 @@ func TestUpdateProviders_PreservesOtherSettings(t *testing.T) {
 
 	// Verify custom_field is still there.
 	var rawSettings []byte
-	testPool.QueryRow(t.Context(), `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&rawSettings)
+	testPool.QueryRow(context.Background(), `SELECT settings FROM workspace WHERE id = $1`, testWorkspaceID).Scan(&rawSettings)
 
 	var full map[string]json.RawMessage
 	json.Unmarshal(rawSettings, &full)
@@ -234,7 +235,7 @@ func TestUpdateProviders_PreservesOtherSettings(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
+		testPool.Exec(context.Background(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
 	})
 }
 
@@ -265,14 +266,16 @@ func TestUpdateAllDaemons_NoTargets(t *testing.T) {
 }
 
 func TestUpdateAllDaemons_NoDaemonsOnline(t *testing.T) {
-	// The test fixture has a runtime but it's cloud (no daemon_id) or we can
-	// set all runtimes offline. Let's set them offline.
-	_, err := testPool.Exec(t.Context(),
-		`UPDATE agent_runtime SET status = 'offline' WHERE workspace_id = $1`,
-		testWorkspaceID,
-	)
+	// Insert a runtime with a daemon_id but offline status.
+	var runtimeID string
+	err := testPool.QueryRow(context.Background(), `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata
+		) VALUES ($1, 'offline-daemon', 'Offline Test', 'local', 'claude', 'offline', 'test', '{}'::jsonb)
+		RETURNING id
+	`, testWorkspaceID).Scan(&runtimeID)
 	if err != nil {
-		t.Fatalf("setup offline: %v", err)
+		t.Fatalf("setup: %v", err)
 	}
 
 	w := httptest.NewRecorder()
@@ -283,22 +286,22 @@ func TestUpdateAllDaemons_NoDaemonsOnline(t *testing.T) {
 	})
 	req = withURLParam(req, "id", testWorkspaceID)
 	testHandler.UpdateAllDaemons(w, req)
+
+	// The fixture runtime has NULL daemon_id, the new one is offline.
+	// Neither qualifies → 400.
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for no online daemons, got %d: %s", w.Code, w.Body.String())
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(),
-			`UPDATE agent_runtime SET status = 'online' WHERE workspace_id = $1`,
-			testWorkspaceID,
-		)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 	})
 }
 
 func TestUpdateAllDaemons_QueuesUpdates(t *testing.T) {
 	// Insert an online runtime with a daemon_id so UpdateAllDaemons can find it.
 	var runtimeID string
-	err := testPool.QueryRow(t.Context(), `
+	err := testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
 		) VALUES ($1, 'test-daemon-1', 'Test Daemon Claude', 'local', 'claude', 'online', 'test-machine', '{}'::jsonb, now())
@@ -334,7 +337,7 @@ func TestUpdateAllDaemons_QueuesUpdates(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 	})
 }
 
@@ -344,7 +347,7 @@ func TestUpdateAllDaemons_QueuesUpdates(t *testing.T) {
 
 func TestDaemonRegister_IncludesProviderConfig(t *testing.T) {
 	// Set up workspace with a provider config first.
-	_, err := testPool.Exec(t.Context(), `
+	_, err := testPool.Exec(context.Background(), `
 		UPDATE workspace SET settings = $1 WHERE id = $2
 	`, `{"providers":{"claude":{"enabled":true,"api_key":"sk-ant-ws-key","target_version":"2.0.0"}}}`, testWorkspaceID)
 	if err != nil {
@@ -394,8 +397,8 @@ func TestDaemonRegister_IncludesProviderConfig(t *testing.T) {
 	// (We didn't set it in settings above.)
 
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
-		testPool.Exec(t.Context(), `DELETE FROM agent_runtime WHERE daemon_id = 'test-register-daemon'`)
+		testPool.Exec(context.Background(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE daemon_id = 'test-register-daemon'`)
 	})
 }
 
@@ -405,7 +408,7 @@ func TestDaemonRegister_IncludesProviderConfig(t *testing.T) {
 
 func TestClaimTask_ProviderAPIKeyInjected(t *testing.T) {
 	// 1. Set workspace provider config with API key.
-	_, err := testPool.Exec(t.Context(), `
+	_, err := testPool.Exec(context.Background(), `
 		UPDATE workspace SET settings = $1 WHERE id = $2
 	`, `{"providers":{"claim_test_provider":{"enabled":true,"api_key":"sk-test-claim-key"}}}`, testWorkspaceID)
 	if err != nil {
@@ -414,7 +417,7 @@ func TestClaimTask_ProviderAPIKeyInjected(t *testing.T) {
 
 	// 2. Create a runtime with provider = "claim_test_provider".
 	var runtimeID string
-	err = testPool.QueryRow(t.Context(), `
+	err = testPool.QueryRow(context.Background(), `
 		INSERT INTO agent_runtime (
 			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
 		) VALUES ($1, 'claim-daemon', 'Claim Test', 'local', 'claim_test_provider', 'online', 'test', '{}'::jsonb, now())
@@ -426,7 +429,7 @@ func TestClaimTask_ProviderAPIKeyInjected(t *testing.T) {
 
 	// 3. Create an agent pointing to this runtime.
 	var agentID string
-	err = testPool.QueryRow(t.Context(), `
+	err = testPool.QueryRow(context.Background(), `
 		INSERT INTO agent (
 			workspace_id, name, runtime_mode, runtime_config, runtime_id,
 			visibility, max_concurrent_tasks, owner_id, tools, triggers
@@ -440,16 +443,16 @@ func TestClaimTask_ProviderAPIKeyInjected(t *testing.T) {
 
 	// 4. Create an issue and task.
 	var issueID string
-	err = testPool.QueryRow(t.Context(), `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id)
-		VALUES ($1, 'Claim Test Issue', 'todo', 'medium', 'member', $2)
+	err = testPool.QueryRow(context.Background(), `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+		VALUES ($1, 'Claim Test Issue', 'todo', 'medium', 'member', $2, 9998, 0)
 		RETURNING id
 	`, testWorkspaceID, testUserID).Scan(&issueID)
 	if err != nil {
 		t.Fatalf("create issue: %v", err)
 	}
 
-	_, err = testPool.Exec(t.Context(), `
+	_, err = testPool.Exec(context.Background(), `
 		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
 		VALUES ($1, $2, $3, 'queued', 0)
 	`, agentID, runtimeID, issueID)
@@ -480,10 +483,10 @@ func TestClaimTask_ProviderAPIKeyInjected(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
-		testPool.Exec(t.Context(), `DELETE FROM issue WHERE id = $1`, issueID)
-		testPool.Exec(t.Context(), `DELETE FROM agent WHERE id = $1`, agentID)
-		testPool.Exec(t.Context(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
-		testPool.Exec(t.Context(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, agentID)
+		testPool.Exec(context.Background(), `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		testPool.Exec(context.Background(), `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
 	})
 }

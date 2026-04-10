@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"log/slog"
 	"testing"
 )
@@ -28,7 +29,7 @@ func TestAutoInstallProviders_SkipsAlreadyInstalled(t *testing.T) {
 	}
 
 	// Should not panic or modify existing entry.
-	d.autoInstallProviders(t.Context(), config)
+	d.autoInstallProviders(context.Background(), config)
 
 	// Claude should still be there with original path.
 	entry, ok := d.cfg.Agents["claude"]
@@ -56,7 +57,7 @@ func TestAutoInstallProviders_SkipsDisabled(t *testing.T) {
 		"codex": {Enabled: false, TargetVersion: "0.5.0"},
 	}
 
-	d.autoInstallProviders(t.Context(), config)
+	d.autoInstallProviders(context.Background(), config)
 
 	// Codex should NOT be added (it's disabled).
 	if _, ok := d.cfg.Agents["codex"]; ok {
@@ -80,7 +81,7 @@ func TestAutoInstallProviders_SkipsCursor(t *testing.T) {
 		"cursor": {Enabled: true},
 	}
 
-	d.autoInstallProviders(t.Context(), config)
+	d.autoInstallProviders(context.Background(), config)
 
 	// Cursor should NOT be added (auto-install not supported).
 	if _, ok := d.cfg.Agents["cursor"]; ok {
