@@ -5,7 +5,7 @@ ENV_FILE="${1:-.env}"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing env file: $ENV_FILE"
-  echo "Create .env from .env.example, or run 'make worktree-env' and use .env.worktree."
+  echo "Create .env from .env.example."
   exit 1
 fi
 

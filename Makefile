@@ -5,16 +5,13 @@
         build build-backend build-frontend \
         daemon cli \
         db-up db-down migrate-up migrate-down sqlc \
-        worktree-env setup-worktree dev-worktree \
         logs
 
 # ---------------------------------------------------------------------------
 # Variables
 # ---------------------------------------------------------------------------
 
-MAIN_ENV_FILE     ?= .env
-WORKTREE_ENV_FILE ?= .env.worktree
-ENV_FILE          ?= $(if $(wildcard $(MAIN_ENV_FILE)),$(MAIN_ENV_FILE),$(if $(wildcard $(WORKTREE_ENV_FILE)),$(WORKTREE_ENV_FILE),$(MAIN_ENV_FILE)))
+ENV_FILE ?= .env
 
 ifneq ($(wildcard $(ENV_FILE)),)
 include $(ENV_FILE)
@@ -48,7 +45,7 @@ PROD_COMPOSE := $(COMPOSE) --env-file $(ENV_FILE) -f docker-compose.prod.yml
 define REQUIRE_ENV
 	@if [ ! -f "$(ENV_FILE)" ]; then \
 		echo "Missing env file: $(ENV_FILE)"; \
-		echo "Create .env from .env.example, or run 'make worktree-env'."; \
+		echo "Create .env from .env.example."; \
 		exit 1; \
 	fi
 endef
@@ -121,26 +118,23 @@ logs: ## Stream production service logs
 	@$(PROD_COMPOSE) logs -f
 
 # ---------------------------------------------------------------------------
-# Testing
+# Testing (all targets run inside Docker — no exposed ports, no conflicts)
 # ---------------------------------------------------------------------------
 
-test: ## Run full test suite (typecheck + TS + Go + E2E)
-	$(REQUIRE_ENV)
-	@ENV_FILE="$(ENV_FILE)" bash scripts/check.sh
+test: ## Run full test suite (typecheck + TS + Go + E2E) in Docker
+	@bash scripts/docker-test.sh typecheck ts-test go-test e2e
 
-test-go: ## Run Go tests only
-	$(REQUIRE_ENV)
-	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
-	@cd server && go test ./...
+test-go: ## Run Go tests only (in Docker)
+	@bash scripts/docker-test.sh go-test
 
-test-ts: ## Run TypeScript tests only (Vitest)
-	@pnpm test
+test-ts: ## Run TypeScript tests only (in Docker)
+	@bash scripts/docker-test.sh ts-test
 
-test-e2e: ## Run E2E tests only (requires backend + frontend running)
-	@pnpm exec playwright test
+test-e2e: ## Run E2E tests only (in Docker)
+	@bash scripts/docker-test.sh e2e
 
-check: ## Run typecheck only (no tests)
-	@pnpm typecheck
+check: ## Run typecheck only (in Docker)
+	@bash scripts/docker-test.sh typecheck
 
 # ---------------------------------------------------------------------------
 # Build
@@ -191,17 +185,3 @@ migrate-down: ## Rollback database migrations
 sqlc: ## Regenerate sqlc Go code from SQL queries
 	@cd server && sqlc generate
 
-# ---------------------------------------------------------------------------
-# Worktree (multi-branch parallel development)
-# ---------------------------------------------------------------------------
-
-worktree-env: ## Generate .env.worktree with unique DB/ports for this worktree
-	@bash scripts/init-worktree-env.sh .env.worktree
-
-setup-worktree: ## Setup worktree: generate env, install deps, DB, migrations
-	@echo "==> Generating $(WORKTREE_ENV_FILE) with unique ports..."
-	@FORCE=1 bash scripts/init-worktree-env.sh $(WORKTREE_ENV_FILE)
-	@$(MAKE) --no-print-directory setup ENV_FILE=$(WORKTREE_ENV_FILE)
-
-dev-worktree: ## Start dev using worktree config
-	@$(MAKE) --no-print-directory dev-local ENV_FILE=$(WORKTREE_ENV_FILE)

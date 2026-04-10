@@ -124,11 +124,11 @@ make down             # Stop all services
 make clean            # Stop services and destroy ALL local state
 make logs             # Stream production service logs
 
-# Testing
+# Testing (all targets run inside Docker — no exposed ports, safe for parallel runs)
 make test             # Run full test suite (typecheck + TS + Go + E2E)
 make test-go          # Go tests only
 make test-ts          # TypeScript tests only (Vitest)
-make test-e2e         # E2E tests only (requires backend + frontend running)
+make test-e2e         # E2E tests only
 make check            # TypeScript typecheck only
 
 # Build
@@ -161,16 +161,6 @@ pnpm exec playwright test e2e/tests/specific-test.spec.ts
 
 CI runs on Node 22 and Go 1.24 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.
 
-### Worktree Support
-
-All checkouts share one PostgreSQL container. Isolation is at the database level — each worktree gets its own DB name and unique ports via `.env.worktree`. Main checkouts use `.env`.
-
-```bash
-make worktree-env       # Generate .env.worktree with unique DB/ports
-make setup-worktree     # Setup using .env.worktree
-make dev-worktree       # Start dev using .env.worktree
-```
-
 ## Coding Rules
 
 - TypeScript strict mode is enabled; keep types explicit.
@@ -198,7 +188,7 @@ make dev-worktree       # Start dev using .env.worktree
 
 - **TypeScript**: Vitest with Testing Library. Shared test setup lives in `apps/web/test/`. Mock external/third-party dependencies only.
 - **Go**: Standard `go test`. Tests should create their own fixture data in a test database.
-- End-to-end tests live in `e2e/*.spec.ts`; `make check` will start missing services automatically, while direct Playwright runs expect the app to already be running.
+- End-to-end tests live in `e2e/*.spec.ts`. All test targets (`make test`, `make test-e2e`, etc.) run inside Docker with no exposed ports, so multiple agents can run tests in parallel without conflicts.
 - Add or update tests whenever you change handlers, CLI commands, daemon behavior, or SQL-backed flows.
 
 ## Commit & Pull Request Rules
@@ -227,7 +217,7 @@ For targeted checks when requested:
 make check            # TypeScript typecheck only
 make test-ts          # TS unit tests only (Vitest)
 make test-go          # Go tests only
-make test-e2e         # E2E only (requires backend + frontend running)
+make test-e2e         # E2E only
 ```
 
 ## AI Agent Verification Loop
@@ -238,11 +228,11 @@ After writing or modifying code, always run the full verification pipeline:
 make test
 ```
 
-This runs all checks in sequence:
-1. TypeScript typecheck (`pnpm typecheck`)
-2. TypeScript unit tests (`pnpm test`)
-3. Go tests (`go test ./...`)
-4. E2E tests (auto-starts backend + frontend if needed, runs Playwright)
+This runs all checks in sequence inside Docker (no exposed ports, safe for parallel runs):
+1. TypeScript typecheck
+2. TypeScript unit tests (Vitest)
+3. Go tests
+4. E2E tests (Playwright)
 
 **Workflow:**
 - Write code to satisfy the requirement
