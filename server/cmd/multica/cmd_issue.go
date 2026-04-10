@@ -604,6 +604,9 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	if content == "" {
 		return fmt.Errorf("--content is required")
 	}
+	// Process common escape sequences so agents and shell users can include
+	// newlines via \n in --content without needing ANSI-C quoting ($'...').
+	content = unescapeContent(content)
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -867,6 +870,14 @@ func formatAssignee(issue map[string]any) string {
 		return ""
 	}
 	return aType + ":" + truncateID(aID)
+}
+
+// unescapeContent interprets C-style escape sequences in a string.
+// This lets CLI users and agents write newlines as \n in --content flags
+// without needing shell-specific quoting like $'...\n...'.
+func unescapeContent(s string) string {
+	r := strings.NewReplacer(`\n`, "\n", `\t`, "\t")
+	return r.Replace(s)
 }
 
 func truncateID(id string) string {
