@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, memo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -67,9 +67,13 @@ import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useIssueStore } from "@/features/issues";
+import { useIssueViewStore } from "@/features/issues/stores/view-store";
+import { useIssuesScopeStore } from "@/features/issues/stores/issues-scope-store";
 import { useIssueTimeline } from "@/features/issues/hooks/use-issue-timeline";
 import { useIssueReactions } from "@/features/issues/hooks/use-issue-reactions";
 import { useIssueSubscribers } from "@/features/issues/hooks/use-issue-subscribers";
+import { filterIssues } from "@/features/issues/utils/filter";
+import { sortIssues } from "@/features/issues/utils/sort";
 import { ReactionBar } from "@/components/common/reaction-bar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -402,11 +406,36 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const agents = useWorkspaceStore((s) => s.agents);
   const currentMemberRole = members.find((m) => m.user_id === user?.id)?.role;
 
-  // Issue navigation
+  // Single source of truth: read issue directly from global store
+  const issue = useIssueStore((s) => s.issues.find((i) => i.id === id)) ?? null;
   const allIssues = useIssueStore((s) => s.issues);
-  const currentIndex = allIssues.findIndex((i) => i.id === id);
-  const prevIssue = currentIndex > 0 ? allIssues[currentIndex - 1] : null;
-  const nextIssue = currentIndex < allIssues.length - 1 ? allIssues[currentIndex + 1] : null;
+  const scope = useIssuesScopeStore((s) => s.scope);
+  const statusFilters = useIssueViewStore((s) => s.statusFilters);
+  const priorityFilters = useIssueViewStore((s) => s.priorityFilters);
+  const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
+  const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
+  const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
+  const sortBy = useIssueViewStore((s) => s.sortBy);
+  const sortDirection = useIssueViewStore((s) => s.sortDirection);
+  const scopedIssues = useMemo(() => {
+    if (scope === "members") return allIssues.filter((i) => i.assignee_type === "member");
+    if (scope === "agents") return allIssues.filter((i) => i.assignee_type === "agent");
+    return allIssues;
+  }, [allIssues, scope]);
+  const filteredIssues = useMemo(
+    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters }),
+    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters],
+  );
+  const navigationIssues = useMemo(() => {
+    if (!issue) return [];
+    const hasCurrentIssue = filteredIssues.some((i) => i.id === id);
+    const baseIssues = hasCurrentIssue ? filteredIssues : allIssues;
+    const sameStatusIssues = baseIssues.filter((i) => i.status === issue.status);
+    return sortIssues(sameStatusIssues, sortBy, sortDirection);
+  }, [allIssues, filteredIssues, id, issue, sortBy, sortDirection]);
+  const currentIndex = navigationIssues.findIndex((i) => i.id === id);
+  const prevIssue = currentIndex > 0 ? navigationIssues[currentIndex - 1] : null;
+  const nextIssue = currentIndex < navigationIssues.length - 1 ? navigationIssues[currentIndex + 1] : null;
   const { getActorName } = useActorName();
   const { uploadWithToast } = useFileUpload();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -423,8 +452,6 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
-  // Single source of truth: read issue directly from global store
-  const issue = useIssueStore((s) => s.issues.find((i) => i.id === id)) ?? null;
   const [issueLoading, setIssueLoading] = useState(!issue);
 
   // If issue isn't in the store yet, fetch and upsert it
@@ -640,7 +667,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {/* Issue navigation — hidden on mobile */}
-            {!isMobile && allIssues.length > 1 && (
+            {!isMobile && navigationIssues.length > 1 && (
               <div className="flex items-center gap-0.5 mr-1">
                 <Tooltip>
                   <TooltipTrigger
@@ -659,7 +686,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   <TooltipContent side="bottom">Previous issue</TooltipContent>
                 </Tooltip>
                 <span className="text-xs text-muted-foreground tabular-nums px-0.5">
-                  {currentIndex >= 0 ? currentIndex + 1 : "?"} / {allIssues.length}
+                  {currentIndex >= 0 ? currentIndex + 1 : "?"} / {navigationIssues.length}
                 </span>
                 <Tooltip>
                   <TooltipTrigger
