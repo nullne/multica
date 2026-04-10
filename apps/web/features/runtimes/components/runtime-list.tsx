@@ -1,5 +1,10 @@
-import { Server } from "lucide-react";
-import type { AgentRuntime } from "@/shared/types";
+import { useState, useEffect, useCallback } from "react";
+import { Server, ArrowUpCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import type { AgentRuntime, WorkspaceProviderSettings } from "@/shared/types";
+import { useWorkspaceStore } from "@/features/workspace";
+import { api } from "@/shared/api";
+import { toast } from "sonner";
 import { RuntimeModeIcon } from "./shared";
 
 function RuntimeListItem({
@@ -49,14 +54,62 @@ export function RuntimeList({
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
+  const workspace = useWorkspaceStore((s) => s.workspace);
+  const [updating, setUpdating] = useState(false);
+
+  const handleUpdateAll = useCallback(async () => {
+    if (!workspace) return;
+    setUpdating(true);
+    try {
+      // Fetch provider config to get target versions.
+      const config: WorkspaceProviderSettings = await api.getProviderConfig(workspace.id);
+      const targets: { target: string; version: string }[] = [];
+      if (config.multica_target_version) {
+        targets.push({ target: "multica", version: config.multica_target_version });
+      }
+      if (config.providers) {
+        for (const [provider, pc] of Object.entries(config.providers)) {
+          if (pc.enabled && pc.target_version) {
+            targets.push({ target: provider, version: pc.target_version });
+          }
+        }
+      }
+      if (targets.length === 0) {
+        toast.error("No target versions configured. Set versions in Settings > Providers.");
+        return;
+      }
+      const result = await api.updateAllDaemons(workspace.id, targets);
+      toast.success(`Updating ${result.daemons_count} daemon(s) — ${result.updates_queued} update(s) queued`);
+    } catch {
+      toast.error("Failed to trigger daemon updates");
+    } finally {
+      setUpdating(false);
+    }
+  }, [workspace]);
+
+  const hasOnlineDaemons = runtimes.some((r) => r.status === "online");
+
   return (
     <div className="overflow-y-auto h-full border-r">
       <div className="flex h-12 items-center justify-between border-b px-4">
         <h1 className="text-sm font-semibold">Runtimes</h1>
-        <span className="text-xs text-muted-foreground">
-          {runtimes.filter((r) => r.status === "online").length}/
-          {runtimes.length} online
-        </span>
+        <div className="flex items-center gap-2">
+          {hasOnlineDaemons && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={handleUpdateAll}
+              disabled={updating}
+              title="Update all daemons to target versions"
+            >
+              <ArrowUpCircle className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {runtimes.filter((r) => r.status === "online").length}/
+            {runtimes.length} online
+          </span>
+        </div>
       </div>
       {runtimes.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-4 py-12">

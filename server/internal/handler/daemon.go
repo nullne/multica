@@ -127,7 +127,27 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		repos = []RepoData{}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"runtimes": resp, "repos": repos})
+	// Include workspace provider config so the daemon can auto-install
+	// missing CLIs and use workspace-level API keys.
+	ps := parseProviderSettings(ws.Settings)
+	// Send full (unredacted) config — the daemon needs actual API keys.
+	providerConfig := make(map[string]map[string]any)
+	if ps.Providers != nil {
+		for k, v := range ps.Providers {
+			providerConfig[k] = map[string]any{
+				"enabled":        v.Enabled,
+				"api_key":        v.APIKey,
+				"target_version": v.TargetVersion,
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"runtimes":        resp,
+		"repos":           repos,
+		"provider_config": providerConfig,
+		"multica_target_version": ps.MulticaTargetVersion,
+	})
 }
 
 // DaemonDeregister marks runtimes as offline when the daemon shuts down.
@@ -207,9 +227,11 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for pending update requests for this runtime.
+	// Support both single update (backward-compat) and multi-target updates.
 	if pending := h.UpdateStore.PopPending(req.RuntimeID); pending != nil {
 		resp["pending_update"] = map[string]string{
 			"id":             pending.ID,
+			"target":         pending.Target,
 			"target_version": pending.TargetVersion,
 		}
 	}
@@ -248,6 +270,12 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		agentCodeAccess = agent.GithubCodeAccess
 	}
 
+	// Look up the runtime to get the provider for API key injection.
+	var runtimeProvider string
+	if rt, err := h.Queries.GetAgentRuntime(r.Context(), task.RuntimeID); err == nil {
+		runtimeProvider = rt.Provider
+	}
+
 	// Include workspace ID and repos so the daemon can set up worktrees.
 	// Also generate a scoped GitHub token if a GitHub App is configured.
 	if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
@@ -268,6 +296,13 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				if token := h.generateGitHubTokenForAgent(r, ws, agentCodeAccess, repoURLs); token != "" {
 					resp.GitHubToken = token
 					resp.GitHubCodeAccess = agentCodeAccess
+				}
+			}
+			// Inject workspace-level provider API key for the runtime's provider.
+			if runtimeProvider != "" {
+				ps := parseProviderSettings(ws.Settings)
+				if pc, ok := ps.Providers[runtimeProvider]; ok && pc.APIKey != "" {
+					resp.ProviderAPIKey = pc.APIKey
 				}
 			}
 		}

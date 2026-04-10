@@ -27,6 +27,7 @@ const (
 type UpdateRequest struct {
 	ID            string       `json:"id"`
 	RuntimeID     string       `json:"runtime_id"`
+	Target        string       `json:"target"`         // "multica", "claude", "codex", etc.
 	Status        UpdateStatus `json:"status"`
 	TargetVersion string       `json:"target_version"`
 	Output        string       `json:"output,omitempty"`
@@ -48,6 +49,10 @@ func NewUpdateStore() *UpdateStore {
 }
 
 func (s *UpdateStore) Create(runtimeID, targetVersion string) (*UpdateRequest, error) {
+	return s.CreateWithTarget(runtimeID, "multica", targetVersion)
+}
+
+func (s *UpdateStore) CreateWithTarget(runtimeID, target, targetVersion string) (*UpdateRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -58,9 +63,9 @@ func (s *UpdateStore) Create(runtimeID, targetVersion string) (*UpdateRequest, e
 		}
 	}
 
-	// Reject if there is already a pending or running update for this runtime.
+	// Reject if there is already a pending or running update for this runtime + target.
 	for _, req := range s.requests {
-		if req.RuntimeID == runtimeID && (req.Status == UpdatePending || req.Status == UpdateRunning) {
+		if req.RuntimeID == runtimeID && req.Target == target && (req.Status == UpdatePending || req.Status == UpdateRunning) {
 			return nil, errUpdateInProgress
 		}
 	}
@@ -68,6 +73,7 @@ func (s *UpdateStore) Create(runtimeID, targetVersion string) (*UpdateRequest, e
 	req := &UpdateRequest{
 		ID:            randomID(),
 		RuntimeID:     runtimeID,
+		Target:        target,
 		Status:        UpdatePending,
 		TargetVersion: targetVersion,
 		CreatedAt:     time.Now(),
@@ -100,7 +106,7 @@ func (s *UpdateStore) Get(id string) *UpdateRequest {
 	return req
 }
 
-// PopPending returns and marks as running the pending update for a runtime.
+// PopPending returns and marks as running the first pending update for a runtime.
 func (s *UpdateStore) PopPending(runtimeID string) *UpdateRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -113,6 +119,22 @@ func (s *UpdateStore) PopPending(runtimeID string) *UpdateRequest {
 		}
 	}
 	return nil
+}
+
+// PopAllPending returns and marks as running all pending updates for a runtime.
+func (s *UpdateStore) PopAllPending(runtimeID string) []*UpdateRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var result []*UpdateRequest
+	for _, req := range s.requests {
+		if req.RuntimeID == runtimeID && req.Status == UpdatePending {
+			req.Status = UpdateRunning
+			req.UpdatedAt = time.Now()
+			result = append(result, req)
+		}
+	}
+	return result
 }
 
 func (s *UpdateStore) Complete(id string, output string) {

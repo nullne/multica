@@ -152,6 +152,7 @@ type PendingPing struct {
 // PendingUpdate represents a CLI update request from the server.
 type PendingUpdate struct {
 	ID            string `json:"id"`
+	Target        string `json:"target"`         // "multica", "claude", "codex", etc.
 	TargetVersion string `json:"target_version"`
 }
 
@@ -195,10 +196,19 @@ func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
 	}, nil)
 }
 
+// ProviderConfig holds workspace-level provider configuration from the server.
+type ProviderConfig struct {
+	Enabled       bool   `json:"enabled"`
+	APIKey        string `json:"api_key,omitempty"`
+	TargetVersion string `json:"target_version,omitempty"`
+}
+
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
-	Runtimes []Runtime  `json:"runtimes"`
-	Repos    []RepoData `json:"repos"`
+	Runtimes             []Runtime                  `json:"runtimes"`
+	Repos                []RepoData                 `json:"repos"`
+	ProviderConfig       map[string]ProviderConfig  `json:"provider_config,omitempty"`
+	MulticaTargetVersion string                     `json:"multica_target_version,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {

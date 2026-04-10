@@ -116,6 +116,22 @@ function getRuntimeDevice(agent: Agent, runtimes: RuntimeDevice[]): RuntimeDevic
 // Create Agent Dialog
 // ---------------------------------------------------------------------------
 
+// Group runtimes by daemon_id for two-step daemon → provider selection.
+function groupByDaemon(runtimes: RuntimeDevice[]) {
+  const map = new Map<string, { daemonId: string; deviceName: string; status: "online" | "offline"; runtimes: RuntimeDevice[] }>();
+  for (const rt of runtimes) {
+    const key = rt.daemon_id ?? rt.id; // cloud runtimes have no daemon_id
+    if (!map.has(key)) {
+      const deviceName = rt.device_info?.split(" · ")[0] || rt.name;
+      map.set(key, { daemonId: key, deviceName, status: rt.status, runtimes: [] });
+    }
+    const group = map.get(key)!;
+    group.runtimes.push(rt);
+    if (rt.status === "online") group.status = "online";
+  }
+  return Array.from(map.values());
+}
+
 function CreateAgentDialog({
   runtimes,
   onClose,
@@ -139,6 +155,12 @@ function CreateAgentDialog({
   }, [runtimes, selectedRuntimeId]);
 
   const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
+
+  // Derive daemon groups for two-step selection.
+  const daemonGroups = groupByDaemon(runtimes);
+  const selectedDaemonId = selectedRuntime?.daemon_id ?? selectedRuntime?.id ?? "";
+  const selectedDaemon = daemonGroups.find((g) => g.daemonId === selectedDaemonId);
+  const providersForDaemon = selectedDaemon?.runtimes ?? [];
 
   const handleSubmit = async () => {
     if (!name.trim() || !selectedRuntime) return;
@@ -233,65 +255,55 @@ function CreateAgentDialog({
           </div>
 
           <div>
-            <Label className="text-xs text-muted-foreground">Runtime</Label>
+            <Label className="text-xs text-muted-foreground">Daemon</Label>
             <Popover open={runtimeOpen} onOpenChange={setRuntimeOpen}>
               <PopoverTrigger
-                disabled={runtimes.length === 0}
+                disabled={daemonGroups.length === 0}
                 className="flex w-full items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
               >
-                {selectedRuntime?.runtime_mode === "cloud" ? (
-                  <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
-                )}
+                <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-medium">
-                      {selectedRuntime?.name ?? "No runtime available"}
+                      {selectedDaemon?.deviceName ?? "No daemon available"}
                     </span>
-                    {selectedRuntime?.runtime_mode === "cloud" && (
-                      <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
-                        Cloud
-                      </span>
-                    )}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
-                    {selectedRuntime?.device_info ?? "Register a runtime before creating an agent"}
+                    {selectedDaemon
+                      ? `${selectedDaemon.runtimes.length} provider(s) available`
+                      : "Start a daemon to create an agent"}
                   </div>
                 </div>
+                <span
+                  className={`h-2 w-2 shrink-0 rounded-full ${
+                    selectedDaemon?.status === "online" ? "bg-success" : "bg-muted-foreground/40"
+                  }`}
+                />
                 <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${runtimeOpen ? "rotate-180" : ""}`} />
               </PopoverTrigger>
               <PopoverContent align="start" className="w-[var(--anchor-width)] p-1 max-h-60 overflow-y-auto">
-                {runtimes.map((device) => (
+                {daemonGroups.map((group) => (
                   <button
-                    key={device.id}
+                    key={group.daemonId}
                     onClick={() => {
-                      setSelectedRuntimeId(device.id);
+                      // Select the first runtime of this daemon.
+                      if (group.runtimes[0]) setSelectedRuntimeId(group.runtimes[0].id);
                       setRuntimeOpen(false);
                     }}
                     className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-                      device.id === selectedRuntimeId ? "bg-accent" : "hover:bg-accent/50"
+                      group.daemonId === selectedDaemonId ? "bg-accent" : "hover:bg-accent/50"
                     }`}
                   >
-                    {device.runtime_mode === "cloud" ? (
-                      <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    )}
+                    <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate font-medium">{device.name}</span>
-                        {device.runtime_mode === "cloud" && (
-                          <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
-                            Cloud
-                          </span>
-                        )}
+                      <span className="truncate font-medium">{group.deviceName}</span>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {group.runtimes.map((r) => r.provider).join(", ")}
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">{device.device_info}</div>
                     </div>
                     <span
                       className={`h-2 w-2 shrink-0 rounded-full ${
-                        device.status === "online" ? "bg-success" : "bg-muted-foreground/40"
+                        group.status === "online" ? "bg-success" : "bg-muted-foreground/40"
                       }`}
                     />
                   </button>
@@ -299,6 +311,28 @@ function CreateAgentDialog({
               </PopoverContent>
             </Popover>
           </div>
+
+          {providersForDaemon.length > 1 && (
+            <div>
+              <Label className="text-xs text-muted-foreground">Provider</Label>
+              <div className="mt-1.5 flex gap-2 flex-wrap">
+                {providersForDaemon.map((rt) => (
+                  <button
+                    key={rt.id}
+                    type="button"
+                    onClick={() => setSelectedRuntimeId(rt.id)}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      rt.id === selectedRuntimeId
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    <span className="font-medium capitalize">{rt.provider}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <DialogFooter>
@@ -1181,6 +1215,73 @@ function TasksTab({ agent }: { agent: Agent }) {
 // Settings Tab
 // ---------------------------------------------------------------------------
 
+// ProviderSelector allows switching the code agent provider within the same daemon.
+function ProviderSelector({
+  agent,
+  runtimes,
+  onSave,
+}: {
+  agent: Agent;
+  runtimes: RuntimeDevice[];
+  onSave: (updates: Partial<Agent>) => Promise<void>;
+}) {
+  const currentRuntime = runtimes.find((r) => r.id === agent.runtime_id);
+  if (!currentRuntime) return null;
+
+  const daemonId = currentRuntime.daemon_id ?? currentRuntime.id;
+  const sameDeamonRuntimes = runtimes.filter(
+    (r) => (r.daemon_id ?? r.id) === daemonId
+  );
+
+  if (sameDeamonRuntimes.length <= 1) {
+    return (
+      <div>
+        <Label className="text-xs text-muted-foreground">Provider</Label>
+        <div className="mt-1 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm text-muted-foreground">
+          <span className="capitalize">{currentRuntime.provider}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const handleSwitch = async (runtimeId: string) => {
+    if (runtimeId === agent.runtime_id) return;
+    try {
+      await onSave({ runtime_id: runtimeId } as Partial<Agent>);
+      toast.success("Provider switched");
+    } catch {
+      toast.error("Failed to switch provider");
+    }
+  };
+
+  return (
+    <div>
+      <Label className="text-xs text-muted-foreground">Provider</Label>
+      <div className="mt-1.5 flex gap-2 flex-wrap">
+        {sameDeamonRuntimes.map((rt) => (
+          <button
+            key={rt.id}
+            type="button"
+            onClick={() => handleSwitch(rt.id)}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+              rt.id === agent.runtime_id
+                ? "border-primary bg-primary/5"
+                : "border-border hover:bg-muted"
+            }`}
+          >
+            <span className="font-medium capitalize">{rt.provider}</span>
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${
+                rt.status === "online" ? "bg-success" : "bg-muted-foreground/40"
+              }`}
+            />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SettingsTab({
   agent,
   runtimes,
@@ -1369,16 +1470,22 @@ function SettingsTab({
       </div>
 
       <div>
-        <Label className="text-xs text-muted-foreground">Runtime</Label>
+        <Label className="text-xs text-muted-foreground">Daemon</Label>
         <div className="mt-1 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm text-muted-foreground">
           {agent.runtime_mode === "cloud" ? (
             <Cloud className="h-4 w-4" />
           ) : (
             <Monitor className="h-4 w-4" />
           )}
-          {runtimeDevice?.name ?? (agent.runtime_mode === "cloud" ? "Cloud" : "Local")}
+          {runtimeDevice?.device_info?.split(" · ")[0] ?? runtimeDevice?.name ?? (agent.runtime_mode === "cloud" ? "Cloud" : "Local")}
         </div>
       </div>
+
+      <ProviderSelector
+        agent={agent}
+        runtimes={runtimes}
+        onSave={onSave}
+      />
 
       <Button onClick={handleSave} disabled={!dirty || saving} size="sm">
         {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -31,10 +32,11 @@ type Daemon struct {
 	repoCache *repocache.Cache
 	logger    *slog.Logger
 
-	mu           sync.Mutex
-	workspaces   map[string]*workspaceState
-	runtimeIndex map[string]Runtime // runtimeID -> Runtime for provider lookups
-	reloading    sync.Mutex         // prevents concurrent reloadWorkspaces
+	mu              sync.Mutex
+	workspaces      map[string]*workspaceState
+	runtimeIndex    map[string]Runtime            // runtimeID -> Runtime for provider lookups
+	providerConfigs map[string]ProviderConfig     // provider -> workspace-level config (API keys, etc.)
+	reloading       sync.Mutex                    // prevents concurrent reloadWorkspaces
 
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
 	restartBinary string             // non-empty after a successful update; path to the new binary
@@ -45,12 +47,13 @@ type Daemon struct {
 func New(cfg Config, logger *slog.Logger) *Daemon {
 	cacheRoot := filepath.Join(cfg.WorkspacesRoot, ".repos")
 	return &Daemon{
-		cfg:          cfg,
-		client:       NewClient(cfg.ServerBaseURL),
-		repoCache:    repocache.New(cacheRoot, logger),
-		logger:       logger,
-		workspaces:   make(map[string]*workspaceState),
-		runtimeIndex: make(map[string]Runtime),
+		cfg:             cfg,
+		client:          NewClient(cfg.ServerBaseURL),
+		repoCache:       repocache.New(cacheRoot, logger),
+		logger:          logger,
+		workspaces:      make(map[string]*workspaceState),
+		runtimeIndex:    make(map[string]Runtime),
+		providerConfigs: make(map[string]ProviderConfig),
 	}
 }
 
@@ -228,6 +231,7 @@ func (d *Daemon) providerToRuntimeMap() map[string]string {
 }
 
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
+	// First pass: build runtimes from locally available agents.
 	var runtimes []map[string]string
 	for name, entry := range d.cfg.Agents {
 		version, err := agent.DetectVersion(ctx, entry.Path)
@@ -265,7 +269,83 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
 	}
+
+	// Store provider configs from server response.
+	if resp.ProviderConfig != nil {
+		d.mu.Lock()
+		for k, v := range resp.ProviderConfig {
+			d.providerConfigs[k] = v
+		}
+		d.mu.Unlock()
+
+		// Auto-install missing providers that are enabled in workspace config.
+		d.autoInstallProviders(ctx, resp.ProviderConfig)
+	}
+
 	return resp, nil
+}
+
+// autoInstallProviders installs code agent CLIs that are enabled in the workspace
+// config but not yet available on this machine. After installing, it re-probes
+// and adds them to the agent config.
+func (d *Daemon) autoInstallProviders(ctx context.Context, providerConfig map[string]ProviderConfig) {
+	for provider, cfg := range providerConfig {
+		if !cfg.Enabled {
+			continue
+		}
+		// Skip if already available.
+		if _, ok := d.cfg.Agents[provider]; ok {
+			continue
+		}
+
+		d.logger.Info("provider enabled in workspace but not installed locally, auto-installing", "provider", provider)
+		_, err := InstallProvider(ctx, provider, cfg.TargetVersion, d.logger)
+		if err != nil {
+			d.logger.Warn("auto-install failed, provider will not be available", "provider", provider, "error", err)
+			continue
+		}
+
+		// Re-probe the installed CLI.
+		path, lookupErr := exec.LookPath(providerBinaryName(provider))
+		if lookupErr != nil {
+			d.logger.Warn("auto-install succeeded but CLI not found on PATH", "provider", provider, "error", lookupErr)
+			continue
+		}
+
+		d.cfg.Agents[provider] = AgentEntry{Path: path}
+		d.logger.Info("auto-installed code agent CLI", "provider", provider, "path", path)
+	}
+}
+
+// resolveProviderAPIKey returns the API key to use for a provider.
+// Prefers the task-level key (from task claim), falls back to the cached
+// workspace-level key, and returns empty if neither is set (user self-auth).
+func (d *Daemon) resolveProviderAPIKey(provider, taskAPIKey string) string {
+	if taskAPIKey != "" {
+		return taskAPIKey
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if cfg, ok := d.providerConfigs[provider]; ok {
+		return cfg.APIKey
+	}
+	return ""
+}
+
+// providerBinaryName returns the expected binary name for a provider.
+func providerBinaryName(provider string) string {
+	switch provider {
+	case "claude":
+		return "claude"
+	case "codex":
+		return "codex"
+	case "opencode":
+		return "opencode"
+	case "cursor":
+		return "cursor-agent"
+	default:
+		return provider
+	}
 }
 
 // configWatchLoop periodically checks for config file changes and reloads workspaces.
@@ -548,13 +628,27 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 	}
 	defer d.updating.Store(false)
 
-	d.logger.Info("CLI update requested", "runtime_id", runtimeID, "update_id", update.ID, "target_version", update.TargetVersion)
+	target := update.Target
+	if target == "" {
+		target = "multica" // backward compatibility
+	}
+
+	d.logger.Info("update requested", "runtime_id", runtimeID, "update_id", update.ID, "target", target, "target_version", update.TargetVersion)
 
 	// Report running status.
 	d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
 		"status": "running",
 	})
 
+	if target == "multica" {
+		d.handleMulticaUpdate(ctx, runtimeID, update)
+	} else {
+		d.handleProviderUpdate(ctx, runtimeID, update, target)
+	}
+}
+
+// handleMulticaUpdate handles updates to the multica CLI itself.
+func (d *Daemon) handleMulticaUpdate(ctx context.Context, runtimeID string, update *PendingUpdate) {
 	// Try Homebrew first, fall back to direct download.
 	var output string
 	if cli.IsBrewInstall() {
@@ -591,6 +685,33 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	// Trigger daemon restart with the new binary.
 	d.triggerRestart()
+}
+
+// handleProviderUpdate handles updates to code agent CLIs (claude, codex, etc.).
+func (d *Daemon) handleProviderUpdate(ctx context.Context, runtimeID string, update *PendingUpdate, provider string) {
+	output, err := UpdateProvider(ctx, provider, update.TargetVersion, d.logger)
+	if err != nil {
+		d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	// Re-probe the updated CLI and update the agent entry.
+	path, lookupErr := exec.LookPath(providerBinaryName(provider))
+	if lookupErr == nil {
+		d.cfg.Agents[provider] = AgentEntry{Path: path}
+	}
+
+	d.logger.Info("code agent CLI updated", "provider", provider, "output", output)
+	d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+		"status": "completed",
+		"output": fmt.Sprintf("Updated %s to %s", provider, update.TargetVersion),
+	})
+
+	// No daemon restart needed — just re-register to update version info.
+	// The next heartbeat cycle will pick up the new version.
 }
 
 // triggerRestart initiates a graceful daemon restart after a successful CLI update.
@@ -921,6 +1042,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		"MULTICA_AGENT_NAME":   agentName,
 		"MULTICA_AGENT_ID":     task.AgentID,
 		"MULTICA_TASK_ID":      task.ID,
+	}
+
+	// Inject workspace-level provider API key if available.
+	// This allows running without per-user CLI auth (e.g. `claude login`).
+	if apiKey := d.resolveProviderAPIKey(provider, task.ProviderAPIKey); apiKey != "" {
+		switch provider {
+		case "claude":
+			agentEnv["ANTHROPIC_API_KEY"] = apiKey
+		case "codex":
+			agentEnv["OPENAI_API_KEY"] = apiKey
+		case "opencode":
+			agentEnv["OPENAI_API_KEY"] = apiKey
+		}
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.
