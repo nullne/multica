@@ -238,15 +238,30 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 
 	slog.Info("task completed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 
-	// Post agent output as a comment, but only for assignment-triggered tasks.
-	// Comment-triggered tasks: the agent replies via CLI with --parent, so
-	// posting here would create a duplicate.
-	if !task.TriggerCommentID.Valid {
-		var payload protocol.TaskCompletedPayload
-		if err := json.Unmarshal(result, &payload); err == nil {
-			if payload.Output != "" {
-				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(payload.Output), "comment", task.TriggerCommentID)
+	var payload protocol.TaskCompletedPayload
+	if err := json.Unmarshal(result, &payload); err == nil {
+		if payload.BranchName != "" || payload.PRURL != "" {
+			issue, updateErr := s.Queries.UpdateIssueDevLinks(ctx, db.UpdateIssueDevLinksParams{
+				ID:           task.IssueID,
+				LinkedBranch: pgtype.Text{String: payload.BranchName, Valid: payload.BranchName != ""},
+				LinkedPrUrl:  pgtype.Text{String: payload.PRURL, Valid: payload.PRURL != ""},
+			})
+			if updateErr != nil {
+				slog.Warn("update issue dev links failed",
+					"issue_id", util.UUIDToString(task.IssueID),
+					"task_id", util.UUIDToString(task.ID),
+					"error", updateErr,
+				)
+			} else {
+				s.broadcastIssueUpdated(issue)
 			}
+		}
+
+		// Post agent output as a comment, but only for assignment-triggered tasks.
+		// Comment-triggered tasks: the agent replies via CLI with --parent, so
+		// posting here would create a duplicate.
+		if !task.TriggerCommentID.Valid && payload.Output != "" {
+			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(payload.Output), "comment", task.TriggerCommentID)
 		}
 	}
 
@@ -511,6 +526,8 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		"identifier":      issuePrefix + "-" + strconv.Itoa(int(issue.Number)),
 		"title":           issue.Title,
 		"description":     util.TextToPtr(issue.Description),
+		"linked_branch":   util.TextToPtr(issue.LinkedBranch),
+		"linked_pr_url":   util.TextToPtr(issue.LinkedPrUrl),
 		"status":          issue.Status,
 		"priority":        issue.Priority,
 		"assignee_type":   util.TextToPtr(issue.AssigneeType),

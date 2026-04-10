@@ -1076,6 +1076,27 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   <PropRow label="Updated">
                     <span className="text-muted-foreground">{shortDate(issue.updated_at)}</span>
                   </PropRow>
+                  <PropRow label="Branch">
+                    {issue.linked_branch ? (
+                      <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{issue.linked_branch}</code>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </PropRow>
+                  <PropRow label="Pull request">
+                    {issue.linked_pr_url ? (
+                      <a
+                        href={issue.linked_pr_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="truncate text-primary hover:underline"
+                      >
+                        {issue.linked_pr_url}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </PropRow>
                 </div>}
               </div>
 

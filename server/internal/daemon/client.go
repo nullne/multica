@@ -99,8 +99,11 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, sessionID, workDir string) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branchName, sessionID, workDir string) error {
 	body := map[string]any{"output": output}
+	if prURL != "" {
+		body["pr_url"] = prURL
+	}
 	if branchName != "" {
 		body["branch_name"] = branchName
 	}

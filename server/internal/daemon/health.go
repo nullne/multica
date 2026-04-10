@@ -121,6 +121,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		d.rememberTaskBranch(req.TaskID, result.BranchName)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)

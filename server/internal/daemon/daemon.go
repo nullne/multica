@@ -34,6 +34,7 @@ type Daemon struct {
 	mu           sync.Mutex
 	workspaces   map[string]*workspaceState
 	runtimeIndex map[string]Runtime // runtimeID -> Runtime for provider lookups
+	taskBranches map[string]string  // taskID -> latest checked out branch
 	reloading    sync.Mutex         // prevents concurrent reloadWorkspaces
 
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
@@ -51,6 +52,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		logger:       logger,
 		workspaces:   make(map[string]*workspaceState),
 		runtimeIndex: make(map[string]Runtime),
+		taskBranches: make(map[string]string),
 	}
 }
 
@@ -761,6 +763,8 @@ func (d *Daemon) pollLoop(ctx context.Context) error {
 }
 
 func (d *Daemon) handleTask(ctx context.Context, task Task) {
+	defer d.clearTaskBranch(task.ID)
+
 	d.mu.Lock()
 	rt := d.runtimeIndex[task.RuntimeID]
 	d.mu.Unlock()
@@ -837,6 +841,13 @@ func (d *Daemon) handleTask(ctx context.Context, task Task) {
 		return
 	}
 
+	if result.PRURL == "" {
+		result.PRURL = extractPRURL(result.Comment)
+	}
+	if result.BranchName == "" {
+		result.BranchName = d.consumeTaskBranch(task.ID)
+	}
+
 	switch result.Status {
 	case "blocked":
 		if err := d.client.FailTask(ctx, task.ID, result.Comment); err != nil {
@@ -844,7 +855,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task) {
 		}
 	default:
 		taskLog.Info("task completed", "status", result.Status)
-		if err := d.client.CompleteTask(ctx, task.ID, result.Comment, result.BranchName, result.SessionID, result.WorkDir); err != nil {
+		if err := d.client.CompleteTask(ctx, task.ID, result.Comment, result.PRURL, result.BranchName, result.SessionID, result.WorkDir); err != nil {
 			taskLog.Error("complete task failed, falling back to fail", "error", err)
 			if failErr := d.client.FailTask(ctx, task.ID, fmt.Sprintf("complete task failed: %s", err.Error())); failErr != nil {
 				taskLog.Error("fail task fallback also failed", "error", failErr)

@@ -23,13 +23,13 @@ type RepoData struct {
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
-	ID             string     `json:"id"`
-	AgentID        string     `json:"agent_id"`
-	RuntimeID      string     `json:"runtime_id"`
-	IssueID        string     `json:"issue_id"`
-	WorkspaceID    string     `json:"workspace_id"`
-	Agent          *AgentData `json:"agent,omitempty"`
-	Repos          []RepoData `json:"repos,omitempty"`
+	ID               string     `json:"id"`
+	AgentID          string     `json:"agent_id"`
+	RuntimeID        string     `json:"runtime_id"`
+	IssueID          string     `json:"issue_id"`
+	WorkspaceID      string     `json:"workspace_id"`
+	Agent            *AgentData `json:"agent,omitempty"`
+	Repos            []RepoData `json:"repos,omitempty"`
 	PriorSessionID   string     `json:"prior_session_id,omitempty"`
 	PriorWorkDir     string     `json:"prior_work_dir,omitempty"`
 	TriggerCommentID string     `json:"trigger_comment_id,omitempty"`
@@ -62,6 +62,7 @@ type SkillFileData struct {
 type TaskResult struct {
 	Status     string `json:"status"`
 	Comment    string `json:"comment"`
+	PRURL      string `json:"pr_url,omitempty"`
 	BranchName string `json:"branch_name,omitempty"`
 	EnvType    string `json:"env_type,omitempty"`
 	SessionID  string `json:"session_id,omitempty"` // Claude session ID for future resumption
