@@ -67,6 +67,39 @@ function preprocessMentionShortcodes(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Escape sequence preprocessing
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert literal \n escape sequences to actual newlines.
+ *
+ * Agent output (from CLI --content flags or SDK result text) sometimes
+ * contains literal backslash-n instead of real newlines. This makes the
+ * content render as a single unformatted line with visible \n characters.
+ *
+ * We only convert outside fenced code blocks and inline code spans to
+ * avoid breaking intentional \n references in code.
+ */
+function unescapeLiteralNewlines(text: string): string {
+  if (!text.includes("\\n") && !text.includes("\\t")) return text;
+
+  // Split into fenced code blocks, inline code, and plain text.
+  // Fenced blocks: ```...``` (possibly with language tag)
+  // Inline code:   `...`
+  const codePattern = /(```[\s\S]*?```|`[^`\n]+`)/g;
+  const parts = text.split(codePattern);
+
+  return parts
+    .map((part, i) => {
+      // Odd-indexed parts are code spans/blocks — leave unchanged.
+      if (i % 2 === 1) return part;
+      // Convert literal \n and \t to real whitespace in plain text.
+      return part.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+    })
+    .join("");
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -74,6 +107,7 @@ function preprocessMentionShortcodes(text: string): string {
  * Convert a markdown string to Tiptap-compatible HTML.
  *
  * Pipeline:
+ *   0. Literal \n / \t escape sequences → real whitespace (agent output fix)
  *   1. Legacy mention shortcodes → standard mention links
  *   2. Raw URLs → markdown links (linkify)
  *   3. Mention links → <span data-type="mention" ...> HTML
@@ -86,7 +120,8 @@ function preprocessMentionShortcodes(text: string): string {
  */
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return "";
-  const step1 = preprocessMentionShortcodes(markdown);
+  const step0 = unescapeLiteralNewlines(markdown);
+  const step1 = preprocessMentionShortcodes(step0);
   const step2 = preprocessLinks(step1);
   const step3 = mentionsToHtml(step2);
   return tiptapMarked.parse(step3) as string;
