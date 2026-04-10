@@ -193,13 +193,18 @@ func isRedacted(s string) bool {
 	if s == "" {
 		return false
 	}
+	// A redacted key starts with at least one '*'.
+	if s[0] != '*' {
+		return false
+	}
+	// All-asterisks or asterisks followed by up to 4 visible chars (from redactAPIKey).
+	starCount := 0
 	for _, c := range s {
-		if c != '*' {
-			// Check if it's a masked key like "****abcd"
-			return false
+		if c == '*' {
+			starCount++
 		}
 	}
-	return true
+	return starCount > 0 && len(s)-starCount <= 4
 }
 
 // UpdateAllDaemons triggers a version update for all online daemons in a workspace.
