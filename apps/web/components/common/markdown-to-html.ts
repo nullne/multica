@@ -81,7 +81,7 @@ function preprocessMentionShortcodes(text: string): string {
  * avoid breaking intentional \n references in code.
  */
 function unescapeLiteralNewlines(text: string): string {
-  if (!text.includes("\\n")) return text;
+  if (!text.includes("\\n") && !text.includes("\\t")) return text;
 
   // Split into fenced code blocks, inline code, and plain text.
   // Fenced blocks: ```...``` (possibly with language tag)
