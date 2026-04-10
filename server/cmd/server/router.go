@@ -72,7 +72,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	// Health check
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		w.Write([]byte(`{"status":"ok","version":"` + version + `"}`))
 	})
 
 	// WebSocket
@@ -175,9 +175,12 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/subscribers", h.ListIssueSubscribers)
 					r.Post("/subscribe", h.SubscribeToIssue)
 					r.Post("/unsubscribe", h.UnsubscribeFromIssue)
-					r.Get("/active-task", h.GetActiveTaskForIssue)
-					r.Post("/tasks/{taskId}/cancel", h.CancelTask)
-					r.Get("/task-runs", h.ListTasksByIssue)
+				r.Get("/active-task", h.GetActiveTaskForIssue)
+				r.Post("/tasks/{taskId}/cancel", h.CancelTask)
+				r.Get("/task-runs", h.ListTasksByIssue)
+				r.Put("/criteria", h.UpdateCriteria)
+				r.Post("/criteria/approve", h.ApproveCriteria)
+				r.Post("/criteria/reject", h.RejectCriteria)
 					r.Post("/reactions", h.AddIssueReaction)
 					r.Delete("/reactions", h.RemoveIssueReaction)
 					r.Get("/attachments", h.ListAttachments)

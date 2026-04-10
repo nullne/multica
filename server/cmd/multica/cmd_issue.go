@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -134,10 +135,11 @@ func init() {
 
 	// issue create
 	issueCreateCmd.Flags().String("title", "", "Issue title (required)")
-	issueCreateCmd.Flags().String("description", "", "Issue description")
+	issueCreateCmd.Flags().String("description", "", "Issue description (use - to read from stdin)")
 	issueCreateCmd.Flags().String("status", "", "Issue status")
 	issueCreateCmd.Flags().String("priority", "", "Issue priority")
 	issueCreateCmd.Flags().String("assignee", "", "Assignee name (member or agent)")
+	issueCreateCmd.Flags().String("verifier", "", "Verifier agent name")
 	issueCreateCmd.Flags().String("parent", "", "Parent issue ID")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (RFC3339 format)")
 	issueCreateCmd.Flags().String("output", "json", "Output format: table or json")
@@ -145,10 +147,12 @@ func init() {
 
 	// issue update
 	issueUpdateCmd.Flags().String("title", "", "New title")
-	issueUpdateCmd.Flags().String("description", "", "New description")
+	issueUpdateCmd.Flags().String("description", "", "New description (use - to read from stdin)")
 	issueUpdateCmd.Flags().String("status", "", "New status")
 	issueUpdateCmd.Flags().String("priority", "", "New priority")
 	issueUpdateCmd.Flags().String("assignee", "", "New assignee name (member or agent)")
+	issueUpdateCmd.Flags().String("verifier", "", "New verifier agent name")
+	issueUpdateCmd.Flags().Bool("clear-verifier", false, "Clear verifier agent")
 	issueUpdateCmd.Flags().String("due-date", "", "New due date (RFC3339 format)")
 	issueUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
@@ -171,7 +175,7 @@ func init() {
 	issueRunMessagesCmd.Flags().Int("since", 0, "Only return messages after this sequence number")
 
 	// issue comment add
-	issueCommentAddCmd.Flags().String("content", "", "Comment content (required)")
+	issueCommentAddCmd.Flags().String("content", "", "Comment content (required; use - to read from stdin)")
 	issueCommentAddCmd.Flags().String("parent", "", "Parent comment ID (reply to a specific comment)")
 	issueCommentAddCmd.Flags().StringSlice("attachment", nil, "File path(s) to attach (can be specified multiple times)")
 	issueCommentAddCmd.Flags().String("output", "json", "Output format: table or json")
@@ -312,8 +316,10 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	defer cancel()
 
 	body := map[string]any{"title": title}
-	if v, _ := cmd.Flags().GetString("description"); v != "" {
-		body["description"] = v
+	if desc, descErr := readFlagOrStdin(cmd, "description"); descErr != nil {
+		return descErr
+	} else if desc != "" {
+		body["description"] = desc
 	}
 	if v, _ := cmd.Flags().GetString("status"); v != "" {
 		body["status"] = v
@@ -334,6 +340,13 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 		}
 		body["assignee_type"] = aType
 		body["assignee_id"] = aID
+	}
+	if v, _ := cmd.Flags().GetString("verifier"); v != "" {
+		verifierID, resolveErr := resolveAgent(ctx, client, v)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve verifier: %w", resolveErr)
+		}
+		body["verifier_agent_id"] = verifierID
 	}
 
 	var result map[string]any
@@ -385,8 +398,11 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 		body["title"] = v
 	}
 	if cmd.Flags().Changed("description") {
-		v, _ := cmd.Flags().GetString("description")
-		body["description"] = v
+		desc, descErr := readFlagOrStdin(cmd, "description")
+		if descErr != nil {
+			return descErr
+		}
+		body["description"] = desc
 	}
 	if cmd.Flags().Changed("status") {
 		v, _ := cmd.Flags().GetString("status")
@@ -408,6 +424,20 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 		}
 		body["assignee_type"] = aType
 		body["assignee_id"] = aID
+	}
+	if cmd.Flags().Changed("verifier") {
+		v, _ := cmd.Flags().GetString("verifier")
+		verifierID, resolveErr := resolveAgent(ctx, client, v)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve verifier: %w", resolveErr)
+		}
+		body["verifier_agent_id"] = verifierID
+	}
+	if clearVerifier, _ := cmd.Flags().GetBool("clear-verifier"); clearVerifier {
+		if cmd.Flags().Changed("verifier") {
+			return fmt.Errorf("--verifier and --clear-verifier are mutually exclusive")
+		}
+		body["verifier_agent_id"] = nil
 	}
 
 	if len(body) == 0 {
@@ -576,10 +606,16 @@ func runIssueCommentList(cmd *cobra.Command, args []string) error {
 }
 
 func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
-	content, _ := cmd.Flags().GetString("content")
-	if content == "" {
-		return fmt.Errorf("--content is required")
+	content, err := readFlagOrStdin(cmd, "content")
+	if err != nil {
+		return err
 	}
+	if content == "" {
+		return fmt.Errorf("--content is required (use --content - to read from stdin)")
+	}
+	// Process common escape sequences so agents and shell users can include
+	// newlines via \n in --content without needing ANSI-C quoting ($'...').
+	content = unescapeContent(content)
 
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -756,6 +792,19 @@ func runIssueRunMessages(cmd *cobra.Command, args []string) error {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// readFlagOrStdin returns the flag value, reading from stdin when the value is "-".
+func readFlagOrStdin(cmd *cobra.Command, flag string) (string, error) {
+	v, _ := cmd.Flags().GetString(flag)
+	if v != "-" {
+		return v, nil
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", fmt.Errorf("read stdin for --%s: %w", flag, err)
+	}
+	return strings.TrimRight(string(data), "\n"), nil
+}
+
 type assigneeMatch struct {
 	Type string // "member" or "agent"
 	ID   string // user_id for members, agent id for agents
@@ -825,6 +874,17 @@ func resolveAssignee(ctx context.Context, client *cli.APIClient, name string) (s
 	}
 }
 
+func resolveAgent(ctx context.Context, client *cli.APIClient, name string) (string, error) {
+	aType, aID, err := resolveAssignee(ctx, client, name)
+	if err != nil {
+		return "", err
+	}
+	if aType != "agent" {
+		return "", fmt.Errorf("%q resolves to a member, but verifier must be an agent", name)
+	}
+	return aID, nil
+}
+
 func formatAssignee(issue map[string]any) string {
 	aType := strVal(issue, "assignee_type")
 	aID := strVal(issue, "assignee_id")
@@ -832,6 +892,14 @@ func formatAssignee(issue map[string]any) string {
 		return ""
 	}
 	return aType + ":" + truncateID(aID)
+}
+
+// unescapeContent interprets C-style escape sequences in a string.
+// This lets CLI users and agents write newlines as \n in --content flags
+// without needing shell-specific quoting like $'...\n...'.
+func unescapeContent(s string) string {
+	r := strings.NewReplacer(`\n`, "\n", `\t`, "\t")
+	return r.Replace(s)
 }
 
 func truncateID(id string) string {

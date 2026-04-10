@@ -389,6 +389,26 @@ export class ApiClient {
     });
   }
 
+  async updateCriteria(issueId: string, criteria: unknown[]): Promise<Issue> {
+    return this.fetch(`/api/issues/${issueId}/criteria`, {
+      method: "PUT",
+      body: JSON.stringify({ criteria }),
+    });
+  }
+
+  async approveCriteria(issueId: string): Promise<Issue> {
+    return this.fetch(`/api/issues/${issueId}/criteria/approve`, {
+      method: "POST",
+    });
+  }
+
+  async rejectCriteria(issueId: string, feedback: string): Promise<Issue> {
+    return this.fetch(`/api/issues/${issueId}/criteria/reject`, {
+      method: "POST",
+      body: JSON.stringify({ feedback }),
+    });
+  }
+
   // Inbox
   async listInbox(): Promise<InboxItem[]> {
     return this.fetch("/api/inbox");

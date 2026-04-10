@@ -209,6 +209,23 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 				publishActivityEvent(bus, e, activity)
 			}
 		}
+
+		if criteriaApproved, _ := payload["criteria_approved"].(bool); criteriaApproved {
+			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				WorkspaceID: parseUUID(issue.WorkspaceID),
+				IssueID:     parseUUID(issue.ID),
+				ActorType:   util.StrToText(e.ActorType),
+				ActorID:     parseUUID(e.ActorID),
+				Action:      "criteria_approved",
+				Details:     []byte("{}"),
+			})
+			if err != nil {
+				slog.Error("activity: failed to record criteria approval",
+					"issue_id", issue.ID, "error", err)
+			} else {
+				publishActivityEvent(bus, e, activity)
+			}
+		}
 	})
 
 	// task:completed — record "task_completed" activity

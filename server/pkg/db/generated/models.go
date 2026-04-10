@@ -158,26 +158,29 @@ type InboxItem struct {
 }
 
 type Issue struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Title              string             `json:"title"`
-	Description        pgtype.Text        `json:"description"`
-	Status             string             `json:"status"`
-	Priority           string             `json:"priority"`
-	AssigneeType       pgtype.Text        `json:"assignee_type"`
-	AssigneeID         pgtype.UUID        `json:"assignee_id"`
-	CreatorType        string             `json:"creator_type"`
-	CreatorID          pgtype.UUID        `json:"creator_id"`
-	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
-	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
-	ContextRefs        []byte             `json:"context_refs"`
-	Position           float64            `json:"position"`
-	DueDate            pgtype.Timestamptz `json:"due_date"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	Number             int32              `json:"number"`
-	LinkedBranch       pgtype.Text        `json:"linked_branch"`
-	LinkedPrUrl        pgtype.Text        `json:"linked_pr_url"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	Title                 string             `json:"title"`
+	Description           pgtype.Text        `json:"description"`
+	Status                string             `json:"status"`
+	Priority              string             `json:"priority"`
+	AssigneeType          pgtype.Text        `json:"assignee_type"`
+	AssigneeID            pgtype.UUID        `json:"assignee_id"`
+	CreatorType           string             `json:"creator_type"`
+	CreatorID             pgtype.UUID        `json:"creator_id"`
+	ParentIssueID         pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria    []byte             `json:"acceptance_criteria"`
+	ContextRefs           []byte             `json:"context_refs"`
+	Position              float64            `json:"position"`
+	DueDate               pgtype.Timestamptz `json:"due_date"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	Number                int32              `json:"number"`
+	VerifierAgentID       pgtype.UUID        `json:"verifier_agent_id"`
+	LinkedBranch          pgtype.Text        `json:"linked_branch"`
+	LinkedPrUrl           pgtype.Text        `json:"linked_pr_url"`
+	MaxVerificationRounds pgtype.Int4        `json:"max_verification_rounds"`
+	CriteriaStatus        pgtype.Text        `json:"criteria_status"`
 }
 
 type IssueDependency struct {

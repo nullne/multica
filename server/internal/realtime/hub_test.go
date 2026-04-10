@@ -71,6 +71,57 @@ func totalClients(hub *Hub) int {
 	return count
 }
 
+// connectWSAs connects a WebSocket client with a specific user and workspace.
+func connectWSAs(t *testing.T, server *httptest.Server, userID, workspaceID string) *websocket.Conn {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": userID,
+	})
+	signed, err := token.SignedString(auth.JWTSecret())
+	if err != nil {
+		t.Fatalf("failed to sign test JWT: %v", err)
+	}
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws?token=" + signed + "&workspace_id=" + workspaceID
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to connect WebSocket: %v", err)
+	}
+	return conn
+}
+
+func TestHub_SendToUserInWorkspace(t *testing.T) {
+	hub, server := newTestHub(t)
+	defer server.Close()
+
+	// Same user connected to two different workspaces
+	connWS1 := connectWSAs(t, server, "user-a", "workspace-1")
+	defer connWS1.Close()
+	connWS2 := connectWSAs(t, server, "user-a", "workspace-2")
+	defer connWS2.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	msg := []byte(`{"type":"inbox:new","payload":{"item":{"id":"1"}}}`)
+	hub.SendToUserInWorkspace("user-a", "workspace-1", msg)
+
+	// workspace-1 connection should receive the message
+	connWS1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, received, err := connWS1.ReadMessage()
+	if err != nil {
+		t.Fatalf("workspace-1 client should receive message: %v", err)
+	}
+	if string(received) != string(msg) {
+		t.Fatalf("workspace-1: expected %s, got %s", msg, received)
+	}
+
+	// workspace-2 connection should NOT receive the message
+	connWS2.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	_, _, err = connWS2.ReadMessage()
+	if err == nil {
+		t.Fatal("workspace-2 client should NOT have received the message")
+	}
+}
+
 func TestHub_ClientRegistration(t *testing.T) {
 	hub, server := newTestHub(t)
 	defer server.Close()

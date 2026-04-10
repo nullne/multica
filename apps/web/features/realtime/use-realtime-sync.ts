@@ -110,7 +110,10 @@ export function useRealtimeSync(ws: WSClient | null) {
 
     const unsubInboxNew = ws.on("inbox:new", (p) => {
       const { item } = p as InboxNewPayload;
-      if (item) useInboxStore.getState().addItem(item);
+      if (!item) return;
+      const currentWsId = useWorkspaceStore.getState().workspace?.id;
+      if (item.workspace_id && item.workspace_id !== currentWsId) return;
+      useInboxStore.getState().addItem(item);
     });
 
     // --- Side-effect handlers (toast, navigation) ---

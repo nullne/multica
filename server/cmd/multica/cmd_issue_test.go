@@ -137,6 +137,30 @@ func TestResolveAssignee(t *testing.T) {
 	})
 }
 
+func TestUnescapeContent(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain text", "hello world", "hello world"},
+		{"literal newline", `line1\nline2`, "line1\nline2"},
+		{"literal tab", `col1\tcol2`, "col1\tcol2"},
+		{"multiple newlines", `a\n\nb`, "a\n\nb"},
+		{"mixed", `first\nsecond\tthird`, "first\nsecond\tthird"},
+		{"no escapes", "already fine\nwith real newlines", "already fine\nwith real newlines"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := unescapeContent(tt.input)
+			if got != tt.want {
+				t.Errorf("unescapeContent(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidIssueStatuses(t *testing.T) {
 	expected := map[string]bool{
 		"backlog":     true,

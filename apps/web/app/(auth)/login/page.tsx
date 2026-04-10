@@ -61,7 +61,7 @@ function LoginPageContent() {
   }, [isLoading, user, router, searchParams]);
 
   const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(process.env.NEXT_PUBLIC_DEV_EMAIL ?? "");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
