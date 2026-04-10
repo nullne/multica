@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearGitHubInstallation = `-- name: ClearGitHubInstallation :one
+UPDATE workspace SET github_installation_id = NULL, updated_at = now()
+WHERE id = $1
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id
+`
+
+func (q *Queries) ClearGitHubInstallation(ctx context.Context, id pgtype.UUID) (Workspace, error) {
+	row := q.db.QueryRow(ctx, clearGitHubInstallation, id)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Context,
+		&i.Repos,
+		&i.IssuePrefix,
+		&i.IssueCounter,
+		&i.GithubInstallationID,
+	)
+	return i, err
+}
+
 const createWorkspace = `-- name: CreateWorkspace :one
 INSERT INTO workspace (name, slug, description, context, issue_prefix)
 VALUES ($1, $2, $3, $4, $5)
@@ -33,32 +59,6 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		arg.Context,
 		arg.IssuePrefix,
 	)
-	var i Workspace
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Slug,
-		&i.Description,
-		&i.Settings,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Context,
-		&i.Repos,
-		&i.IssuePrefix,
-		&i.IssueCounter,
-		&i.GithubInstallationID,
-	)
-	return i, err
-}
-
-const clearGitHubInstallation = `-- name: ClearGitHubInstallation :one
-UPDATE workspace SET github_installation_id = NULL, updated_at = now()
-WHERE id = $1
-RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id
-`
-
-func (q *Queries) ClearGitHubInstallation(ctx context.Context, id pgtype.UUID) (Workspace, error) {
-	row := q.db.QueryRow(ctx, clearGitHubInstallation, id)
 	var i Workspace
 	err := row.Scan(
 		&i.ID,

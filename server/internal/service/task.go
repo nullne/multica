@@ -90,7 +90,9 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 		issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" &&
 		issue.VerifierAgentID.Valid &&
 		util.UUIDToString(issue.VerifierAgentID) != util.UUIDToString(issue.AssigneeID) {
-		if criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria); len(criteria) == 0 {
+		criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria)
+		if len(criteria) == 0 || !issue.CriteriaStatus.Valid {
+			// No criteria yet — enqueue criteria generation to verifier.
 			contextData := buildVerificationTaskContext(verificationTaskContext{
 				Flow:            verificationFlowName,
 				Role:            taskRoleCriteria,
@@ -100,19 +102,43 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 			})
 			return s.enqueueTaskToAgent(ctx, issue, issue.VerifierAgentID, commentID, contextData, "criteria task enqueued")
 		}
+		if issue.CriteriaStatus.String == "pending" {
+			// Criteria exist but not yet approved — wait for human approval.
+			slog.Info("criteria pending approval, not enqueueing executor", "issue_id", util.UUIDToString(issue.ID))
+			return db.AgentTaskQueue{}, nil
+		}
 
+		// Criteria approved — enqueue executor.
 		contextData := buildVerificationTaskContext(verificationTaskContext{
 			Flow:               verificationFlowName,
 			Role:               taskRoleExecutor,
 			Round:              1,
 			ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
 			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
-			AcceptanceCriteria: decodeAcceptanceCriteria(issue.AcceptanceCriteria),
+			AcceptanceCriteria: criteria,
 		})
 		return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, contextData, "executor task enqueued")
 	}
 
 	return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, nil, "task enqueued")
+}
+
+// EnqueueExecutorForApprovedCriteria enqueues the executor task after criteria
+// have been approved by a human. Called from the criteria approve handler.
+func (s *TaskService) EnqueueExecutorForApprovedCriteria(ctx context.Context, issue db.Issue) (db.AgentTaskQueue, error) {
+	if !issue.AssigneeID.Valid || !issue.VerifierAgentID.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("issue must have both assignee and verifier")
+	}
+	criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria)
+	contextData := buildVerificationTaskContext(verificationTaskContext{
+		Flow:               verificationFlowName,
+		Role:               taskRoleExecutor,
+		Round:              1,
+		ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
+		VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
+		AcceptanceCriteria: criteria,
+	})
+	return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, pgtype.UUID{}, contextData, "executor task enqueued")
 }
 
 // EnqueueTaskForMention creates a queued task for a mentioned agent on an issue.
@@ -332,6 +358,7 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 		issue, err := s.Queries.UpdateIssueAcceptanceCriteria(ctx, db.UpdateIssueAcceptanceCriteriaParams{
 			ID:                 task.IssueID,
 			AcceptanceCriteria: criteriaJSON,
+			CriteriaStatus:    pgtype.Text{String: "pending", Valid: true},
 		})
 		if err != nil {
 			return fmt.Errorf("save acceptance criteria: %w", err)
@@ -339,23 +366,13 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 
 		comment := stripMachineBlocks(output)
 		if comment == "" {
-			comment = "验收标准已确认。"
+			comment = "验收标准已起草，等待确认。"
 		}
 		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), "comment", task.TriggerCommentID)
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("验收标准已生成，请在 issue 详情页确认后继续。"), "system", task.TriggerCommentID)
 
-		if !issue.AssigneeID.Valid {
-			return nil
-		}
-		nextCtx := buildVerificationTaskContext(verificationTaskContext{
-			Flow:               verificationFlowName,
-			Role:               taskRoleExecutor,
-			Round:              maxRound(taskCtx.Round),
-			ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
-			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
-			AcceptanceCriteria: criteria,
-		})
-		_, err = s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, pgtype.UUID{}, nextCtx, "executor task enqueued")
-		return err
+		s.broadcastIssueUpdated(issue)
+		return nil
 
 	case taskRoleExecutor, taskRoleRework:
 		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
@@ -429,8 +446,12 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(feedback), "comment", task.TriggerCommentID)
 
 			round := maxRound(taskCtx.Round)
-			if round >= defaultVerificationRounds {
-				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(fmt.Sprintf("自动修复达到最大轮次（%d），已停止自动回流。", defaultVerificationRounds)), "system", task.TriggerCommentID)
+			maxRounds := defaultVerificationRounds
+			if issue.MaxVerificationRounds.Valid && issue.MaxVerificationRounds.Int32 > 0 {
+				maxRounds = int(issue.MaxVerificationRounds.Int32)
+			}
+			if round >= maxRounds {
+				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(fmt.Sprintf("自动修复达到最大轮次（%d），已停止自动回流。", maxRounds)), "system", task.TriggerCommentID)
 				return nil
 			}
 

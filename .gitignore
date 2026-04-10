@@ -46,6 +46,9 @@ _features/
 *.app
 server/server
 
+# pnpm store (created by Docker dev workflow)
+.pnpm-store/
+
 # deployment data
 data/
 secrets/

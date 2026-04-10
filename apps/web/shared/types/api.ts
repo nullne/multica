@@ -9,6 +9,8 @@ export interface CreateIssueRequest {
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType;
   assignee_id?: string;
+  verifier_agent_id?: string;
+  max_verification_rounds?: number;
   parent_issue_id?: string;
   due_date?: string;
 }
@@ -20,6 +22,8 @@ export interface UpdateIssueRequest {
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
+  verifier_agent_id?: string | null;
+  max_verification_rounds?: number | null;
   position?: number;
   due_date?: string | null;
 }

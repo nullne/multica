@@ -19,9 +19,10 @@ WHERE id = $1 AND workspace_id = $2;
 INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
-    verifier_agent_id, parent_issue_id, position, due_date, number
+    verifier_agent_id, parent_issue_id, position, due_date, number,
+    max_verification_rounds
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
 ) RETURNING *;
 
 -- name: GetIssueByNumber :one
@@ -39,6 +40,7 @@ UPDATE issue SET
     verifier_agent_id = sqlc.narg('verifier_agent_id'),
     position = COALESCE(sqlc.narg('position'), position),
     due_date = sqlc.narg('due_date'),
+    max_verification_rounds = sqlc.narg('max_verification_rounds'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -46,6 +48,14 @@ RETURNING *;
 -- name: UpdateIssueAcceptanceCriteria :one
 UPDATE issue SET
     acceptance_criteria = $2,
+    criteria_status = sqlc.narg('criteria_status'),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateIssueCriteriaStatus :one
+UPDATE issue SET
+    criteria_status = sqlc.narg('criteria_status'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
