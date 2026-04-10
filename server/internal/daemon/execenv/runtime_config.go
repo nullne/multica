@@ -64,6 +64,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue comment add <issue-id> --content \"...\" [--parent <comment-id>]` — Post a comment (use --parent to reply to a specific comment)\n")
 	b.WriteString("- `multica issue status <id> <status>` — Update issue status (todo, in_progress, in_review, done, blocked)\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X] [--priority X]` — Update issue fields\n\n")
+	b.WriteString("### Escaping\n\n")
+	b.WriteString("When comment or description text contains special characters (`$`, backticks, quotes, backslashes), pass `--content -` or `--description -` to read from stdin via a heredoc to avoid shell escaping issues:\n\n")
+	b.WriteString("```\ncat <<'CONTENT_EOF' | multica issue comment add <issue-id> --content -\nYour content here — no escaping needed.\nCONTENT_EOF\n```\n\n")
 
 	// Inject available repositories section.
 	if len(ctx.Repos) > 0 {
