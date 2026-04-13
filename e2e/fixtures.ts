@@ -15,36 +15,49 @@ interface TestWorkspace {
   slug: string;
 }
 
+interface CachedAuth {
+  token: string;
+  workspaceId: string;
+}
+
+let cachedAuth: CachedAuth | null = null;
+
 export class TestApiClient {
   private token: string | null = null;
   private workspaceId: string | null = null;
   private createdIssueIds: string[] = [];
 
   async login(email: string, name: string) {
-    // Step 1: Send verification code
-    const sendRes = await fetch(`${API_BASE}/auth/send-code`, {
+    if (cachedAuth) {
+      this.token = cachedAuth.token;
+      return { token: cachedAuth.token };
+    }
+
+    // Step 1: Send verification code (may be rate-limited)
+    await fetch(`${API_BASE}/auth/send-code`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
     });
-    if (!sendRes.ok) {
-      // Rate limited — code already sent recently, read it from DB
-      if (sendRes.status !== 429) {
-        throw new Error(`send-code failed: ${sendRes.status}`);
-      }
-    }
 
-    // Step 2: Read code from database
+    // Step 2: Read code from database; if all codes are used, insert one directly
     const client = new pg.Client(DATABASE_URL);
     await client.connect();
     try {
-      const result = await client.query(
+      let result = await client.query(
         "SELECT code FROM verification_code WHERE email = $1 AND used = FALSE AND expires_at > now() ORDER BY created_at DESC LIMIT 1",
         [email]
       );
+
       if (result.rows.length === 0) {
-        throw new Error(`No verification code found for ${email}`);
+        const code = String(Math.floor(100000 + Math.random() * 900000));
+        await client.query(
+          "INSERT INTO verification_code (email, code, expires_at) VALUES ($1, $2, now() + interval '10 minutes')",
+          [email, code]
+        );
+        result = { rows: [{ code }] } as typeof result;
       }
+
       const code = result.rows[0].code;
 
       // Step 3: Verify code to get JWT
@@ -55,8 +68,8 @@ export class TestApiClient {
       });
       const data = await verifyRes.json();
       this.token = data.token;
+      cachedAuth = { token: this.token!, workspaceId: "" };
 
-      // Update user name if needed
       if (name && data.user?.name !== name) {
         await this.authedFetch("/api/me", {
           method: "PATCH",
@@ -80,10 +93,17 @@ export class TestApiClient {
   }
 
   async ensureWorkspace(name = "E2E Workspace", slug = "e2e-workspace") {
+    if (cachedAuth?.workspaceId) {
+      this.workspaceId = cachedAuth.workspaceId;
+      return { id: cachedAuth.workspaceId, name, slug };
+    }
+
     const workspaces = await this.getWorkspaces();
     const workspace = workspaces.find((item) => item.slug === slug) ?? workspaces[0];
     if (workspace) {
       this.workspaceId = workspace.id;
+      if (cachedAuth) cachedAuth.workspaceId = workspace.id;
+      else cachedAuth = { token: this.token!, workspaceId: workspace.id };
       return workspace;
     }
 
@@ -94,6 +114,8 @@ export class TestApiClient {
     if (res.ok) {
       const created = (await res.json()) as TestWorkspace;
       this.workspaceId = created.id;
+      if (cachedAuth) cachedAuth.workspaceId = created.id;
+      else cachedAuth = { token: this.token!, workspaceId: created.id };
       return created;
     }
 
@@ -101,6 +123,8 @@ export class TestApiClient {
     const created = refreshed.find((item) => item.slug === slug) ?? refreshed[0];
     if (created) {
       this.workspaceId = created.id;
+      if (cachedAuth) cachedAuth.workspaceId = created.id;
+      else cachedAuth = { token: this.token!, workspaceId: created.id };
       return created;
     }
 

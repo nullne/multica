@@ -2,6 +2,7 @@
 
 .PHONY: help setup dev dev-local up down clean test \
         test-go test-ts test-e2e check \
+        test-docker test-e2e-docker test-go-docker test-ts-docker test-docker-clean \
         build build-backend build-frontend \
         daemon cli \
         db-up db-down migrate-up migrate-down sqlc \
@@ -44,6 +45,8 @@ MULTICA_ARGS ?= $(ARGS)
 COMPOSE      := docker compose
 DEV_COMPOSE  := $(COMPOSE) -f docker-compose.dev.yml
 PROD_COMPOSE := $(COMPOSE) --env-file $(ENV_FILE) -f docker-compose.prod.yml
+TEST_COMPOSE := $(COMPOSE) -f docker-compose.test.yml
+TEST_PROJECT := multica-test-$(shell basename $(CURDIR) | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
 
 define REQUIRE_ENV
 	@if [ ! -f "$(ENV_FILE)" ]; then \
@@ -100,9 +103,12 @@ up: ## Start production-like services via Docker (no hot-reload)
 	@echo ""
 	@echo "✓ Production stack running at http://localhost:$${LISTEN_PORT:-80}"
 
-down: ## Stop all services (dev and prod)
+down: ## Stop all services (dev, prod, and test)
 	@-$(DEV_COMPOSE) down 2>/dev/null
 	@-$(PROD_COMPOSE) down 2>/dev/null
+	@-COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) \
+		--profile e2e --profile go-test --profile frontend-test \
+		down 2>/dev/null
 	@-lsof -ti:$(PORT) | xargs kill -9 2>/dev/null
 	@-lsof -ti:$(FRONTEND_PORT) | xargs kill -9 2>/dev/null
 	@echo "✓ All services stopped."
@@ -111,6 +117,9 @@ clean: ## Stop services and destroy ALL local state (volumes, caches, build arti
 	@-$(DEV_COMPOSE) down -v 2>/dev/null
 	@-$(PROD_COMPOSE) down -v 2>/dev/null
 	@-$(COMPOSE) down -v 2>/dev/null
+	@-COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) \
+		--profile e2e --profile go-test --profile frontend-test \
+		down -v 2>/dev/null
 	@-lsof -ti:$(PORT) | xargs kill -9 2>/dev/null
 	@-lsof -ti:$(FRONTEND_PORT) | xargs kill -9 2>/dev/null
 	@rm -rf server/bin server/tmp
@@ -141,6 +150,35 @@ test-e2e: ## Run E2E tests only (requires backend + frontend running)
 
 check: ## Run typecheck only (no tests)
 	@pnpm typecheck
+
+# ---------------------------------------------------------------------------
+# Docker-based testing (no host ports, safe for parallel runs)
+# ---------------------------------------------------------------------------
+
+test-docker: test-ts-docker test-go-docker test-e2e-docker ## Run full test suite in Docker (no host ports)
+
+test-e2e-docker: ## Run E2E tests in Docker (no host ports)
+	@EXIT=0; \
+	COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) --profile e2e run --rm e2e || EXIT=$$?; \
+	COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) --profile e2e down; \
+	exit $$EXIT
+
+test-go-docker: ## Run Go tests in Docker (no host ports)
+	@EXIT=0; \
+	COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) --profile go-test run --rm go-test || EXIT=$$?; \
+	COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) --profile go-test down; \
+	exit $$EXIT
+
+test-ts-docker: ## Run frontend tests in Docker (no host ports)
+	@EXIT=0; \
+	COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) --profile frontend-test run --rm frontend-test || EXIT=$$?; \
+	COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) --profile frontend-test down; \
+	exit $$EXIT
+
+test-docker-clean: ## Remove all Docker test volumes and containers
+	@COMPOSE_PROJECT_NAME=$(TEST_PROJECT) $(TEST_COMPOSE) \
+		--profile e2e --profile go-test --profile frontend-test \
+		down -v
 
 # ---------------------------------------------------------------------------
 # Build

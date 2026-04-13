@@ -8,7 +8,7 @@ test.describe("Settings", () => {
     await loginAsDefault(page);
 
     // Read the current workspace name from the sidebar
-    const sidebarName = page.locator("aside button").first();
+    const sidebarName = page.locator("[data-slot='sidebar'] button").first();
     const originalName = await sidebarName.innerText();
 
     // Navigate to settings

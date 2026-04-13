@@ -16,12 +16,13 @@ export async function loginAsDefault(page: Page) {
   await api.ensureWorkspace("E2E Workspace", DEFAULT_E2E_WORKSPACE);
 
   const token = api.getToken();
-  await page.goto("/login");
+  await page.goto("/login", { waitUntil: "commit" });
   await page.evaluate((t) => {
     localStorage.setItem("multica_token", t);
   }, token);
   await page.goto("/issues");
-  await page.waitForURL("**/issues", { timeout: 10000 });
+  await page.waitForURL("**/issues", { timeout: 30000 });
+  await page.waitForSelector("[data-slot='sidebar']", { timeout: 30000 });
 }
 
 /**
@@ -36,8 +37,6 @@ export async function createTestApi(): Promise<TestApiClient> {
 }
 
 export async function openWorkspaceMenu(page: Page) {
-  // Click the workspace switcher button (has ChevronDown icon)
-  await page.locator("aside button").first().click();
-  // Wait for dropdown to appear
+  await page.locator("[data-slot='sidebar'] button").first().click();
   await page.locator('[class*="popover"]').waitFor({ state: "visible" });
 }

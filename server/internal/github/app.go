@@ -117,8 +117,9 @@ func (a *App) createJWT() (string, error) {
 // InstallationToken is the response from GitHub when creating an
 // installation access token.
 type InstallationToken struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Token       string            `json:"token"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+	Permissions map[string]string `json:"permissions,omitempty"`
 }
 
 // tokenRequest is the request body for creating an installation token.
@@ -172,6 +173,24 @@ func (a *App) CreateInstallationToken(ctx context.Context, installationID int64,
 	if err := json.Unmarshal(respBody, &token); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+
+	// Log granted vs requested permissions to surface installation-level
+	// approval gaps (e.g. app updated permissions but installation hasn't
+	// approved yet).
+	for perm, requested := range permissions {
+		granted, ok := token.Permissions[perm]
+		if !ok {
+			slog.Warn("github: requested permission not granted",
+				"permission", perm, "requested", requested, "installation_id", installationID)
+		} else if granted != requested {
+			slog.Warn("github: permission level mismatch",
+				"permission", perm, "requested", requested, "granted", granted, "installation_id", installationID)
+		}
+	}
+	if len(token.Permissions) > 0 {
+		slog.Info("github: installation token created", "installation_id", installationID, "permissions", token.Permissions)
+	}
+
 	return &token, nil
 }
 

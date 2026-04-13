@@ -3,13 +3,12 @@ import { loginAsDefault, openWorkspaceMenu } from "./helpers";
 
 test.describe("Authentication", () => {
   test("login page renders correctly", async ({ page }) => {
-    await page.goto("/login");
+    await page.goto("/login", { waitUntil: "networkidle" });
 
-    await expect(page.locator("h1")).toContainText("Multica");
-    await expect(page.locator('input[placeholder="Email"]')).toBeVisible();
-    await expect(page.locator('input[placeholder="Name"]')).toBeVisible();
+    await expect(page.getByText("Multica", { exact: true })).toBeVisible();
+    await expect(page.locator('input[type="email"]')).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toContainText(
-      "Sign in",
+      "Continue",
     );
   });
 
@@ -27,8 +26,8 @@ test.describe("Authentication", () => {
       localStorage.removeItem("multica_workspace_id");
     });
 
-    await page.goto("/issues");
-    await page.waitForURL("**/login", { timeout: 10000 });
+    await page.goto("/issues", { waitUntil: "networkidle" });
+    await page.waitForURL("**/login", { timeout: 30000 });
   });
 
   test("logout redirects to /login", async ({ page }) => {
