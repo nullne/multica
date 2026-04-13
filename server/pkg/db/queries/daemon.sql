@@ -77,6 +77,6 @@ WHERE daemon_ref = $1;
 -- name: MarkStaleDaemonsOffline :many
 UPDATE daemon
 SET status = 'offline', updated_at = now()
-WHERE status = 'online'
+WHERE status IN ('online', 'updating')
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
 RETURNING id, workspace_id;

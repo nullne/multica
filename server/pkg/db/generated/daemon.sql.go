@@ -116,7 +116,7 @@ func (q *Queries) ListOnlineDaemons(ctx context.Context, workspaceID pgtype.UUID
 const markStaleDaemonsOffline = `-- name: MarkStaleDaemonsOffline :many
 UPDATE daemon
 SET status = 'offline', updated_at = now()
-WHERE status = 'online'
+WHERE status IN ('online', 'updating')
   AND last_seen_at < now() - make_interval(secs => $1::double precision)
 RETURNING id, workspace_id
 `
