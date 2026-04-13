@@ -59,6 +59,21 @@ UPDATE daemon SET
 WHERE id = $1
 RETURNING *;
 
+-- name: SetDaemonStatus :exec
+UPDATE daemon SET status = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: SetRuntimeStatus :exec
+UPDATE agent_runtime SET status = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: SetDaemonAndRuntimesUpdating :exec
+WITH updated_daemon AS (
+    UPDATE daemon SET status = 'updating', updated_at = now() WHERE id = $1
+)
+UPDATE agent_runtime SET status = 'updating', updated_at = now()
+WHERE daemon_ref = $1;
+
 -- name: MarkStaleDaemonsOffline :many
 UPDATE daemon
 SET status = 'offline', updated_at = now()

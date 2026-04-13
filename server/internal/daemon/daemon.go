@@ -42,6 +42,7 @@ type Daemon struct {
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
 	restartBinary string             // non-empty after a successful update; path to the new binary
 	updating      atomic.Bool        // prevents concurrent update attempts
+	reconciling   atomic.Bool        // prevents concurrent reconcileProviders
 }
 
 // New creates a new Daemon instance.
@@ -704,8 +705,12 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 				}
 
 				// Auto-install newly enabled providers (same cadence as auth check).
-				if refreshAuth && len(resp.ProviderConfig) > 0 {
-					d.reconcileProviders(ctx, resp.ProviderConfig)
+				// Run async to avoid blocking heartbeat loop (installs can take minutes).
+				if refreshAuth && len(resp.ProviderConfig) > 0 && d.reconciling.CompareAndSwap(false, true) {
+					go func() {
+						defer d.reconciling.Store(false)
+						d.reconcileProviders(ctx, resp.ProviderConfig)
+					}()
 				}
 
 				continue
@@ -1010,6 +1015,15 @@ func (d *Daemon) pollLoop(ctx context.Context) error {
 			}
 			return ctx.Err()
 		default:
+		}
+
+		// Skip polling while a CLI update is in progress.
+		if d.updating.Load() || d.reconciling.Load() {
+			if err := sleepWithContext(ctx, d.cfg.PollInterval); err != nil {
+				wg.Wait()
+				return err
+			}
+			continue
 		}
 
 		runtimeIDs := d.allRuntimeIDs()

@@ -175,7 +175,7 @@ export function DaemonDetail({
         <div className="flex min-w-0 items-center gap-2">
           <div
             className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
-              daemon.status === "online" ? "bg-success/10" : "bg-muted"
+              daemon.status === "online" ? "bg-success/10" : daemon.status === "updating" ? "bg-info/10" : "bg-muted"
             }`}
           >
             <Monitor className="h-3.5 w-3.5" />

@@ -47,7 +47,7 @@ function DaemonListItem({
     >
       <div
         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-          daemon.status === "online" ? "bg-success/10" : "bg-muted"
+          daemon.status === "online" ? "bg-success/10" : daemon.status === "updating" ? "bg-info/10" : "bg-muted"
         }`}
       >
         <Monitor className="h-3.5 w-3.5" />
@@ -80,7 +80,7 @@ function DaemonListItem({
       </div>
       <span
         className={`h-2 w-2 shrink-0 rounded-full ${
-          daemon.status === "online" ? "bg-success" : "bg-muted-foreground/40"
+          daemon.status === "online" ? "bg-success" : daemon.status === "updating" ? "bg-info animate-pulse" : "bg-muted-foreground/40"
         }`}
       />
     </button>

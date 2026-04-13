@@ -159,6 +159,19 @@ func (q *Queries) SetDaemonAndRuntimesOffline(ctx context.Context, daemonRef pgt
 	return err
 }
 
+const setDaemonAndRuntimesUpdating = `-- name: SetDaemonAndRuntimesUpdating :exec
+WITH updated_daemon AS (
+    UPDATE daemon SET status = 'updating', updated_at = now() WHERE id = $1
+)
+UPDATE agent_runtime SET status = 'updating', updated_at = now()
+WHERE daemon_ref = $1
+`
+
+func (q *Queries) SetDaemonAndRuntimesUpdating(ctx context.Context, daemonRef pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, setDaemonAndRuntimesUpdating, daemonRef)
+	return err
+}
+
 const setDaemonOffline = `-- name: SetDaemonOffline :exec
 UPDATE daemon
 SET status = 'offline', updated_at = now()
@@ -167,6 +180,36 @@ WHERE id = $1
 
 func (q *Queries) SetDaemonOffline(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, setDaemonOffline, id)
+	return err
+}
+
+const setDaemonStatus = `-- name: SetDaemonStatus :exec
+UPDATE daemon SET status = $2, updated_at = now()
+WHERE id = $1
+`
+
+type SetDaemonStatusParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Status string      `json:"status"`
+}
+
+func (q *Queries) SetDaemonStatus(ctx context.Context, arg SetDaemonStatusParams) error {
+	_, err := q.db.Exec(ctx, setDaemonStatus, arg.ID, arg.Status)
+	return err
+}
+
+const setRuntimeStatus = `-- name: SetRuntimeStatus :exec
+UPDATE agent_runtime SET status = $2, updated_at = now()
+WHERE id = $1
+`
+
+type SetRuntimeStatusParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Status string      `json:"status"`
+}
+
+func (q *Queries) SetRuntimeStatus(ctx context.Context, arg SetRuntimeStatusParams) error {
+	_, err := q.db.Exec(ctx, setRuntimeStatus, arg.ID, arg.Status)
 	return err
 }
 
