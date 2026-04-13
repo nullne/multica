@@ -132,7 +132,7 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 		)
 		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
 		RETURNING id
-	`, workspaceID, "Integration Test Runtime", "integration_test_runtime", "Integration test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "Integration Test Runtime", "codex", "Integration test runtime").Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 
