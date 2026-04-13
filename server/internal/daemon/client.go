@@ -139,9 +139,10 @@ func (c *Client) ReportUsage(ctx context.Context, runtimeID string, entries []ma
 
 // HeartbeatResponse contains the server's response to a heartbeat, including any pending actions.
 type HeartbeatResponse struct {
-	Status        string         `json:"status"`
-	PendingPing   *PendingPing   `json:"pending_ping,omitempty"`
-	PendingUpdate *PendingUpdate `json:"pending_update,omitempty"`
+	Status         string          `json:"status"`
+	PendingPing    *PendingPing    `json:"pending_ping,omitempty"`
+	PendingUpdate  *PendingUpdate  `json:"pending_update,omitempty"`   // legacy single update
+	PendingUpdates []PendingUpdate `json:"pending_updates,omitempty"`  // daemon-level batch
 }
 
 // PendingPing represents a ping test request from the server.
@@ -156,6 +157,18 @@ type PendingUpdate struct {
 	TargetVersion string `json:"target_version"`
 }
 
+// SendDaemonHeartbeat sends a single heartbeat for the daemon (covers all runtimes).
+func (c *Client) SendDaemonHeartbeat(ctx context.Context, daemonUUID string) (*HeartbeatResponse, error) {
+	var resp HeartbeatResponse
+	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]string{
+		"daemon_id": daemonUUID,
+	}, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// SendHeartbeat sends a per-runtime heartbeat (legacy).
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
 	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]string{
@@ -190,6 +203,14 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
 	return workspaces, nil
 }
 
+// DeregisterDaemon marks a daemon and all its runtimes as offline.
+func (c *Client) DeregisterDaemon(ctx context.Context, daemonUUID string) error {
+	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
+		"daemon_id": daemonUUID,
+	}, nil)
+}
+
+// Deregister marks runtimes as offline (legacy per-runtime path).
 func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
 	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
 		"runtime_ids": runtimeIDs,
@@ -203,8 +224,17 @@ type ProviderConfig struct {
 	TargetVersion string `json:"target_version,omitempty"`
 }
 
+// DaemonInfo holds the server-assigned daemon entity returned on registration.
+type DaemonInfo struct {
+	ID         string `json:"id"`
+	DaemonID   string `json:"daemon_id"`
+	Status     string `json:"status"`
+	CLIVersion string `json:"cli_version"`
+}
+
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
+	Daemon               *DaemonInfo                `json:"daemon,omitempty"`
 	Runtimes             []Runtime                  `json:"runtimes"`
 	Repos                []RepoData                 `json:"repos"`
 	ProviderConfig       map[string]ProviderConfig  `json:"provider_config,omitempty"`

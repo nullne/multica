@@ -231,8 +231,12 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				})
 			})
 
-			// Runtimes
-			r.Route("/api/runtimes", func(r chi.Router) {
+		// Daemons
+		r.Get("/api/daemons", h.ListDaemons)
+		r.Patch("/api/daemons/{daemonId}", h.UpdateDaemon)
+
+		// Runtimes
+		r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
 				r.Get("/{runtimeId}/usage", h.GetRuntimeUsage)
 				r.Get("/{runtimeId}/activity", h.GetRuntimeTaskActivity)

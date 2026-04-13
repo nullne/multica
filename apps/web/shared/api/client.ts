@@ -12,6 +12,7 @@ import type {
   UpdateAgentRequest,
   AgentTask,
   AgentRuntime,
+  Daemon,
   InboxItem,
   IssueSubscriber,
   Comment,
@@ -324,6 +325,17 @@ export class ApiClient {
 
   async restoreAgent(id: string): Promise<Agent> {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
+  }
+
+  async listDaemons(): Promise<Daemon[]> {
+    return this.fetch("/api/daemons");
+  }
+
+  async updateDaemon(daemonId: string, data: { labels: string[] }): Promise<Daemon> {
+    return this.fetch(`/api/daemons/${daemonId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
   }
 
   async listRuntimes(params?: { workspace_id?: string }): Promise<AgentRuntime[]> {

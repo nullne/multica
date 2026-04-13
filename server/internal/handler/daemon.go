@@ -56,7 +56,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the caller is a member of the target workspace.
 	if _, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found"); !ok {
 		return
 	}
@@ -67,7 +66,23 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
+	// Upsert the daemon entity first.
+	daemonMeta, _ := json.Marshal(map[string]any{"cli_version": req.CLIVersion})
+	daemon, err := h.Queries.UpsertDaemon(r.Context(), db.UpsertDaemonParams{
+		WorkspaceID: parseUUID(req.WorkspaceID),
+		DaemonID:    req.DaemonID,
+		Status:      "online",
+		CliVersion:  req.CLIVersion,
+		DeviceName:  req.DeviceName,
+		DeviceInfo:  req.DeviceName,
+		Metadata:    daemonMeta,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to register daemon: "+err.Error())
+		return
+	}
+
+	runtimeResp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
 	for _, runtime := range req.Runtimes {
 		provider := strings.TrimSpace(runtime.Type)
 		if provider == "" {
@@ -98,6 +113,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		registered, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
 			WorkspaceID: parseUUID(req.WorkspaceID),
 			DaemonID:    strToText(req.DaemonID),
+			DaemonRef:   daemon.ID,
 			Name:        name,
 			RuntimeMode: "local",
 			Provider:    provider,
@@ -109,16 +125,15 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
 			return
 		}
-		resp = append(resp, runtimeToResponse(registered))
+		runtimeResp = append(runtimeResp, runtimeToResponse(registered))
 	}
 
-	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "runtimes_count", len(resp))
+	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "daemon_uuid", uuidToString(daemon.ID), "runtimes_count", len(runtimeResp))
 
 	h.publish(protocol.EventDaemonRegister, req.WorkspaceID, "system", "", map[string]any{
-		"runtimes": resp,
+		"runtimes": runtimeResp,
 	})
 
-	// Include workspace repos so the daemon can cache them locally.
 	var repos []RepoData
 	if ws.Repos != nil {
 		json.Unmarshal(ws.Repos, &repos)
@@ -127,10 +142,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		repos = []RepoData{}
 	}
 
-	// Include workspace provider config so the daemon can auto-install
-	// missing CLIs and use workspace-level API keys.
 	ps := parseProviderSettings(ws.Settings)
-	// Send full (unredacted) config — the daemon needs actual API keys.
 	providerConfig := make(map[string]map[string]any)
 	if ps.Providers != nil {
 		for k, v := range ps.Providers {
@@ -143,60 +155,65 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"runtimes":        resp,
-		"repos":           repos,
-		"provider_config": providerConfig,
+		"daemon":               daemonToResponse(daemon),
+		"runtimes":             runtimeResp,
+		"repos":                repos,
+		"provider_config":      providerConfig,
 		"multica_target_version": ps.MulticaTargetVersion,
 	})
 }
 
-// DaemonDeregister marks runtimes as offline when the daemon shuts down.
+// DaemonDeregister marks a daemon and all its runtimes as offline.
 func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		RuntimeIDs []string `json:"runtime_ids"`
+		DaemonID   string   `json:"daemon_id"`
+		RuntimeIDs []string `json:"runtime_ids"` // deprecated: kept for backward compat
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if len(req.RuntimeIDs) == 0 {
-		writeError(w, http.StatusBadRequest, "runtime_ids is required")
+	affectedWorkspaces := make(map[string]bool)
+
+	// New path: daemon-level deregister.
+	if req.DaemonID != "" {
+		d, err := h.Queries.GetDaemon(r.Context(), parseUUID(req.DaemonID))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "daemon not found")
+			return
+		}
+		h.Queries.SetDaemonAndRuntimesOffline(r.Context(), parseUUID(req.DaemonID))
+		affectedWorkspaces[uuidToString(d.WorkspaceID)] = true
+		slog.Info("daemon deregistered", "daemon_id", req.DaemonID)
+	} else if len(req.RuntimeIDs) > 0 {
+		// Legacy path: per-runtime deregister.
+		for _, rid := range req.RuntimeIDs {
+			rt, err := h.Queries.GetAgentRuntime(r.Context(), parseUUID(rid))
+			if err != nil {
+				continue
+			}
+			h.Queries.SetAgentRuntimeOffline(r.Context(), parseUUID(rid))
+			affectedWorkspaces[uuidToString(rt.WorkspaceID)] = true
+		}
+		slog.Info("daemon deregistered (legacy)", "runtime_ids", req.RuntimeIDs)
+	} else {
+		writeError(w, http.StatusBadRequest, "daemon_id or runtime_ids is required")
 		return
 	}
 
-	// Track affected workspaces for WS notifications.
-	affectedWorkspaces := make(map[string]bool)
-
-	for _, rid := range req.RuntimeIDs {
-		// Look up the runtime to find its workspace.
-		rt, err := h.Queries.GetAgentRuntime(r.Context(), parseUUID(rid))
-		if err != nil {
-			slog.Warn("deregister: runtime not found", "runtime_id", rid, "error", err)
-			continue
-		}
-
-		if err := h.Queries.SetAgentRuntimeOffline(r.Context(), parseUUID(rid)); err != nil {
-			slog.Warn("deregister: failed to set offline", "runtime_id", rid, "error", err)
-			continue
-		}
-
-		affectedWorkspaces[uuidToString(rt.WorkspaceID)] = true
-	}
-
-	// Notify frontend clients so they re-fetch runtime list.
 	for wsID := range affectedWorkspaces {
 		h.publish(protocol.EventDaemonRegister, wsID, "system", "", map[string]any{
 			"action": "deregister",
 		})
 	}
 
-	slog.Info("daemon deregistered", "runtime_ids", req.RuntimeIDs)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 type DaemonHeartbeatRequest struct {
-	RuntimeID string `json:"runtime_id"`
+	DaemonID  string `json:"daemon_id"`
+	RuntimeID string `json:"runtime_id"` // deprecated: kept for backward compat
 }
 
 func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -206,8 +223,41 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// New path: daemon-level heartbeat (daemon_id is the daemon row UUID).
+	if req.DaemonID != "" {
+		_, err := h.Queries.UpdateDaemonHeartbeat(r.Context(), parseUUID(req.DaemonID))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "heartbeat failed")
+			return
+		}
+		h.Queries.UpdateRuntimesHeartbeatByDaemon(r.Context(), parseUUID(req.DaemonID))
+
+		slog.Debug("daemon heartbeat", "daemon_id", req.DaemonID)
+
+		resp := map[string]any{"status": "ok"}
+
+		if pending := h.PingStore.PopPending(req.DaemonID); pending != nil {
+			resp["pending_ping"] = map[string]string{"id": pending.ID}
+		}
+		if updates := h.UpdateStore.PopAllPending(req.DaemonID); len(updates) > 0 {
+			out := make([]map[string]string, len(updates))
+			for i, u := range updates {
+				out[i] = map[string]string{
+					"id":             u.ID,
+					"target":         u.Target,
+					"target_version": u.TargetVersion,
+				}
+			}
+			resp["pending_updates"] = out
+		}
+
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Legacy path: per-runtime heartbeat.
 	if req.RuntimeID == "" {
-		writeError(w, http.StatusBadRequest, "runtime_id is required")
+		writeError(w, http.StatusBadRequest, "daemon_id or runtime_id is required")
 		return
 	}
 
@@ -217,17 +267,12 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug("daemon heartbeat", "runtime_id", req.RuntimeID)
+	slog.Debug("daemon heartbeat (legacy)", "runtime_id", req.RuntimeID)
 
 	resp := map[string]any{"status": "ok"}
-
-	// Check for pending ping requests for this runtime.
 	if pending := h.PingStore.PopPending(req.RuntimeID); pending != nil {
 		resp["pending_ping"] = map[string]string{"id": pending.ID}
 	}
-
-	// Check for pending update requests for this runtime.
-	// Support both single update (backward-compat) and multi-target updates.
 	if pending := h.UpdateStore.PopPending(req.RuntimeID); pending != nil {
 		resp["pending_update"] = map[string]string{
 			"id":             pending.ID,

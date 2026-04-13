@@ -15,38 +15,27 @@ import (
 )
 
 type AgentResponse struct {
-	ID                 string          `json:"id"`
-	WorkspaceID        string          `json:"workspace_id"`
-	RuntimeID          string          `json:"runtime_id"`
-	Name               string          `json:"name"`
-	Description        string          `json:"description"`
-	Instructions       string          `json:"instructions"`
-	AvatarURL          *string         `json:"avatar_url"`
-	RuntimeMode        string          `json:"runtime_mode"`
-	RuntimeConfig      any             `json:"runtime_config"`
-	Visibility         string          `json:"visibility"`
-	Status             string          `json:"status"`
-	MaxConcurrentTasks int32           `json:"max_concurrent_tasks"`
-	OwnerID            *string         `json:"owner_id"`
-	Skills             []SkillResponse `json:"skills"`
-	Tools              any             `json:"tools"`
-	Triggers           any             `json:"triggers"`
-	GitHubCodeAccess   string          `json:"github_code_access"`
-	CreatedAt          string          `json:"created_at"`
-	UpdatedAt          string          `json:"updated_at"`
-	ArchivedAt         *string         `json:"archived_at"`
-	ArchivedBy         *string         `json:"archived_by"`
+	ID               string          `json:"id"`
+	WorkspaceID      string          `json:"workspace_id"`
+	Providers        []string        `json:"providers"`
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Instructions     string          `json:"instructions"`
+	AvatarURL        *string         `json:"avatar_url"`
+	Visibility       string          `json:"visibility"`
+	Status           string          `json:"status"`
+	OwnerID          *string         `json:"owner_id"`
+	Skills           []SkillResponse `json:"skills"`
+	Tools            any             `json:"tools"`
+	Triggers         any             `json:"triggers"`
+	GitHubCodeAccess string          `json:"github_code_access"`
+	CreatedAt        string          `json:"created_at"`
+	UpdatedAt        string          `json:"updated_at"`
+	ArchivedAt       *string         `json:"archived_at"`
+	ArchivedBy       *string         `json:"archived_by"`
 }
 
 func agentToResponse(a db.Agent) AgentResponse {
-	var rc any
-	if a.RuntimeConfig != nil {
-		json.Unmarshal(a.RuntimeConfig, &rc)
-	}
-	if rc == nil {
-		rc = map[string]any{}
-	}
-
 	var tools any
 	if a.Tools != nil {
 		json.Unmarshal(a.Tools, &tools)
@@ -63,28 +52,30 @@ func agentToResponse(a db.Agent) AgentResponse {
 		triggers = []any{}
 	}
 
+	providers := a.Providers
+	if providers == nil {
+		providers = []string{}
+	}
+
 	return AgentResponse{
-		ID:                 uuidToString(a.ID),
-		WorkspaceID:        uuidToString(a.WorkspaceID),
-		RuntimeID:          uuidToString(a.RuntimeID),
-		Name:               a.Name,
-		Description:        a.Description,
-		Instructions:       a.Instructions,
-		AvatarURL:          textToPtr(a.AvatarUrl),
-		RuntimeMode:        a.RuntimeMode,
-		RuntimeConfig:      rc,
-		Visibility:         a.Visibility,
-		Status:             a.Status,
-		MaxConcurrentTasks: a.MaxConcurrentTasks,
-		OwnerID:            uuidToPtr(a.OwnerID),
-		Skills:             []SkillResponse{},
-		Tools:              tools,
-		Triggers:           triggers,
-		GitHubCodeAccess:   a.GithubCodeAccess,
-		CreatedAt:          timestampToString(a.CreatedAt),
-		UpdatedAt:          timestampToString(a.UpdatedAt),
-		ArchivedAt:         timestampToPtr(a.ArchivedAt),
-		ArchivedBy:         uuidToPtr(a.ArchivedBy),
+		ID:               uuidToString(a.ID),
+		WorkspaceID:      uuidToString(a.WorkspaceID),
+		Providers:        providers,
+		Name:             a.Name,
+		Description:      a.Description,
+		Instructions:     a.Instructions,
+		AvatarURL:        textToPtr(a.AvatarUrl),
+		Visibility:       a.Visibility,
+		Status:           a.Status,
+		OwnerID:          uuidToPtr(a.OwnerID),
+		Skills:           []SkillResponse{},
+		Tools:            tools,
+		Triggers:         triggers,
+		GitHubCodeAccess: a.GithubCodeAccess,
+		CreatedAt:        timestampToString(a.CreatedAt),
+		UpdatedAt:        timestampToString(a.UpdatedAt),
+		ArchivedAt:       timestampToPtr(a.ArchivedAt),
+		ArchivedBy:       uuidToPtr(a.ArchivedBy),
 	}
 }
 
@@ -225,17 +216,16 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateAgentRequest struct {
-	Name               string  `json:"name"`
-	Description        string  `json:"description"`
-	Instructions       string  `json:"instructions"`
-	AvatarURL          *string `json:"avatar_url"`
-	RuntimeID          string  `json:"runtime_id"`
-	RuntimeConfig      any     `json:"runtime_config"`
-	Visibility         string  `json:"visibility"`
-	MaxConcurrentTasks int32   `json:"max_concurrent_tasks"`
-	Tools              any     `json:"tools"`
-	Triggers           any     `json:"triggers"`
-	GitHubCodeAccess   string  `json:"github_code_access"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description"`
+	Instructions     string   `json:"instructions"`
+	AvatarURL        *string  `json:"avatar_url"`
+	Providers        []string `json:"providers"`
+	Provider         string   `json:"provider"`  // deprecated: single provider, use providers
+	Visibility       string   `json:"visibility"`
+	Tools            any      `json:"tools"`
+	Triggers         any      `json:"triggers"`
+	GitHubCodeAccess string   `json:"github_code_access"`
 }
 
 func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
@@ -256,36 +246,25 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if req.RuntimeID == "" {
-		writeError(w, http.StatusBadRequest, "runtime_id is required")
+
+	providers := req.Providers
+	if len(providers) == 0 && req.Provider != "" {
+		providers = []string{req.Provider}
+	}
+	if len(providers) == 0 {
+		writeError(w, http.StatusBadRequest, "providers is required")
 		return
 	}
+
 	if req.Visibility == "" {
 		req.Visibility = "private"
 	}
-	if req.MaxConcurrentTasks == 0 {
-		req.MaxConcurrentTasks = 6
-	}
 	if req.GitHubCodeAccess == "" {
-		req.GitHubCodeAccess = "write"
+		req.GitHubCodeAccess = "read"
 	}
 	if !gh.ValidCodeAccess(req.GitHubCodeAccess) {
 		writeError(w, http.StatusBadRequest, "invalid github_code_access (must be read, write, or admin)")
 		return
-	}
-
-	runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
-		ID:          parseUUID(req.RuntimeID),
-		WorkspaceID: parseUUID(workspaceID),
-	})
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid runtime_id")
-		return
-	}
-
-	rc, _ := json.Marshal(req.RuntimeConfig)
-	if req.RuntimeConfig == nil {
-		rc = []byte("{}")
 	}
 
 	tools, _ := json.Marshal(req.Tools)
@@ -299,32 +278,27 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent, err := h.Queries.CreateAgent(r.Context(), db.CreateAgentParams{
-		WorkspaceID:        parseUUID(workspaceID),
-		Name:               req.Name,
-		Description:        req.Description,
-		Instructions:       req.Instructions,
-		AvatarUrl:          ptrToText(req.AvatarURL),
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      rc,
-		RuntimeID:          runtime.ID,
-		Visibility:         req.Visibility,
-		MaxConcurrentTasks: req.MaxConcurrentTasks,
-		OwnerID:            parseUUID(ownerID),
-		Tools:              tools,
-		Triggers:           triggers,
-		GithubCodeAccess:   req.GitHubCodeAccess,
+		WorkspaceID:      parseUUID(workspaceID),
+		Name:             req.Name,
+		Description:      req.Description,
+		Instructions:     req.Instructions,
+		AvatarUrl:        ptrToText(req.AvatarURL),
+		Providers:        providers,
+		Visibility:       req.Visibility,
+		OwnerID:          parseUUID(ownerID),
+		Tools:            tools,
+		Triggers:         triggers,
+		GithubCodeAccess: req.GitHubCodeAccess,
 	})
 	if err != nil {
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create agent: "+err.Error())
 		return
 	}
-	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(agent.ID), "name", agent.Name, "workspace_id", workspaceID)...)
+	slog.Info("agent created", append(logger.RequestAttrs(r), "agent_id", uuidToString(agent.ID), "name", agent.Name, "workspace_id", workspaceID, "providers", providers)...)
 
-	if runtime.Status == "online" {
-		h.TaskService.ReconcileAgentStatus(r.Context(), agent.ID)
-		agent, _ = h.Queries.GetAgent(r.Context(), agent.ID)
-	}
+	h.TaskService.ReconcileAgentStatus(r.Context(), agent.ID)
+	agent, _ = h.Queries.GetAgent(r.Context(), agent.ID)
 
 	resp := agentToResponse(agent)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
@@ -333,18 +307,16 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateAgentRequest struct {
-	Name               *string `json:"name"`
-	Description        *string `json:"description"`
-	Instructions       *string `json:"instructions"`
-	AvatarURL          *string `json:"avatar_url"`
-	RuntimeID          *string `json:"runtime_id"`
-	RuntimeConfig      any     `json:"runtime_config"`
-	Visibility         *string `json:"visibility"`
-	Status             *string `json:"status"`
-	MaxConcurrentTasks *int32  `json:"max_concurrent_tasks"`
-	Tools              any     `json:"tools"`
-	Triggers           any     `json:"triggers"`
-	GitHubCodeAccess   *string `json:"github_code_access"`
+	Name             *string  `json:"name"`
+	Description      *string  `json:"description"`
+	Instructions     *string  `json:"instructions"`
+	AvatarURL        *string  `json:"avatar_url"`
+	Providers        []string `json:"providers"`
+	Visibility       *string  `json:"visibility"`
+	Status           *string  `json:"status"`
+	Tools            any      `json:"tools"`
+	Triggers         any      `json:"triggers"`
+	GitHubCodeAccess *string  `json:"github_code_access"`
 }
 
 // canManageAgent checks whether the current user can update or archive an agent.
@@ -396,30 +368,14 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.AvatarURL != nil {
 		params.AvatarUrl = pgtype.Text{String: *req.AvatarURL, Valid: true}
 	}
-	if req.RuntimeConfig != nil {
-		rc, _ := json.Marshal(req.RuntimeConfig)
-		params.RuntimeConfig = rc
-	}
-	if req.RuntimeID != nil {
-		runtime, err := h.Queries.GetAgentRuntimeForWorkspace(r.Context(), db.GetAgentRuntimeForWorkspaceParams{
-			ID:          parseUUID(*req.RuntimeID),
-			WorkspaceID: agent.WorkspaceID,
-		})
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid runtime_id")
-			return
-		}
-		params.RuntimeID = runtime.ID
-		params.RuntimeMode = pgtype.Text{String: runtime.RuntimeMode, Valid: true}
+	if len(req.Providers) > 0 {
+		params.Providers = req.Providers
 	}
 	if req.Visibility != nil {
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
 	}
 	if req.Status != nil {
 		params.Status = pgtype.Text{String: *req.Status, Valid: true}
-	}
-	if req.MaxConcurrentTasks != nil {
-		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
 	}
 	if req.Tools != nil {
 		tools, _ := json.Marshal(req.Tools)

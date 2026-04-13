@@ -226,54 +226,31 @@ func (h *Handler) UpdateAllDaemons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get all runtimes for this workspace.
-	runtimes, err := h.Queries.ListAgentRuntimes(r.Context(), parseUUID(id))
+	daemons, err := h.Queries.ListOnlineDaemons(r.Context(), parseUUID(id))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list runtimes")
+		writeError(w, http.StatusInternalServerError, "failed to list daemons")
 		return
 	}
-
-	// Find unique online daemon_ids — we only need to update each daemon once.
-	// Pick one runtime per daemon to send the update through.
-	daemonRuntimes := make(map[string]string) // daemon_id -> runtime_id (first found)
-	for _, rt := range runtimes {
-		if rt.Status != "online" {
-			continue
-		}
-		daemonID := ""
-		if rt.DaemonID.Valid {
-			daemonID = rt.DaemonID.String
-		}
-		if daemonID == "" {
-			continue
-		}
-		if _, exists := daemonRuntimes[daemonID]; !exists {
-			daemonRuntimes[daemonID] = uuidToString(rt.ID)
-		}
-	}
-
-	if len(daemonRuntimes) == 0 {
+	if len(daemons) == 0 {
 		writeError(w, http.StatusBadRequest, "no online daemons found")
 		return
 	}
 
-	// Queue updates for each daemon.
 	var queued int
-	for _, runtimeID := range daemonRuntimes {
+	for _, d := range daemons {
+		daemonUUID := uuidToString(d.ID)
 		for _, target := range req.Targets {
-			update, err := h.UpdateStore.CreateWithTarget(runtimeID, target.Target, target.Version)
-			if err != nil {
-				slog.Debug("skip update", "runtime_id", runtimeID, "target", target.Target, "error", err)
+			if _, err := h.UpdateStore.CreateForDaemon(daemonUUID, target.Target, target.Version); err != nil {
+				slog.Debug("skip update", "daemon_id", daemonUUID, "target", target.Target, "error", err)
 				continue
 			}
-			_ = update
 			queued++
 		}
 	}
 
-	slog.Info("update all daemons", "workspace_id", id, "daemons", len(daemonRuntimes), "queued", queued)
+	slog.Info("update all daemons", "workspace_id", id, "daemons", len(daemons), "queued", queued)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"daemons_count": len(daemonRuntimes),
+		"daemons_count":  len(daemons),
 		"updates_queued": queued,
 	})
 }

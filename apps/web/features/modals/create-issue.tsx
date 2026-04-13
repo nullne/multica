@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, Check, ChevronRight, Maximize2, Minimize2, ShieldCheck, ShieldOff, UserMinus, X as XIcon } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, Cpu, Monitor, Maximize2, Minimize2, ShieldCheck, ShieldOff, UserMinus, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { IssueStatus, IssuePriority, IssueAssigneeType } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueAssigneeType, Daemon } from "@/shared/types";
 import {
   Dialog,
   DialogContent,
@@ -89,6 +89,24 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [maxVerificationRounds, setMaxVerificationRounds] = useState<number | undefined>(draft.maxVerificationRounds);
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // Dispatch hints (visible when assignee is an agent)
+  const [dispatchProvider, setDispatchProvider] = useState<string | undefined>();
+  const [dispatchDaemonId, setDispatchDaemonId] = useState<string | undefined>();
+  const [dispatchDaemonLabel, setDispatchDaemonLabel] = useState<string | undefined>();
+  const [daemons, setDaemons] = useState<Daemon[]>([]);
+
+  const selectedAgent = assigneeType === "agent" && assigneeId
+    ? agents.find((a) => a.id === assigneeId)
+    : null;
+
+  useEffect(() => {
+    if (selectedAgent) {
+      api.listDaemons().then(setDaemons).catch(() => {});
+    }
+  }, [selectedAgent]);
+
+  const allDaemonLabels = [...new Set(daemons.flatMap((d) => d.labels))].sort();
+
   // Assignee popover
   const [assigneeOpen, setAssigneeOpen] = useState(false);
   const [assigneeFilter, setAssigneeFilter] = useState("");
@@ -137,6 +155,9 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const updateAssignee = (type?: IssueAssigneeType, id?: string) => {
     setAssigneeType(type); setAssigneeId(id);
     setDraft({ assigneeType: type, assigneeId: id });
+    setDispatchProvider(undefined);
+    setDispatchDaemonId(undefined);
+    setDispatchDaemonLabel(undefined);
     if (type !== "agent" || !id) {
       setVerifierAgentId(undefined);
       setMaxVerificationRounds(undefined);
@@ -164,6 +185,9 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         verifier_agent_id: verifierAgentId,
         max_verification_rounds: maxVerificationRounds,
         due_date: dueDate || undefined,
+        dispatch_provider: dispatchProvider,
+        dispatch_daemon_id: dispatchDaemonId,
+        dispatch_daemon_label: dispatchDaemonLabel,
       });
       useIssueStore.getState().addIssue(issue);
       clearDraft();
@@ -407,6 +431,73 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
               </div>
             </PopoverContent>
           </Popover>
+
+          {/* Dispatch hints — only visible when assignee is an agent */}
+          {selectedAgent && (
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger render={
+                  <PillButton>
+                    <Cpu className="size-3.5 text-muted-foreground" />
+                    <span>{dispatchProvider ? dispatchProvider : "Any provider"}</span>
+                  </PillButton>
+                } />
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onClick={() => setDispatchProvider(undefined)}>
+                    Any provider
+                  </DropdownMenuItem>
+                  {(selectedAgent.providers ?? []).map((p) => (
+                    <DropdownMenuItem key={p} onClick={() => setDispatchProvider(p)}>
+                      <span className="capitalize">{p}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger render={
+                  <PillButton>
+                    <Monitor className="size-3.5 text-muted-foreground" />
+                    <span>
+                      {dispatchDaemonId
+                        ? (daemons.find((d) => d.id === dispatchDaemonId)?.device_name || "Daemon")
+                        : dispatchDaemonLabel
+                          ? `label: ${dispatchDaemonLabel}`
+                          : "Any daemon"}
+                    </span>
+                  </PillButton>
+                } />
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onClick={() => { setDispatchDaemonId(undefined); setDispatchDaemonLabel(undefined); }}>
+                    Any daemon
+                  </DropdownMenuItem>
+                  {daemons.length > 0 && (
+                    <>
+                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Daemons</div>
+                      {daemons.map((d) => (
+                        <DropdownMenuItem key={d.id} onClick={() => { setDispatchDaemonId(d.id); setDispatchDaemonLabel(undefined); }}>
+                          <span className={d.status === "online" ? "" : "text-muted-foreground"}>
+                            {d.device_name || d.daemon_id}
+                          </span>
+                          <span className={`ml-auto h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`} />
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
+                  {allDaemonLabels.length > 0 && (
+                    <>
+                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">By label</div>
+                      {allDaemonLabels.map((label) => (
+                        <DropdownMenuItem key={label} onClick={() => { setDispatchDaemonLabel(label); setDispatchDaemonId(undefined); }}>
+                          {label}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
 
           {/* Verifier — only visible when assignee is an agent */}
           {showVerifierOption && (

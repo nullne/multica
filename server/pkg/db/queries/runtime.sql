@@ -15,6 +15,7 @@ WHERE id = $1 AND workspace_id = $2;
 INSERT INTO agent_runtime (
     workspace_id,
     daemon_id,
+    daemon_ref,
     name,
     runtime_mode,
     provider,
@@ -22,9 +23,10 @@ INSERT INTO agent_runtime (
     device_info,
     metadata,
     last_seen_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
 ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
+    daemon_ref = EXCLUDED.daemon_ref,
     name = EXCLUDED.name,
     runtime_mode = EXCLUDED.runtime_mode,
     status = EXCLUDED.status,
@@ -44,6 +46,63 @@ RETURNING *;
 UPDATE agent_runtime
 SET status = 'offline', updated_at = now()
 WHERE id = $1;
+
+-- name: UpdateRuntimesHeartbeatByDaemon :exec
+UPDATE agent_runtime
+SET status = 'online', last_seen_at = now(), updated_at = now()
+WHERE daemon_ref = $1;
+
+-- name: SetRuntimesOfflineByDaemon :exec
+UPDATE agent_runtime
+SET status = 'offline', updated_at = now()
+WHERE daemon_ref = $1;
+
+-- name: ListRuntimesByDaemon :many
+SELECT * FROM agent_runtime
+WHERE daemon_ref = $1
+ORDER BY provider ASC;
+
+-- name: FindAvailableRuntimeForProvider :one
+-- Finds the best online runtime for a given workspace + provider,
+-- preferring runtimes with the fewest active tasks (simple load balancing).
+SELECT ar.* FROM agent_runtime ar
+WHERE ar.workspace_id = $1
+  AND ar.provider = $2
+  AND ar.status = 'online'
+ORDER BY (
+  SELECT COUNT(*) FROM agent_task_queue atq
+  WHERE atq.runtime_id = ar.id AND atq.status IN ('queued', 'dispatched', 'running')
+) ASC
+LIMIT 1;
+
+-- name: FindAvailableRuntimeForProviders :one
+-- Finds the best online runtime matching any of the given providers.
+SELECT ar.* FROM agent_runtime ar
+WHERE ar.workspace_id = $1
+  AND ar.provider = ANY(@providers::text[])
+  AND ar.status = 'online'
+ORDER BY (
+  SELECT COUNT(*) FROM agent_task_queue atq
+  WHERE atq.runtime_id = ar.id AND atq.status IN ('queued', 'dispatched', 'running')
+) ASC
+LIMIT 1;
+
+-- name: FindAvailableRuntimeConstrained :one
+-- Finds the best online runtime matching optional constraints (provider, daemon, label).
+-- All constraints are optional — pass NULL to skip.
+SELECT ar.* FROM agent_runtime ar
+LEFT JOIN daemon d ON ar.daemon_ref = d.id
+WHERE ar.workspace_id = $1
+  AND ar.status = 'online'
+  AND (sqlc.narg('provider')::text IS NULL OR ar.provider = sqlc.narg('provider'))
+  AND (sqlc.narg('providers')::text[] IS NULL OR ar.provider = ANY(sqlc.narg('providers')::text[]))
+  AND (sqlc.narg('daemon_id')::uuid IS NULL OR ar.daemon_ref = sqlc.narg('daemon_id'))
+  AND (sqlc.narg('daemon_label')::text IS NULL OR sqlc.narg('daemon_label') = ANY(d.labels))
+ORDER BY (
+  SELECT COUNT(*) FROM agent_task_queue atq
+  WHERE atq.runtime_id = ar.id AND atq.status IN ('queued', 'dispatched', 'running')
+) ASC
+LIMIT 1;
 
 -- name: MarkStaleRuntimesOffline :many
 UPDATE agent_runtime

@@ -25,6 +25,19 @@ const emptyConfig = (): ProviderConfig => ({
   target_version: "",
 });
 
+function normalizeProviders(raw: Record<string, ProviderConfig> | undefined): Record<string, ProviderConfig> {
+  if (!raw) return {};
+  const out: Record<string, ProviderConfig> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    out[k] = {
+      enabled: v.enabled ?? false,
+      api_key: v.api_key ?? "",
+      target_version: v.target_version ?? "",
+    };
+  }
+  return out;
+}
+
 export function ProvidersTab() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const members = useWorkspaceStore((s) => s.members);
@@ -40,7 +53,7 @@ export function ProvidersTab() {
     if (!workspace) return;
     try {
       const config = await api.getProviderConfig(workspace.id);
-      setProviders(config.providers ?? {});
+      setProviders(normalizeProviders(config.providers));
       setMulticaVersion(config.multica_target_version ?? "");
     } catch {
       toast.error("Failed to load provider configuration");
@@ -83,7 +96,7 @@ export function ProvidersTab() {
         data.multica_target_version = multicaVersion.trim();
       }
       const result = await api.updateProviderConfig(workspace.id, data);
-      setProviders(result.providers ?? {});
+      setProviders(normalizeProviders(result.providers));
       if (result.multica_target_version) {
         setMulticaVersion(result.multica_target_version);
       }

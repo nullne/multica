@@ -36,6 +36,7 @@ type Daemon struct {
 	workspaces      map[string]*workspaceState
 	runtimeIndex    map[string]Runtime            // runtimeID -> Runtime for provider lookups
 	providerConfigs map[string]ProviderConfig     // provider -> workspace-level config (API keys, etc.)
+	daemonUUID      string                        // server-assigned daemon row UUID (set after first registration)
 	reloading       sync.Mutex                    // prevents concurrent reloadWorkspaces
 
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
@@ -117,14 +118,27 @@ func (d *Daemon) RestartBinary() string {
 
 // deregisterRuntimes notifies the server that all runtimes are going offline.
 func (d *Daemon) deregisterRuntimes() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	d.mu.Lock()
+	dUUID := d.daemonUUID
+	d.mu.Unlock()
+
+	if dUUID != "" {
+		if err := d.client.DeregisterDaemon(ctx, dUUID); err != nil {
+			d.logger.Warn("failed to deregister daemon on shutdown", "error", err)
+		} else {
+			d.logger.Info("deregistered daemon", "daemon_uuid", dUUID)
+		}
+		return
+	}
+
+	// Legacy fallback.
 	runtimeIDs := d.allRuntimeIDs()
 	if len(runtimeIDs) == 0 {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	if err := d.client.Deregister(ctx, runtimeIDs); err != nil {
 		d.logger.Warn("failed to deregister runtimes on shutdown", "error", err)
 	} else {
@@ -270,6 +284,13 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		return nil, fmt.Errorf("register runtimes: empty response")
 	}
 
+	// Capture daemon UUID from server response.
+	if resp.Daemon != nil && resp.Daemon.ID != "" {
+		d.mu.Lock()
+		d.daemonUUID = resp.Daemon.ID
+		d.mu.Unlock()
+	}
+
 	// Store provider configs from server response.
 	if resp.ProviderConfig != nil {
 		d.mu.Lock()
@@ -278,7 +299,6 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		}
 		d.mu.Unlock()
 
-		// Auto-install missing providers that are enabled in workspace config.
 		d.autoInstallProviders(ctx, resp.ProviderConfig)
 	}
 
@@ -521,22 +541,52 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			d.mu.Lock()
+			dUUID := d.daemonUUID
+			d.mu.Unlock()
+
+			// Use daemon-level heartbeat if we have a daemon UUID.
+			if dUUID != "" {
+				resp, err := d.client.SendDaemonHeartbeat(ctx, dUUID)
+				if err != nil {
+					d.logger.Warn("heartbeat failed", "daemon_uuid", dUUID, "error", err)
+					continue
+				}
+
+				if resp.PendingPing != nil {
+					rids := d.allRuntimeIDs()
+					if len(rids) > 0 {
+						rt := d.findRuntime(rids[0])
+						if rt != nil {
+							go d.handlePing(ctx, *rt, resp.PendingPing.ID)
+						}
+					}
+				}
+
+				for _, update := range resp.PendingUpdates {
+					u := update
+					go d.handleUpdate(ctx, dUUID, &u)
+				}
+				// Legacy single update field.
+				if resp.PendingUpdate != nil {
+					go d.handleUpdate(ctx, dUUID, resp.PendingUpdate)
+				}
+				continue
+			}
+
+			// Fallback: per-runtime heartbeat (pre-migration daemons).
 			for _, rid := range d.allRuntimeIDs() {
 				resp, err := d.client.SendHeartbeat(ctx, rid)
 				if err != nil {
 					d.logger.Warn("heartbeat failed", "runtime_id", rid, "error", err)
 					continue
 				}
-
-				// Handle pending ping requests.
 				if resp.PendingPing != nil {
 					rt := d.findRuntime(rid)
 					if rt != nil {
 						go d.handlePing(ctx, *rt, resp.PendingPing.ID)
 					}
 				}
-
-				// Handle pending update requests.
 				if resp.PendingUpdate != nil {
 					go d.handleUpdate(ctx, rid, resp.PendingUpdate)
 				}
@@ -620,30 +670,36 @@ func (d *Daemon) handlePing(ctx context.Context, rt Runtime, pingID string) {
 }
 
 // handleUpdate performs the CLI update when triggered by the server via heartbeat.
-func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *PendingUpdate) {
-	// Prevent concurrent update attempts.
+// The id parameter can be a daemon UUID or a legacy runtime ID.
+func (d *Daemon) handleUpdate(ctx context.Context, id string, update *PendingUpdate) {
 	if !d.updating.CompareAndSwap(false, true) {
-		d.logger.Warn("update already in progress, ignoring", "runtime_id", runtimeID, "update_id", update.ID)
+		d.logger.Warn("update already in progress, ignoring", "id", id, "update_id", update.ID)
 		return
 	}
 	defer d.updating.Store(false)
 
 	target := update.Target
 	if target == "" {
-		target = "multica" // backward compatibility
+		target = "multica"
 	}
 
-	d.logger.Info("update requested", "runtime_id", runtimeID, "update_id", update.ID, "target", target, "target_version", update.TargetVersion)
+	// Use first runtime ID for reporting update results (API still requires a runtime path).
+	reportRuntimeID := id
+	rids := d.allRuntimeIDs()
+	if len(rids) > 0 {
+		reportRuntimeID = rids[0]
+	}
 
-	// Report running status.
-	d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+	d.logger.Info("update requested", "id", id, "update_id", update.ID, "target", target, "target_version", update.TargetVersion)
+
+	d.client.ReportUpdateResult(ctx, reportRuntimeID, update.ID, map[string]any{
 		"status": "running",
 	})
 
 	if target == "multica" {
-		d.handleMulticaUpdate(ctx, runtimeID, update)
+		d.handleMulticaUpdate(ctx, reportRuntimeID, update)
 	} else {
-		d.handleProviderUpdate(ctx, runtimeID, update, target)
+		d.handleProviderUpdate(ctx, reportRuntimeID, update, target)
 	}
 }
 

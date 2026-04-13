@@ -9,6 +9,7 @@ export type {
   AgentTrigger,
   AgentTask,
   AgentRuntime,
+  Daemon,
   RuntimeDevice,
   CreateAgentRequest,
   UpdateAgentRequest,
