@@ -331,7 +331,7 @@ export class ApiClient {
     return this.fetch("/api/daemons");
   }
 
-  async updateDaemon(daemonId: string, data: { labels: string[] }): Promise<Daemon> {
+  async updateDaemon(daemonId: string, data: { device_name?: string; labels?: string[] }): Promise<Daemon> {
     return this.fetch(`/api/daemons/${daemonId}`, {
       method: "PATCH",
       body: JSON.stringify(data),

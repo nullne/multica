@@ -170,6 +170,41 @@ func (q *Queries) SetDaemonOffline(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const updateDaemonFields = `-- name: UpdateDaemonFields :one
+UPDATE daemon SET
+    device_name = COALESCE($2, device_name),
+    labels = COALESCE($3, labels),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels
+`
+
+type UpdateDaemonFieldsParams struct {
+	ID         pgtype.UUID `json:"id"`
+	DeviceName pgtype.Text `json:"device_name"`
+	Labels     []string    `json:"labels"`
+}
+
+func (q *Queries) UpdateDaemonFields(ctx context.Context, arg UpdateDaemonFieldsParams) (Daemon, error) {
+	row := q.db.QueryRow(ctx, updateDaemonFields, arg.ID, arg.DeviceName, arg.Labels)
+	var i Daemon
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Status,
+		&i.CliVersion,
+		&i.DeviceName,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Labels,
+	)
+	return i, err
+}
+
 const updateDaemonHeartbeat = `-- name: UpdateDaemonHeartbeat :one
 UPDATE daemon
 SET status = 'online', last_seen_at = now(), updated_at = now()

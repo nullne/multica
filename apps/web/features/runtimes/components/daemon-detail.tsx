@@ -102,6 +102,48 @@ function ProviderCard({ runtime }: { runtime: AgentRuntime }) {
   );
 }
 
+function EditableDeviceName({ daemon }: { daemon: Daemon }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(daemon.device_name || daemon.daemon_id);
+
+  const save = async () => {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === (daemon.device_name || daemon.daemon_id)) {
+      setEditing(false);
+      return;
+    }
+    try {
+      await api.updateDaemon(daemon.id, { device_name: trimmed });
+      setEditing(false);
+    } catch {
+      toast.error("Failed to update name");
+    }
+  };
+
+  if (editing) {
+    return (
+      <Input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+        className="h-7 text-sm font-semibold"
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className="text-sm font-semibold truncate hover:underline decoration-dashed underline-offset-4 cursor-pointer text-left"
+      title="Click to rename"
+    >
+      {daemon.device_name || daemon.daemon_id}
+    </button>
+  );
+}
+
 export function DaemonDetail({
   daemon,
   runtimes,
@@ -124,9 +166,7 @@ export function DaemonDetail({
             <Monitor className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold truncate">
-              {daemon.device_name || daemon.daemon_id}
-            </h2>
+            <EditableDeviceName daemon={daemon} />
           </div>
         </div>
         <StatusBadge status={daemon.status} />
@@ -141,9 +181,6 @@ export function DaemonDetail({
             label="Last Seen"
             value={formatLastSeen(daemon.last_seen_at)}
           />
-          {daemon.device_info && (
-            <InfoField label="Device" value={daemon.device_info} />
-          )}
           <InfoField
             label="Providers"
             value={

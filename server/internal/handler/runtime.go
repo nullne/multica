@@ -68,20 +68,23 @@ func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Labels []string `json:"labels"`
+		DeviceName *string  `json:"device_name"`
+		Labels     []string `json:"labels"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Labels == nil {
-		req.Labels = []string{}
+
+	params := db.UpdateDaemonFieldsParams{ID: parseUUID(daemonID)}
+	if req.DeviceName != nil {
+		params.DeviceName = pgtype.Text{String: *req.DeviceName, Valid: true}
+	}
+	if req.Labels != nil {
+		params.Labels = req.Labels
 	}
 
-	updated, err := h.Queries.UpdateDaemonLabels(r.Context(), db.UpdateDaemonLabelsParams{
-		ID:     parseUUID(daemonID),
-		Labels: req.Labels,
-	})
+	updated, err := h.Queries.UpdateDaemonFields(r.Context(), params)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update daemon")
 		return

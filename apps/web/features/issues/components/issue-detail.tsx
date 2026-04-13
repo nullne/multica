@@ -377,6 +377,33 @@ function PropRow({
   );
 }
 
+function DispatchHints({ issue }: { issue: { dispatch_provider: string | null; dispatch_daemon_id: string | null; dispatch_daemon_label: string | null } }) {
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const daemonName = issue.dispatch_daemon_id
+    ? (() => {
+        const d = daemons.find((d) => d.id === issue.dispatch_daemon_id);
+        return d?.device_name || d?.daemon_id || null;
+      })()
+    : null;
+
+  return (
+    <>
+      <PropRow label="Provider">
+        <span className={issue.dispatch_provider ? "capitalize" : "text-muted-foreground"}>
+          {issue.dispatch_provider ?? "Auto"}
+        </span>
+      </PropRow>
+      <PropRow label="Daemon">
+        <span className={issue.dispatch_daemon_label || issue.dispatch_daemon_id ? "" : "text-muted-foreground"}>
+          {issue.dispatch_daemon_label
+            ? `label: ${issue.dispatch_daemon_label}`
+            : daemonName ?? "Auto"}
+        </span>
+      </PropRow>
+    </>
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // Props
@@ -1327,20 +1354,9 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     </PropRow>
                   )}
 
-                  {/* Dispatch hints — only when assignee is an agent */}
-                  {issue.assignee_type === "agent" && (issue.dispatch_provider || issue.dispatch_daemon_id || issue.dispatch_daemon_label) && (
-                    <>
-                      {issue.dispatch_provider && (
-                        <PropRow label="Provider">
-                          <span className="capitalize">{issue.dispatch_provider}</span>
-                        </PropRow>
-                      )}
-                      {issue.dispatch_daemon_label && (
-                        <PropRow label="Daemon">
-                          <span>label: {issue.dispatch_daemon_label}</span>
-                        </PropRow>
-                      )}
-                    </>
+                  {/* Dispatch hints — visible when assignee is an agent */}
+                  {issue.assignee_type === "agent" && issue.assignee_id && (
+                    <DispatchHints issue={issue} />
                   )}
                 </div>}
               </div>

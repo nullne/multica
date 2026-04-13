@@ -49,6 +49,14 @@ UPDATE daemon SET labels = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateDaemonFields :one
+UPDATE daemon SET
+    device_name = COALESCE(sqlc.narg('device_name'), device_name),
+    labels = COALESCE(sqlc.narg('labels'), labels),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: MarkStaleDaemonsOffline :many
 UPDATE daemon
 SET status = 'offline', updated_at = now()
