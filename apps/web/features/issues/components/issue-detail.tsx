@@ -1320,6 +1320,22 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                       />
                     </PropRow>
                   )}
+
+                  {/* Dispatch hints — only when assignee is an agent */}
+                  {issue.assignee_type === "agent" && (issue.dispatch_provider || issue.dispatch_daemon_id || issue.dispatch_daemon_label) && (
+                    <>
+                      {issue.dispatch_provider && (
+                        <PropRow label="Provider">
+                          <span className="capitalize">{issue.dispatch_provider}</span>
+                        </PropRow>
+                      )}
+                      {issue.dispatch_daemon_label && (
+                        <PropRow label="Daemon">
+                          <span>label: {issue.dispatch_daemon_label}</span>
+                        </PropRow>
+                      )}
+                    </>
+                  )}
                 </div>}
               </div>
 
