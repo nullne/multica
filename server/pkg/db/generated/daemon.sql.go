@@ -271,7 +271,9 @@ ON CONFLICT (workspace_id, daemon_id)
 DO UPDATE SET
     status = EXCLUDED.status,
     cli_version = EXCLUDED.cli_version,
-    device_name = EXCLUDED.device_name,
+    device_name = CASE WHEN daemon.device_name = '' OR daemon.device_name = daemon.daemon_id
+                       THEN EXCLUDED.device_name
+                       ELSE daemon.device_name END,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
     last_seen_at = now(),

@@ -34,8 +34,7 @@ func installCommand(provider, targetVersion string) (string, []string) {
 		}
 		return "npm", []string{"install", "-g", pkg}
 	case "cursor":
-		// cursor-agent has no standard npm package; skip auto-install.
-		return "", nil
+		return "bash", []string{"-c", "curl https://cursor.com/install -fsS | bash"}
 	default:
 		return "", nil
 	}

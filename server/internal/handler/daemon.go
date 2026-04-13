@@ -52,11 +52,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return
 	}
-	if len(req.Runtimes) == 0 {
-		writeError(w, http.StatusBadRequest, "at least one runtime is required")
-		return
-	}
-
 	if _, ok := h.requireWorkspaceMember(w, r, req.WorkspaceID, "workspace not found"); !ok {
 		return
 	}
@@ -236,7 +231,7 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	// New path: daemon-level heartbeat (daemon_id is the daemon row UUID).
 	if req.DaemonID != "" {
-		_, err := h.Queries.UpdateDaemonHeartbeat(r.Context(), parseUUID(req.DaemonID))
+		daemon, err := h.Queries.UpdateDaemonHeartbeat(r.Context(), parseUUID(req.DaemonID))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "heartbeat failed")
 			return
@@ -274,6 +269,22 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			resp["pending_updates"] = out
+		}
+
+		// Include provider config so daemon can auto-install newly enabled providers.
+		if ws, err := h.Queries.GetWorkspace(r.Context(), daemon.WorkspaceID); err == nil {
+			ps := parseProviderSettings(ws.Settings)
+			if ps.Providers != nil {
+				providerConfig := make(map[string]map[string]any)
+				for k, v := range ps.Providers {
+					providerConfig[k] = map[string]any{
+						"enabled":        v.Enabled,
+						"api_key":        v.APIKey,
+						"target_version": v.TargetVersion,
+					}
+				}
+				resp["provider_config"] = providerConfig
+			}
 		}
 
 		writeJSON(w, http.StatusOK, resp)
