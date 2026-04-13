@@ -253,16 +253,19 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 			d.logger.Warn("skip registering runtime", "name", name, "error", err)
 			continue
 		}
+		authStatus := agent.CheckAuth(ctx, name, entry.Path)
 		displayName := strings.ToUpper(name[:1]) + name[1:]
 		if d.cfg.DeviceName != "" {
 			displayName = fmt.Sprintf("%s (%s)", displayName, d.cfg.DeviceName)
 		}
 		runtimes = append(runtimes, map[string]string{
-			"name":    displayName,
-			"type":    name,
-			"version": version,
-			"status":  "online",
+			"name":        displayName,
+			"type":        name,
+			"version":     version,
+			"status":      "online",
+			"auth_status": authStatus,
 		})
+		d.logger.Info("detected provider auth", "provider", name, "auth_status", authStatus)
 	}
 	if len(runtimes) == 0 {
 		return nil, fmt.Errorf("no agent runtimes could be registered")
@@ -536,18 +539,33 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 	ticker := time.NewTicker(d.cfg.HeartbeatInterval)
 	defer ticker.Stop()
 
+	authCheckCounter := 0
+	authCheckInterval := max(60/int(d.cfg.HeartbeatInterval.Seconds()), 1)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			authCheckCounter++
+			refreshAuth := authCheckCounter%authCheckInterval == 0
+
+			// Re-check provider auth status periodically.
+			var authStatuses map[string]string
+			if refreshAuth {
+				authStatuses = make(map[string]string)
+				for name, entry := range d.cfg.Agents {
+					authStatuses[name] = agent.CheckAuth(ctx, name, entry.Path)
+				}
+			}
+
 			d.mu.Lock()
 			dUUID := d.daemonUUID
 			d.mu.Unlock()
 
 			// Use daemon-level heartbeat if we have a daemon UUID.
 			if dUUID != "" {
-				resp, err := d.client.SendDaemonHeartbeat(ctx, dUUID)
+				resp, err := d.client.SendDaemonHeartbeat(ctx, dUUID, authStatuses)
 				if err != nil {
 					d.logger.Warn("heartbeat failed", "daemon_uuid", dUUID, "error", err)
 					continue

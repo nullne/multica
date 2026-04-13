@@ -53,6 +53,7 @@ type AgentRuntime struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	DaemonRef   pgtype.UUID        `json:"daemon_ref"`
+	AuthStatus  string             `json:"auth_status"`
 }
 
 type AgentSkill struct {

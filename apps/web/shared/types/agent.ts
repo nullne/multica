@@ -23,6 +23,8 @@ export interface Daemon {
   updated_at: string;
 }
 
+export type ProviderAuthStatus = "unknown" | "not_installed" | "unauthenticated" | "ready";
+
 export interface RuntimeDevice {
   id: string;
   workspace_id: string;
@@ -32,6 +34,7 @@ export interface RuntimeDevice {
   runtime_mode: AgentRuntimeMode;
   provider: string;
   status: "online" | "offline";
+  auth_status: ProviderAuthStatus;
   device_info: string;
   metadata: Record<string, unknown>;
   last_seen_at: string | null;
