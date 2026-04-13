@@ -1,4 +1,4 @@
-import type { Issue, IssueReaction } from "./issue";
+import type { Issue, IssueReaction, Label } from "./issue";
 import type { Agent } from "./agent";
 import type { InboxItem } from "./inbox";
 import type { Comment, Reaction } from "./comment";
@@ -35,6 +35,9 @@ export type WSEventType =
   | "member:removed"
   | "daemon:heartbeat"
   | "daemon:register"
+  | "label:created"
+  | "label:updated"
+  | "label:deleted"
   | "skill:created"
   | "skill:updated"
   | "skill:deleted"
@@ -202,6 +205,18 @@ export interface ReactionRemovedPayload {
   emoji: string;
   actor_type: string;
   actor_id: string;
+}
+
+export interface LabelCreatedPayload {
+  label: Label;
+}
+
+export interface LabelUpdatedPayload {
+  label: Label;
+}
+
+export interface LabelDeletedPayload {
+  label_id: string;
 }
 
 export interface IssueReactionAddedPayload {

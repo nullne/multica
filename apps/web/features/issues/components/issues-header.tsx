@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
   User,
   UserMinus,
+  Tag,
   UserPen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import {
 } from "@/features/issues/config";
 import { StatusIcon, PriorityIcon } from "@/features/issues/components";
 import { useWorkspaceStore } from "@/features/workspace";
+import { useLabelStore } from "@/features/labels";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import {
   useIssueViewStore,
@@ -87,12 +89,14 @@ function getActiveFilterCount(state: {
   assigneeFilters: ActorFilterValue[];
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
+  labelFilters: string[];
 }) {
   let count = 0;
   if (state.statusFilters.length > 0) count++;
   if (state.priorityFilters.length > 0) count++;
   if (state.assigneeFilters.length > 0 || state.includeNoAssignee) count++;
   if (state.creatorFilters.length > 0) count++;
+  if (state.labelFilters.length > 0) count++;
   return count;
 }
 
@@ -282,11 +286,13 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
+  const labelFilters = useIssueViewStore((s) => s.labelFilters);
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const cardProperties = useIssueViewStore((s) => s.cardProperties);
   const act = useIssueViewStore.getState();
 
+  const allLabels = useLabelStore((s) => s.labels);
   const counts = useIssueCounts(scopedIssues);
 
   const hasActiveFilters =
@@ -296,6 +302,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
       assigneeFilters,
       includeNoAssignee,
       creatorFilters,
+      labelFilters,
     }) > 0;
 
   const sortLabel =
@@ -465,6 +472,41 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
                 />
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+
+            {/* Labels */}
+            {allLabels.length > 0 && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Tag className="size-3.5" />
+                  <span className="flex-1">Label</span>
+                  {labelFilters.length > 0 && (
+                    <span className="text-xs text-primary font-medium">
+                      {labelFilters.length}
+                    </span>
+                  )}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-auto min-w-44">
+                  {allLabels.map((label) => {
+                    const checked = labelFilters.includes(label.id);
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={label.id}
+                        checked={checked}
+                        onCheckedChange={() => act.toggleLabelFilter(label.id)}
+                        className={FILTER_ITEM_CLASS}
+                      >
+                        <HoverCheck checked={checked} />
+                        <span
+                          className="h-3 w-3 rounded-full shrink-0"
+                          style={{ backgroundColor: label.color }}
+                        />
+                        <span className="truncate">{label.name}</span>
+                      </DropdownMenuCheckboxItem>
+                    );
+                  })}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
 
             {/* Reset */}
             {hasActiveFilters && (

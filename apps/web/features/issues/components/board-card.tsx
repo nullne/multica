@@ -81,6 +81,33 @@ export const BoardCardContent = memo(function BoardCardContent({
         </p>
       )}
 
+      {/* Labels */}
+      {storeProperties.labels && issue.labels.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {issue.labels.slice(0, 4).map((l) => (
+            <span
+              key={l.id}
+              className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] border truncate max-w-[100px]"
+              style={{
+                borderColor: l.color + "40",
+                backgroundColor: l.color + "15",
+              }}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full shrink-0"
+                style={{ backgroundColor: l.color }}
+              />
+              <span className="truncate">{l.name}</span>
+            </span>
+          ))}
+          {issue.labels.length > 4 && (
+            <span className="text-[10px] text-muted-foreground py-0.5">
+              +{issue.labels.length - 4}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Row 3: Assignee, priority badge, due date */}
       {(showAssignee || showPriority || showDueDate) && (
         <div className="mt-3 flex items-center gap-2">

@@ -18,6 +18,7 @@ import type {
   Comment,
   Reaction,
   IssueReaction,
+  Label,
   Workspace,
   WorkspaceRepo,
   WorkspaceProviderSettings,
@@ -419,6 +420,36 @@ export class ApiClient {
     return this.fetch(`/api/issues/${issueId}/criteria/reject`, {
       method: "POST",
       body: JSON.stringify({ feedback }),
+    });
+  }
+
+  // Labels
+  async listLabels(): Promise<Label[]> {
+    return this.fetch("/api/labels");
+  }
+
+  async createLabel(data: { name: string; color: string }): Promise<Label> {
+    return this.fetch("/api/labels", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateLabel(id: string, data: { name: string; color: string }): Promise<Label> {
+    return this.fetch(`/api/labels/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteLabel(id: string): Promise<void> {
+    await this.fetch(`/api/labels/${id}`, { method: "DELETE" });
+  }
+
+  async setIssueLabels(issueId: string, labelIds: string[]): Promise<Label[]> {
+    return this.fetch(`/api/issues/${issueId}/labels`, {
+      method: "PUT",
+      body: JSON.stringify({ label_ids: labelIds }),
     });
   }
 

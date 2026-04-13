@@ -7,6 +7,7 @@ export interface IssueFilters {
   assigneeFilters: ActorFilterValue[];
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
+  labelFilters: string[];
 }
 
 /**
@@ -19,7 +20,7 @@ export interface IssueFilters {
  * - When both → show matching assignees + unassigned
  */
 export function filterIssues(issues: Issue[], filters: IssueFilters): Issue[] {
-  const { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters } = filters;
+  const { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters } = filters;
   const hasAssigneeFilter = assigneeFilters.length > 0 || includeNoAssignee;
 
   return issues.filter((issue) => {
@@ -49,6 +50,13 @@ export function filterIssues(issues: Issue[], filters: IssueFilters): Issue[] {
       !creatorFilters.some(
         (f) => f.type === issue.creator_type && f.id === issue.creator_id,
       )
+    ) {
+      return false;
+    }
+
+    if (
+      labelFilters.length > 0 &&
+      !labelFilters.some((id) => issue.labels.some((l) => l.id === id))
     ) {
       return false;
     }
