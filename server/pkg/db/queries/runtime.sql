@@ -20,16 +20,18 @@ INSERT INTO agent_runtime (
     runtime_mode,
     provider,
     status,
+    auth_status,
     device_info,
     metadata,
     last_seen_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
     daemon_ref = EXCLUDED.daemon_ref,
     name = EXCLUDED.name,
     runtime_mode = EXCLUDED.runtime_mode,
     status = EXCLUDED.status,
+    auth_status = EXCLUDED.auth_status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
     last_seen_at = now(),
@@ -41,6 +43,16 @@ UPDATE agent_runtime
 SET status = 'online', last_seen_at = now(), updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateAgentRuntimeAuthStatus :exec
+UPDATE agent_runtime
+SET auth_status = $2, updated_at = now()
+WHERE id = $1;
+
+-- name: UpdateRuntimesAuthStatusByDaemon :exec
+UPDATE agent_runtime
+SET auth_status = $2, updated_at = now()
+WHERE daemon_ref = $1 AND provider = $3;
 
 -- name: SetAgentRuntimeOffline :exec
 UPDATE agent_runtime

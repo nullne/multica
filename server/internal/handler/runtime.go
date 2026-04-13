@@ -102,11 +102,25 @@ type AgentRuntimeResponse struct {
 	RuntimeMode string  `json:"runtime_mode"`
 	Provider    string  `json:"provider"`
 	Status      string  `json:"status"`
+	AuthStatus  string  `json:"auth_status"`
 	DeviceInfo  string  `json:"device_info"`
 	Metadata    any     `json:"metadata"`
 	LastSeenAt  *string `json:"last_seen_at"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
+}
+
+// effectiveAuthStatus computes the auth status considering workspace-level
+// provider configuration. If the daemon reports "unauthenticated" but the
+// workspace has an API key configured for this provider, the runtime is
+// effectively "ready" (key will be injected at task time).
+func effectiveAuthStatus(daemonStatus, provider string, ps WorkspaceProviderSettings) string {
+	if daemonStatus == "unauthenticated" && ps.Providers != nil {
+		if cfg, ok := ps.Providers[provider]; ok && cfg.APIKey != "" {
+			return "ready"
+		}
+	}
+	return daemonStatus
 }
 
 func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
@@ -127,6 +141,7 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 		RuntimeMode: rt.RuntimeMode,
 		Provider:    rt.Provider,
 		Status:      rt.Status,
+		AuthStatus:  rt.AuthStatus,
 		DeviceInfo:  rt.DeviceInfo,
 		Metadata:    metadata,
 		LastSeenAt:  timestampToPtr(rt.LastSeenAt),
@@ -302,9 +317,16 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Load workspace provider settings to compute effective auth status.
+	var ps WorkspaceProviderSettings
+	if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(workspaceID)); err == nil {
+		ps = parseProviderSettings(ws.Settings)
+	}
+
 	resp := make([]AgentRuntimeResponse, len(runtimes))
 	for i, rt := range runtimes {
 		resp[i] = runtimeToResponse(rt)
+		resp[i].AuthStatus = effectiveAuthStatus(resp[i].AuthStatus, rt.Provider, ps)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

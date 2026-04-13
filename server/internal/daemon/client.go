@@ -158,11 +158,13 @@ type PendingUpdate struct {
 }
 
 // SendDaemonHeartbeat sends a single heartbeat for the daemon (covers all runtimes).
-func (c *Client) SendDaemonHeartbeat(ctx context.Context, daemonUUID string) (*HeartbeatResponse, error) {
+func (c *Client) SendDaemonHeartbeat(ctx context.Context, daemonUUID string, authStatuses map[string]string) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
-	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]string{
-		"daemon_id": daemonUUID,
-	}, &resp); err != nil {
+	body := map[string]any{"daemon_id": daemonUUID}
+	if len(authStatuses) > 0 {
+		body["auth_statuses"] = authStatuses
+	}
+	if err := c.postJSON(ctx, "/api/daemon/heartbeat", body, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

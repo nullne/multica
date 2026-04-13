@@ -24,6 +24,7 @@ export type {
   RuntimePingStatus,
   RuntimeUpdate,
   RuntimeUpdateStatus,
+  ProviderAuthStatus,
 } from "./agent";
 export type { Workspace, WorkspaceRepo, ProviderConfig, WorkspaceProviderSettings, Member, MemberRole, User, MemberWithUser } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
