@@ -1,5 +1,6 @@
-import { Monitor, Cloud, Wifi, WifiOff } from "lucide-react";
+import { Monitor, Cloud, Wifi, WifiOff, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import type { ProviderAuthStatus } from "@/shared/types";
 
 export function RuntimeModeIcon({ mode }: { mode: string }) {
   return mode === "cloud" ? (
@@ -44,6 +45,24 @@ export function InfoField({
         {value}
       </div>
     </div>
+  );
+}
+
+const authStatusConfig: Record<ProviderAuthStatus, { label: string; className: string; Icon: typeof ShieldCheck }> = {
+  ready: { label: "Ready", className: "bg-success/10 text-success", Icon: ShieldCheck },
+  unauthenticated: { label: "Needs Auth", className: "bg-warning/10 text-warning", Icon: ShieldAlert },
+  not_installed: { label: "Not Installed", className: "bg-destructive/10 text-destructive", Icon: ShieldX },
+  unknown: { label: "Unknown", className: "", Icon: ShieldAlert },
+};
+
+export function AuthStatusBadge({ authStatus }: { authStatus: ProviderAuthStatus }) {
+  const config = authStatusConfig[authStatus] ?? authStatusConfig.unknown;
+  const { Icon } = config;
+  return (
+    <Badge variant="secondary" className={config.className}>
+      <Icon className="h-3 w-3" />
+      {config.label}
+    </Badge>
   );
 }
 

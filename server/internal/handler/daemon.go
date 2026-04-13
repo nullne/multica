@@ -25,10 +25,11 @@ type DaemonRegisterRequest struct {
 	DeviceName  string `json:"device_name"`
 	CLIVersion  string `json:"cli_version"` // multica CLI version
 	Runtimes    []struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		Version string `json:"version"` // agent CLI version (claude/codex)
-		Status  string `json:"status"`
+		Name       string `json:"name"`
+		Type       string `json:"type"`
+		Version    string `json:"version"` // agent CLI version (claude/codex)
+		Status     string `json:"status"`
+		AuthStatus string `json:"auth_status"`
 	} `json:"runtimes"`
 }
 
@@ -82,6 +83,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ps := parseProviderSettings(ws.Settings)
+
 	runtimeResp := make([]AgentRuntimeResponse, 0, len(req.Runtimes))
 	for _, runtime := range req.Runtimes {
 		provider := strings.TrimSpace(runtime.Type)
@@ -105,6 +108,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		if runtime.Status == "offline" {
 			status = "offline"
 		}
+		authStatus := "unknown"
+		switch runtime.AuthStatus {
+		case "not_installed", "unauthenticated", "ready":
+			authStatus = runtime.AuthStatus
+		}
 		metadata, _ := json.Marshal(map[string]any{
 			"version":     runtime.Version,
 			"cli_version": req.CLIVersion,
@@ -118,6 +126,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			RuntimeMode: "local",
 			Provider:    provider,
 			Status:      status,
+			AuthStatus:  authStatus,
 			DeviceInfo:  deviceInfo,
 			Metadata:    metadata,
 		})
@@ -125,7 +134,9 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
 			return
 		}
-		runtimeResp = append(runtimeResp, runtimeToResponse(registered))
+		rr := runtimeToResponse(registered)
+		rr.AuthStatus = effectiveAuthStatus(rr.AuthStatus, provider, ps)
+		runtimeResp = append(runtimeResp, rr)
 	}
 
 	slog.Info("daemon registered", "workspace_id", req.WorkspaceID, "daemon_id", req.DaemonID, "daemon_uuid", uuidToString(daemon.ID), "runtimes_count", len(runtimeResp))
@@ -142,7 +153,6 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		repos = []RepoData{}
 	}
 
-	ps := parseProviderSettings(ws.Settings)
 	providerConfig := make(map[string]map[string]any)
 	if ps.Providers != nil {
 		for k, v := range ps.Providers {
@@ -212,8 +222,9 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 }
 
 type DaemonHeartbeatRequest struct {
-	DaemonID  string `json:"daemon_id"`
-	RuntimeID string `json:"runtime_id"` // deprecated: kept for backward compat
+	DaemonID     string            `json:"daemon_id"`
+	RuntimeID    string            `json:"runtime_id"`               // deprecated: kept for backward compat
+	AuthStatuses map[string]string `json:"auth_statuses,omitempty"` // provider -> auth_status from periodic re-check
 }
 
 func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +242,20 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.Queries.UpdateRuntimesHeartbeatByDaemon(r.Context(), parseUUID(req.DaemonID))
+
+		// Update per-provider auth_status if reported.
+		if len(req.AuthStatuses) > 0 {
+			for provider, authStatus := range req.AuthStatuses {
+				switch authStatus {
+				case "not_installed", "unauthenticated", "ready":
+					h.Queries.UpdateRuntimesAuthStatusByDaemon(r.Context(), db.UpdateRuntimesAuthStatusByDaemonParams{
+						DaemonRef:  parseUUID(req.DaemonID),
+						AuthStatus: authStatus,
+						Provider:   provider,
+					})
+				}
+			}
+		}
 
 		slog.Debug("daemon heartbeat", "daemon_id", req.DaemonID)
 

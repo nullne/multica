@@ -1,6 +1,7 @@
+import { CheckCircle2, XCircle, KeyRound, Terminal } from "lucide-react";
 import type { AgentRuntime } from "@/shared/types";
 import { formatLastSeen } from "../utils";
-import { RuntimeModeIcon, StatusBadge, InfoField } from "./shared";
+import { RuntimeModeIcon, StatusBadge, AuthStatusBadge, InfoField } from "./shared";
 import { PingSection } from "./ping-section";
 import { UpdateSection } from "./update-section";
 import { UsageSection } from "./usage-section";
@@ -14,6 +15,65 @@ function getCliVersion(metadata: Record<string, unknown>): string | null {
     return metadata.cli_version;
   }
   return null;
+}
+
+const loginCommands: Record<string, string> = {
+  claude: "claude login",
+  codex: "codex login",
+  opencode: "opencode login",
+  cursor: "cursor-agent login",
+};
+
+function AuthSection({ runtime }: { runtime: AgentRuntime }) {
+  const loginCmd = loginCommands[runtime.provider] ?? `${runtime.provider} login`;
+
+  if (runtime.auth_status === "ready") {
+    return (
+      <div className="rounded-lg border bg-success/5 p-4">
+        <div className="flex items-center gap-2 text-success">
+          <CheckCircle2 className="h-4 w-4" />
+          <span className="text-sm font-medium">Provider authenticated and ready</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (runtime.auth_status === "not_installed") {
+    return (
+      <div className="rounded-lg border bg-destructive/5 p-4">
+        <div className="flex items-center gap-2 text-destructive">
+          <XCircle className="h-4 w-4" />
+          <span className="text-sm font-medium">CLI not installed</span>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Install the <code className="rounded bg-muted px-1 py-0.5">{runtime.provider}</code> CLI
+          on the daemon machine, then restart the daemon.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border bg-warning/5 p-4 space-y-3">
+      <div className="flex items-center gap-2 text-warning">
+        <KeyRound className="h-4 w-4" />
+        <span className="text-sm font-medium">Authentication required</span>
+      </div>
+      <div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1.5">
+          <Terminal className="h-3 w-3" />
+          <span>Login on the machine</span>
+        </div>
+        <code className="block rounded bg-muted px-3 py-2 text-xs font-mono">
+          {loginCmd}
+        </code>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Or configure an API key in{" "}
+        <span className="font-medium">Settings &gt; Providers</span>.
+      </p>
+    </div>
+  );
 }
 
 export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
@@ -36,11 +96,19 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
             <h2 className="text-sm font-semibold truncate">{runtime.name}</h2>
           </div>
         </div>
-        <StatusBadge status={runtime.status} />
+        <div className="flex items-center gap-2">
+          <AuthStatusBadge authStatus={runtime.auth_status} />
+          <StatusBadge status={runtime.status} />
+        </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        {/* Auth Status */}
+        {runtime.auth_status !== "unknown" && (
+          <AuthSection runtime={runtime} />
+        )}
+
         {/* Info grid */}
         <div className="grid grid-cols-2 gap-4">
           <InfoField label="Runtime Mode" value={runtime.runtime_mode} />

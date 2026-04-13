@@ -50,7 +50,7 @@ func (q *Queries) FailTasksForOfflineRuntimes(ctx context.Context) ([]FailTasksF
 }
 
 const findAvailableRuntimeConstrained = `-- name: FindAvailableRuntimeConstrained :one
-SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref FROM agent_runtime ar
+SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref, ar.auth_status FROM agent_runtime ar
 LEFT JOIN daemon d ON ar.daemon_ref = d.id
 WHERE ar.workspace_id = $1
   AND ar.status = 'online'
@@ -98,12 +98,13 @@ func (q *Queries) FindAvailableRuntimeConstrained(ctx context.Context, arg FindA
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DaemonRef,
+		&i.AuthStatus,
 	)
 	return i, err
 }
 
 const findAvailableRuntimeForProvider = `-- name: FindAvailableRuntimeForProvider :one
-SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref FROM agent_runtime ar
+SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref, ar.auth_status FROM agent_runtime ar
 WHERE ar.workspace_id = $1
   AND ar.provider = $2
   AND ar.status = 'online'
@@ -138,12 +139,13 @@ func (q *Queries) FindAvailableRuntimeForProvider(ctx context.Context, arg FindA
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DaemonRef,
+		&i.AuthStatus,
 	)
 	return i, err
 }
 
 const findAvailableRuntimeForProviders = `-- name: FindAvailableRuntimeForProviders :one
-SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref FROM agent_runtime ar
+SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref, ar.auth_status FROM agent_runtime ar
 WHERE ar.workspace_id = $1
   AND ar.provider = ANY($2::text[])
   AND ar.status = 'online'
@@ -177,12 +179,13 @@ func (q *Queries) FindAvailableRuntimeForProviders(ctx context.Context, arg Find
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DaemonRef,
+		&i.AuthStatus,
 	)
 	return i, err
 }
 
 const getAgentRuntime = `-- name: GetAgentRuntime :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref, auth_status FROM agent_runtime
 WHERE id = $1
 `
 
@@ -203,12 +206,13 @@ func (q *Queries) GetAgentRuntime(ctx context.Context, id pgtype.UUID) (AgentRun
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DaemonRef,
+		&i.AuthStatus,
 	)
 	return i, err
 }
 
 const getAgentRuntimeForWorkspace = `-- name: GetAgentRuntimeForWorkspace :one
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref, auth_status FROM agent_runtime
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -234,12 +238,13 @@ func (q *Queries) GetAgentRuntimeForWorkspace(ctx context.Context, arg GetAgentR
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DaemonRef,
+		&i.AuthStatus,
 	)
 	return i, err
 }
 
 const listAgentRuntimes = `-- name: ListAgentRuntimes :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref, auth_status FROM agent_runtime
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -267,6 +272,7 @@ func (q *Queries) ListAgentRuntimes(ctx context.Context, workspaceID pgtype.UUID
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DaemonRef,
+			&i.AuthStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -279,7 +285,7 @@ func (q *Queries) ListAgentRuntimes(ctx context.Context, workspaceID pgtype.UUID
 }
 
 const listRuntimesByDaemon = `-- name: ListRuntimesByDaemon :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref FROM agent_runtime
+SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref, auth_status FROM agent_runtime
 WHERE daemon_ref = $1
 ORDER BY provider ASC
 `
@@ -307,6 +313,7 @@ func (q *Queries) ListRuntimesByDaemon(ctx context.Context, daemonRef pgtype.UUI
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DaemonRef,
+			&i.AuthStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -373,11 +380,27 @@ func (q *Queries) SetRuntimesOfflineByDaemon(ctx context.Context, daemonRef pgty
 	return err
 }
 
+const updateAgentRuntimeAuthStatus = `-- name: UpdateAgentRuntimeAuthStatus :exec
+UPDATE agent_runtime
+SET auth_status = $2, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateAgentRuntimeAuthStatusParams struct {
+	ID         pgtype.UUID `json:"id"`
+	AuthStatus string      `json:"auth_status"`
+}
+
+func (q *Queries) UpdateAgentRuntimeAuthStatus(ctx context.Context, arg UpdateAgentRuntimeAuthStatusParams) error {
+	_, err := q.db.Exec(ctx, updateAgentRuntimeAuthStatus, arg.ID, arg.AuthStatus)
+	return err
+}
+
 const updateAgentRuntimeHeartbeat = `-- name: UpdateAgentRuntimeHeartbeat :one
 UPDATE agent_runtime
 SET status = 'online', last_seen_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref, auth_status
 `
 
 func (q *Queries) UpdateAgentRuntimeHeartbeat(ctx context.Context, id pgtype.UUID) (AgentRuntime, error) {
@@ -397,8 +420,26 @@ func (q *Queries) UpdateAgentRuntimeHeartbeat(ctx context.Context, id pgtype.UUI
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DaemonRef,
+		&i.AuthStatus,
 	)
 	return i, err
+}
+
+const updateRuntimesAuthStatusByDaemon = `-- name: UpdateRuntimesAuthStatusByDaemon :exec
+UPDATE agent_runtime
+SET auth_status = $2, updated_at = now()
+WHERE daemon_ref = $1 AND provider = $3
+`
+
+type UpdateRuntimesAuthStatusByDaemonParams struct {
+	DaemonRef  pgtype.UUID `json:"daemon_ref"`
+	AuthStatus string      `json:"auth_status"`
+	Provider   string      `json:"provider"`
+}
+
+func (q *Queries) UpdateRuntimesAuthStatusByDaemon(ctx context.Context, arg UpdateRuntimesAuthStatusByDaemonParams) error {
+	_, err := q.db.Exec(ctx, updateRuntimesAuthStatusByDaemon, arg.DaemonRef, arg.AuthStatus, arg.Provider)
+	return err
 }
 
 const updateRuntimesHeartbeatByDaemon = `-- name: UpdateRuntimesHeartbeatByDaemon :exec
@@ -421,21 +462,23 @@ INSERT INTO agent_runtime (
     runtime_mode,
     provider,
     status,
+    auth_status,
     device_info,
     metadata,
     last_seen_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 ON CONFLICT (workspace_id, daemon_id, provider)
 DO UPDATE SET
     daemon_ref = EXCLUDED.daemon_ref,
     name = EXCLUDED.name,
     runtime_mode = EXCLUDED.runtime_mode,
     status = EXCLUDED.status,
+    auth_status = EXCLUDED.auth_status,
     device_info = EXCLUDED.device_info,
     metadata = EXCLUDED.metadata,
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref
+RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref, auth_status
 `
 
 type UpsertAgentRuntimeParams struct {
@@ -446,6 +489,7 @@ type UpsertAgentRuntimeParams struct {
 	RuntimeMode string      `json:"runtime_mode"`
 	Provider    string      `json:"provider"`
 	Status      string      `json:"status"`
+	AuthStatus  string      `json:"auth_status"`
 	DeviceInfo  string      `json:"device_info"`
 	Metadata    []byte      `json:"metadata"`
 }
@@ -459,6 +503,7 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		arg.RuntimeMode,
 		arg.Provider,
 		arg.Status,
+		arg.AuthStatus,
 		arg.DeviceInfo,
 		arg.Metadata,
 	)
@@ -477,6 +522,7 @@ func (q *Queries) UpsertAgentRuntime(ctx context.Context, arg UpsertAgentRuntime
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DaemonRef,
+		&i.AuthStatus,
 	)
 	return i, err
 }
