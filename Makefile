@@ -105,9 +105,8 @@ down: ## Stop all services (dev and prod)
 	@echo "✓ All services stopped."
 
 clean: ## Stop services and destroy ALL local state (volumes, caches, build artifacts)
-	@-$(DEV_COMPOSE) down -v 2>/dev/null
-	@-$(PROD_COMPOSE) down -v 2>/dev/null
-	@-$(COMPOSE) down -v 2>/dev/null
+	@-$(DEV_COMPOSE) down -v --remove-orphans 2>/dev/null
+	@-$(PROD_COMPOSE) down -v --remove-orphans 2>/dev/null
 	@-lsof -ti:$(PORT) | xargs kill -9 2>/dev/null
 	@-lsof -ti:$(FRONTEND_PORT) | xargs kill -9 2>/dev/null
 	@rm -rf server/bin server/tmp
