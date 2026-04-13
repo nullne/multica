@@ -207,6 +207,14 @@ type UpdateWorkspaceRequest struct {
 	IssuePrefix *string `json:"issue_prefix"`
 }
 
+// updateSettingsOnly builds UpdateWorkspaceParams that only touch the settings field.
+func updateSettingsOnly(id pgtype.UUID, settingsJSON []byte) db.UpdateWorkspaceParams {
+	return db.UpdateWorkspaceParams{
+		ID:       id,
+		Settings: settingsJSON,
+	}
+}
+
 func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	id := workspaceIDFromURL(r, "id")
 

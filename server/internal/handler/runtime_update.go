@@ -26,7 +26,9 @@ const (
 // UpdateRequest represents a pending or completed CLI update request.
 type UpdateRequest struct {
 	ID            string       `json:"id"`
-	RuntimeID     string       `json:"runtime_id"`
+	DaemonID      string       `json:"daemon_id"`
+	RuntimeID     string       `json:"runtime_id,omitempty"` // deprecated: use DaemonID
+	Target        string       `json:"target"`               // "multica", "claude", "codex", etc.
 	Status        UpdateStatus `json:"status"`
 	TargetVersion string       `json:"target_version"`
 	Output        string       `json:"output,omitempty"`
@@ -48,19 +50,51 @@ func NewUpdateStore() *UpdateStore {
 }
 
 func (s *UpdateStore) Create(runtimeID, targetVersion string) (*UpdateRequest, error) {
+	return s.CreateWithTarget(runtimeID, "multica", targetVersion)
+}
+
+// CreateForDaemon creates an update request keyed by daemon UUID.
+func (s *UpdateStore) CreateForDaemon(daemonID, target, targetVersion string) (*UpdateRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Clean up old requests (>5 minutes).
 	for id, req := range s.requests {
 		if time.Since(req.CreatedAt) > 5*time.Minute {
 			delete(s.requests, id)
 		}
 	}
 
-	// Reject if there is already a pending or running update for this runtime.
 	for _, req := range s.requests {
-		if req.RuntimeID == runtimeID && (req.Status == UpdatePending || req.Status == UpdateRunning) {
+		if req.DaemonID == daemonID && req.Target == target && (req.Status == UpdatePending || req.Status == UpdateRunning) {
+			return nil, errUpdateInProgress
+		}
+	}
+
+	req := &UpdateRequest{
+		ID:            randomID(),
+		DaemonID:      daemonID,
+		Target:        target,
+		Status:        UpdatePending,
+		TargetVersion: targetVersion,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	s.requests[req.ID] = req
+	return req, nil
+}
+
+func (s *UpdateStore) CreateWithTarget(runtimeID, target, targetVersion string) (*UpdateRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, req := range s.requests {
+		if time.Since(req.CreatedAt) > 5*time.Minute {
+			delete(s.requests, id)
+		}
+	}
+
+	for _, req := range s.requests {
+		if req.RuntimeID == runtimeID && req.Target == target && (req.Status == UpdatePending || req.Status == UpdateRunning) {
 			return nil, errUpdateInProgress
 		}
 	}
@@ -68,6 +102,7 @@ func (s *UpdateStore) Create(runtimeID, targetVersion string) (*UpdateRequest, e
 	req := &UpdateRequest{
 		ID:            randomID(),
 		RuntimeID:     runtimeID,
+		Target:        target,
 		Status:        UpdatePending,
 		TargetVersion: targetVersion,
 		CreatedAt:     time.Now(),
@@ -100,19 +135,35 @@ func (s *UpdateStore) Get(id string) *UpdateRequest {
 	return req
 }
 
-// PopPending returns and marks as running the pending update for a runtime.
-func (s *UpdateStore) PopPending(runtimeID string) *UpdateRequest {
+// PopPending returns and marks as running the first pending update for a runtime or daemon.
+func (s *UpdateStore) PopPending(id string) *UpdateRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, req := range s.requests {
-		if req.RuntimeID == runtimeID && req.Status == UpdatePending {
+		if (req.RuntimeID == id || req.DaemonID == id) && req.Status == UpdatePending {
 			req.Status = UpdateRunning
 			req.UpdatedAt = time.Now()
 			return req
 		}
 	}
 	return nil
+}
+
+// PopAllPending returns and marks as running all pending updates for a daemon or runtime.
+func (s *UpdateStore) PopAllPending(id string) []*UpdateRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var result []*UpdateRequest
+	for _, req := range s.requests {
+		if (req.DaemonID == id || req.RuntimeID == id) && req.Status == UpdatePending {
+			req.Status = UpdateRunning
+			req.UpdatedAt = time.Now()
+			result = append(result, req)
+		}
+	}
+	return result
 }
 
 func (s *UpdateStore) Complete(id string, output string) {

@@ -48,6 +48,9 @@ export interface Issue {
   criteria_status: CriteriaStatus | null;
   position: number;
   due_date: string | null;
+  dispatch_provider: string | null;
+  dispatch_daemon_id: string | null;
+  dispatch_daemon_label: string | null;
   reactions?: IssueReaction[];
   created_at: string;
   updated_at: string;

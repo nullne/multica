@@ -66,6 +66,7 @@ import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueStore } from "@/features/issues";
 import { useIssueViewStore } from "@/features/issues/stores/view-store";
 import { useIssuesScopeStore } from "@/features/issues/stores/issues-scope-store";
@@ -376,6 +377,33 @@ function PropRow({
   );
 }
 
+function DispatchHints({ issue }: { issue: { dispatch_provider: string | null; dispatch_daemon_id: string | null; dispatch_daemon_label: string | null } }) {
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const daemonName = issue.dispatch_daemon_id
+    ? (() => {
+        const d = daemons.find((d) => d.id === issue.dispatch_daemon_id);
+        return d?.device_name || d?.daemon_id || null;
+      })()
+    : null;
+
+  return (
+    <>
+      <PropRow label="Provider">
+        <span className={issue.dispatch_provider ? "capitalize" : "text-muted-foreground"}>
+          {issue.dispatch_provider ?? "Auto"}
+        </span>
+      </PropRow>
+      <PropRow label="Daemon">
+        <span className={issue.dispatch_daemon_label || issue.dispatch_daemon_id ? "" : "text-muted-foreground"}>
+          {issue.dispatch_daemon_label
+            ? `label: ${issue.dispatch_daemon_label}`
+            : daemonName ?? "Auto"}
+        </span>
+      </PropRow>
+    </>
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // Props
@@ -404,7 +432,12 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const workspace = useWorkspaceStore((s) => s.workspace);
   const members = useWorkspaceStore((s) => s.members);
   const agents = useWorkspaceStore((s) => s.agents);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
   const currentMemberRole = members.find((m) => m.user_id === user?.id)?.role;
+
+  useEffect(() => {
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   // Single source of truth: read issue directly from global store
   const issue = useIssueStore((s) => s.issues.find((i) => i.id === id)) ?? null;
@@ -1319,6 +1352,11 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                         className="w-14 rounded border px-1.5 py-0.5 text-xs text-right bg-transparent outline-none focus:ring-1 focus:ring-ring"
                       />
                     </PropRow>
+                  )}
+
+                  {/* Dispatch hints — visible when assignee is an agent */}
+                  {issue.assignee_type === "agent" && issue.assignee_id && (
+                    <DispatchHints issue={issue} />
                   )}
                 </div>}
               </div>

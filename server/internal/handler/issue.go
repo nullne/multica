@@ -37,6 +37,9 @@ type IssueResponse struct {
 	CriteriaStatus        *string                 `json:"criteria_status"`
 	Position              float64                 `json:"position"`
 	DueDate               *string                 `json:"due_date"`
+	DispatchProvider      *string                 `json:"dispatch_provider"`
+	DispatchDaemonID      *string                 `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
 	Reactions             []IssueReactionResponse `json:"reactions,omitempty"`
@@ -92,6 +95,9 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		CriteriaStatus:        textToPtr(i.CriteriaStatus),
 		Position:              i.Position,
 		DueDate:               timestampToPtr(i.DueDate),
+		DispatchProvider:      textToPtr(i.DispatchProvider),
+		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
+		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
 		CreatedAt:             timestampToString(i.CreatedAt),
 		UpdatedAt:             timestampToString(i.UpdatedAt),
 	}
@@ -198,6 +204,9 @@ type CreateIssueRequest struct {
 	MaxVerificationRounds *int32  `json:"max_verification_rounds"`
 	ParentIssueID         *string `json:"parent_issue_id"`
 	DueDate               *string `json:"due_date"`
+	DispatchProvider      *string `json:"dispatch_provider"`
+	DispatchDaemonID      *string `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string `json:"dispatch_daemon_label"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -320,6 +329,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DueDate:               dueDate,
 		Number:                issueNumber,
 		MaxVerificationRounds: maxVerificationRounds,
+		DispatchProvider:      ptrToText(req.DispatchProvider),
+		DispatchDaemonID:      parseOptionalUUID(req.DispatchDaemonID),
+		DispatchDaemonLabel:   ptrToText(req.DispatchDaemonLabel),
 	})
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -358,6 +370,9 @@ type UpdateIssueRequest struct {
 	MaxVerificationRounds *int32   `json:"max_verification_rounds"`
 	Position              *float64 `json:"position"`
 	DueDate               *string  `json:"due_date"`
+	DispatchProvider      *string  `json:"dispatch_provider"`
+	DispatchDaemonID      *string  `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string  `json:"dispatch_daemon_label"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -394,6 +409,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		VerifierAgentID:       prevIssue.VerifierAgentID,
 		DueDate:               prevIssue.DueDate,
 		MaxVerificationRounds: prevIssue.MaxVerificationRounds,
+		DispatchProvider:      prevIssue.DispatchProvider,
+		DispatchDaemonID:      prevIssue.DispatchDaemonID,
+		DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
 	}
 
 	// COALESCE fields — only set when explicitly provided
@@ -452,6 +470,15 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		} else {
 			params.MaxVerificationRounds = pgtype.Int4{Valid: false}
 		}
+	}
+	if _, ok := rawFields["dispatch_provider"]; ok {
+		params.DispatchProvider = ptrToText(req.DispatchProvider)
+	}
+	if _, ok := rawFields["dispatch_daemon_id"]; ok {
+		params.DispatchDaemonID = parseOptionalUUID(req.DispatchDaemonID)
+	}
+	if _, ok := rawFields["dispatch_daemon_label"]; ok {
+		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
@@ -607,7 +634,7 @@ func (h *Handler) isAgentTriggerEnabled(ctx context.Context, issue db.Issue, tri
 	}
 
 	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || len(agent.Providers) == 0 || agent.ArchivedAt.Valid {
 		return false
 	}
 
@@ -619,7 +646,7 @@ func (h *Handler) isAgentTriggerEnabled(ctx context.Context, issue db.Issue, tri
 // ID rather than deriving it from the issue assignee.
 func (h *Handler) isAgentMentionTriggerEnabled(ctx context.Context, agentID pgtype.UUID) bool {
 	agent, err := h.Queries.GetAgent(ctx, agentID)
-	if err != nil || !agent.RuntimeID.Valid {
+	if err != nil || len(agent.Providers) == 0 {
 		return false
 	}
 

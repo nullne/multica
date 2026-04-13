@@ -20,9 +20,11 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     verifier_agent_id, parent_issue_id, position, due_date, number,
-    max_verification_rounds
+    max_verification_rounds,
+    dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+    $16, $17, $18
 ) RETURNING *;
 
 -- name: GetIssueByNumber :one
@@ -41,6 +43,9 @@ UPDATE issue SET
     position = COALESCE(sqlc.narg('position'), position),
     due_date = sqlc.narg('due_date'),
     max_verification_rounds = sqlc.narg('max_verification_rounds'),
+    dispatch_provider = sqlc.narg('dispatch_provider'),
+    dispatch_daemon_id = sqlc.narg('dispatch_daemon_id'),
+    dispatch_daemon_label = sqlc.narg('dispatch_daemon_label'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;

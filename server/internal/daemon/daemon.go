@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -31,10 +32,12 @@ type Daemon struct {
 	repoCache *repocache.Cache
 	logger    *slog.Logger
 
-	mu           sync.Mutex
-	workspaces   map[string]*workspaceState
-	runtimeIndex map[string]Runtime // runtimeID -> Runtime for provider lookups
-	reloading    sync.Mutex         // prevents concurrent reloadWorkspaces
+	mu              sync.Mutex
+	workspaces      map[string]*workspaceState
+	runtimeIndex    map[string]Runtime            // runtimeID -> Runtime for provider lookups
+	providerConfigs map[string]ProviderConfig     // provider -> workspace-level config (API keys, etc.)
+	daemonUUID      string                        // server-assigned daemon row UUID (set after first registration)
+	reloading       sync.Mutex                    // prevents concurrent reloadWorkspaces
 
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
 	restartBinary string             // non-empty after a successful update; path to the new binary
@@ -45,12 +48,13 @@ type Daemon struct {
 func New(cfg Config, logger *slog.Logger) *Daemon {
 	cacheRoot := filepath.Join(cfg.WorkspacesRoot, ".repos")
 	return &Daemon{
-		cfg:          cfg,
-		client:       NewClient(cfg.ServerBaseURL),
-		repoCache:    repocache.New(cacheRoot, logger),
-		logger:       logger,
-		workspaces:   make(map[string]*workspaceState),
-		runtimeIndex: make(map[string]Runtime),
+		cfg:             cfg,
+		client:          NewClient(cfg.ServerBaseURL),
+		repoCache:       repocache.New(cacheRoot, logger),
+		logger:          logger,
+		workspaces:      make(map[string]*workspaceState),
+		runtimeIndex:    make(map[string]Runtime),
+		providerConfigs: make(map[string]ProviderConfig),
 	}
 }
 
@@ -114,14 +118,27 @@ func (d *Daemon) RestartBinary() string {
 
 // deregisterRuntimes notifies the server that all runtimes are going offline.
 func (d *Daemon) deregisterRuntimes() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	d.mu.Lock()
+	dUUID := d.daemonUUID
+	d.mu.Unlock()
+
+	if dUUID != "" {
+		if err := d.client.DeregisterDaemon(ctx, dUUID); err != nil {
+			d.logger.Warn("failed to deregister daemon on shutdown", "error", err)
+		} else {
+			d.logger.Info("deregistered daemon", "daemon_uuid", dUUID)
+		}
+		return
+	}
+
+	// Legacy fallback.
 	runtimeIDs := d.allRuntimeIDs()
 	if len(runtimeIDs) == 0 {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	if err := d.client.Deregister(ctx, runtimeIDs); err != nil {
 		d.logger.Warn("failed to deregister runtimes on shutdown", "error", err)
 	} else {
@@ -228,6 +245,7 @@ func (d *Daemon) providerToRuntimeMap() map[string]string {
 }
 
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
+	// First pass: build runtimes from locally available agents.
 	var runtimes []map[string]string
 	for name, entry := range d.cfg.Agents {
 		version, err := agent.DetectVersion(ctx, entry.Path)
@@ -265,7 +283,89 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
 	}
+
+	// Capture daemon UUID from server response.
+	if resp.Daemon != nil && resp.Daemon.ID != "" {
+		d.mu.Lock()
+		d.daemonUUID = resp.Daemon.ID
+		d.mu.Unlock()
+	}
+
+	// Store provider configs from server response.
+	if resp.ProviderConfig != nil {
+		d.mu.Lock()
+		for k, v := range resp.ProviderConfig {
+			d.providerConfigs[k] = v
+		}
+		d.mu.Unlock()
+
+		d.autoInstallProviders(ctx, resp.ProviderConfig)
+	}
+
 	return resp, nil
+}
+
+// autoInstallProviders installs code agent CLIs that are enabled in the workspace
+// config but not yet available on this machine. After installing, it re-probes
+// and adds them to the agent config.
+func (d *Daemon) autoInstallProviders(ctx context.Context, providerConfig map[string]ProviderConfig) {
+	for provider, cfg := range providerConfig {
+		if !cfg.Enabled {
+			continue
+		}
+		// Skip if already available.
+		if _, ok := d.cfg.Agents[provider]; ok {
+			continue
+		}
+
+		d.logger.Info("provider enabled in workspace but not installed locally, auto-installing", "provider", provider)
+		_, err := InstallProvider(ctx, provider, cfg.TargetVersion, d.logger)
+		if err != nil {
+			d.logger.Warn("auto-install failed, provider will not be available", "provider", provider, "error", err)
+			continue
+		}
+
+		// Re-probe the installed CLI.
+		path, lookupErr := exec.LookPath(providerBinaryName(provider))
+		if lookupErr != nil {
+			d.logger.Warn("auto-install succeeded but CLI not found on PATH", "provider", provider, "error", lookupErr)
+			continue
+		}
+
+		d.cfg.Agents[provider] = AgentEntry{Path: path}
+		d.logger.Info("auto-installed code agent CLI", "provider", provider, "path", path)
+	}
+}
+
+// resolveProviderAPIKey returns the API key to use for a provider.
+// Prefers the task-level key (from task claim), falls back to the cached
+// workspace-level key, and returns empty if neither is set (user self-auth).
+func (d *Daemon) resolveProviderAPIKey(provider, taskAPIKey string) string {
+	if taskAPIKey != "" {
+		return taskAPIKey
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if cfg, ok := d.providerConfigs[provider]; ok {
+		return cfg.APIKey
+	}
+	return ""
+}
+
+// providerBinaryName returns the expected binary name for a provider.
+func providerBinaryName(provider string) string {
+	switch provider {
+	case "claude":
+		return "claude"
+	case "codex":
+		return "codex"
+	case "opencode":
+		return "opencode"
+	case "cursor":
+		return "cursor-agent"
+	default:
+		return provider
+	}
 }
 
 // configWatchLoop periodically checks for config file changes and reloads workspaces.
@@ -441,22 +541,52 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			d.mu.Lock()
+			dUUID := d.daemonUUID
+			d.mu.Unlock()
+
+			// Use daemon-level heartbeat if we have a daemon UUID.
+			if dUUID != "" {
+				resp, err := d.client.SendDaemonHeartbeat(ctx, dUUID)
+				if err != nil {
+					d.logger.Warn("heartbeat failed", "daemon_uuid", dUUID, "error", err)
+					continue
+				}
+
+				if resp.PendingPing != nil {
+					rids := d.allRuntimeIDs()
+					if len(rids) > 0 {
+						rt := d.findRuntime(rids[0])
+						if rt != nil {
+							go d.handlePing(ctx, *rt, resp.PendingPing.ID)
+						}
+					}
+				}
+
+				for _, update := range resp.PendingUpdates {
+					u := update
+					go d.handleUpdate(ctx, dUUID, &u)
+				}
+				// Legacy single update field.
+				if resp.PendingUpdate != nil {
+					go d.handleUpdate(ctx, dUUID, resp.PendingUpdate)
+				}
+				continue
+			}
+
+			// Fallback: per-runtime heartbeat (pre-migration daemons).
 			for _, rid := range d.allRuntimeIDs() {
 				resp, err := d.client.SendHeartbeat(ctx, rid)
 				if err != nil {
 					d.logger.Warn("heartbeat failed", "runtime_id", rid, "error", err)
 					continue
 				}
-
-				// Handle pending ping requests.
 				if resp.PendingPing != nil {
 					rt := d.findRuntime(rid)
 					if rt != nil {
 						go d.handlePing(ctx, *rt, resp.PendingPing.ID)
 					}
 				}
-
-				// Handle pending update requests.
 				if resp.PendingUpdate != nil {
 					go d.handleUpdate(ctx, rid, resp.PendingUpdate)
 				}
@@ -540,21 +670,41 @@ func (d *Daemon) handlePing(ctx context.Context, rt Runtime, pingID string) {
 }
 
 // handleUpdate performs the CLI update when triggered by the server via heartbeat.
-func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *PendingUpdate) {
-	// Prevent concurrent update attempts.
+// The id parameter can be a daemon UUID or a legacy runtime ID.
+func (d *Daemon) handleUpdate(ctx context.Context, id string, update *PendingUpdate) {
 	if !d.updating.CompareAndSwap(false, true) {
-		d.logger.Warn("update already in progress, ignoring", "runtime_id", runtimeID, "update_id", update.ID)
+		d.logger.Warn("update already in progress, ignoring", "id", id, "update_id", update.ID)
 		return
 	}
 	defer d.updating.Store(false)
 
-	d.logger.Info("CLI update requested", "runtime_id", runtimeID, "update_id", update.ID, "target_version", update.TargetVersion)
+	target := update.Target
+	if target == "" {
+		target = "multica"
+	}
 
-	// Report running status.
-	d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+	// Use first runtime ID for reporting update results (API still requires a runtime path).
+	reportRuntimeID := id
+	rids := d.allRuntimeIDs()
+	if len(rids) > 0 {
+		reportRuntimeID = rids[0]
+	}
+
+	d.logger.Info("update requested", "id", id, "update_id", update.ID, "target", target, "target_version", update.TargetVersion)
+
+	d.client.ReportUpdateResult(ctx, reportRuntimeID, update.ID, map[string]any{
 		"status": "running",
 	})
 
+	if target == "multica" {
+		d.handleMulticaUpdate(ctx, reportRuntimeID, update)
+	} else {
+		d.handleProviderUpdate(ctx, reportRuntimeID, update, target)
+	}
+}
+
+// handleMulticaUpdate handles updates to the multica CLI itself.
+func (d *Daemon) handleMulticaUpdate(ctx context.Context, runtimeID string, update *PendingUpdate) {
 	// Try Homebrew first, fall back to direct download.
 	var output string
 	if cli.IsBrewInstall() {
@@ -591,6 +741,33 @@ func (d *Daemon) handleUpdate(ctx context.Context, runtimeID string, update *Pen
 
 	// Trigger daemon restart with the new binary.
 	d.triggerRestart()
+}
+
+// handleProviderUpdate handles updates to code agent CLIs (claude, codex, etc.).
+func (d *Daemon) handleProviderUpdate(ctx context.Context, runtimeID string, update *PendingUpdate, provider string) {
+	output, err := UpdateProvider(ctx, provider, update.TargetVersion, d.logger)
+	if err != nil {
+		d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	// Re-probe the updated CLI and update the agent entry.
+	path, lookupErr := exec.LookPath(providerBinaryName(provider))
+	if lookupErr == nil {
+		d.cfg.Agents[provider] = AgentEntry{Path: path}
+	}
+
+	d.logger.Info("code agent CLI updated", "provider", provider, "output", output)
+	d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+		"status": "completed",
+		"output": fmt.Sprintf("Updated %s to %s", provider, update.TargetVersion),
+	})
+
+	// No daemon restart needed — just re-register to update version info.
+	// The next heartbeat cycle will pick up the new version.
 }
 
 // triggerRestart initiates a graceful daemon restart after a successful CLI update.
@@ -921,6 +1098,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		"MULTICA_AGENT_NAME":   agentName,
 		"MULTICA_AGENT_ID":     task.AgentID,
 		"MULTICA_TASK_ID":      task.ID,
+	}
+
+	// Inject workspace-level provider API key if available.
+	// This allows running without per-user CLI auth (e.g. `claude login`).
+	if apiKey := d.resolveProviderAPIKey(provider, task.ProviderAPIKey); apiKey != "" {
+		switch provider {
+		case "claude":
+			agentEnv["ANTHROPIC_API_KEY"] = apiKey
+		case "codex":
+			agentEnv["OPENAI_API_KEY"] = apiKey
+		case "opencode":
+			agentEnv["OPENAI_API_KEY"] = apiKey
+		}
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.

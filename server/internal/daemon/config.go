@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -99,8 +100,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			Model: strings.TrimSpace(os.Getenv("MULTICA_CURSOR_MODEL")),
 		}
 	}
+	// Allow starting with zero agents — workspace provider config may trigger
+	// auto-install after registration.
 	if len(agents) == 0 {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, opencode, or cursor-agent and ensure it is on PATH")
+		slog.Warn("no agent CLI found locally; will attempt auto-install from workspace config after registration")
 	}
 
 	// Host info

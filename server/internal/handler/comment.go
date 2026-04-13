@@ -275,7 +275,7 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 		}
 		// Load the agent to check visibility, archive status, and trigger config.
 		agent, err := h.Queries.GetAgent(ctx, agentUUID)
-		if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+		if err != nil || len(agent.Providers) == 0 || agent.ArchivedAt.Valid {
 			continue
 		}
 		// Private agents can only be mentioned by the agent owner or workspace admin/owner.

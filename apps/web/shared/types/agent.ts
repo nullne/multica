@@ -8,10 +8,26 @@ export type AgentTriggerType = "on_assign" | "on_comment" | "scheduled";
 
 export type GitHubCodeAccess = "read" | "write" | "admin";
 
+export interface Daemon {
+  id: string;
+  workspace_id: string;
+  daemon_id: string;
+  status: "online" | "offline";
+  cli_version: string;
+  device_name: string;
+  device_info: string;
+  labels: string[];
+  metadata: Record<string, unknown>;
+  last_seen_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RuntimeDevice {
   id: string;
   workspace_id: string;
   daemon_id: string | null;
+  daemon_ref: string | null;
   name: string;
   runtime_mode: AgentRuntimeMode;
   provider: string;
@@ -59,16 +75,13 @@ export interface AgentTask {
 export interface Agent {
   id: string;
   workspace_id: string;
-  runtime_id: string;
+  providers: string[];
   name: string;
   description: string;
   instructions: string;
   avatar_url: string | null;
-  runtime_mode: AgentRuntimeMode;
-  runtime_config: Record<string, unknown>;
   visibility: AgentVisibility;
   status: AgentStatus;
-  max_concurrent_tasks: number;
   owner_id: string | null;
   skills: Skill[];
   tools: AgentTool[];
@@ -85,10 +98,8 @@ export interface CreateAgentRequest {
   description?: string;
   instructions?: string;
   avatar_url?: string;
-  runtime_id: string;
-  runtime_config?: Record<string, unknown>;
+  providers: string[];
   visibility?: AgentVisibility;
-  max_concurrent_tasks?: number;
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
   github_code_access?: GitHubCodeAccess;
@@ -99,11 +110,9 @@ export interface UpdateAgentRequest {
   description?: string;
   instructions?: string;
   avatar_url?: string;
-  runtime_id?: string;
-  runtime_config?: Record<string, unknown>;
+  providers?: string[];
   visibility?: AgentVisibility;
   status?: AgentStatus;
-  max_concurrent_tasks?: number;
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
   github_code_access?: GitHubCodeAccess;

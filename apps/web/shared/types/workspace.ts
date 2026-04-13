@@ -19,6 +19,17 @@ export interface Workspace {
   updated_at: string;
 }
 
+export interface ProviderConfig {
+  enabled: boolean;
+  api_key: string;
+  target_version: string;
+}
+
+export interface WorkspaceProviderSettings {
+  providers?: Record<string, ProviderConfig>;
+  multica_target_version?: string;
+}
+
 export interface Member {
   id: string;
   workspace_id: string;

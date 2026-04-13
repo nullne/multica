@@ -18,10 +18,9 @@ WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateAgent :one
 INSERT INTO agent (
-    workspace_id, name, description, avatar_url, runtime_mode,
-    runtime_config, runtime_id, visibility, max_concurrent_tasks, owner_id,
+    workspace_id, name, description, avatar_url, providers, visibility, owner_id,
     tools, triggers, instructions, github_code_access
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: UpdateAgent :one
@@ -29,12 +28,9 @@ UPDATE agent SET
     name = COALESCE(sqlc.narg('name'), name),
     description = COALESCE(sqlc.narg('description'), description),
     avatar_url = COALESCE(sqlc.narg('avatar_url'), avatar_url),
-    runtime_config = COALESCE(sqlc.narg('runtime_config'), runtime_config),
-    runtime_mode = COALESCE(sqlc.narg('runtime_mode'), runtime_mode),
-    runtime_id = COALESCE(sqlc.narg('runtime_id'), runtime_id),
+    providers = COALESCE(sqlc.narg('providers'), providers),
     visibility = COALESCE(sqlc.narg('visibility'), visibility),
     status = COALESCE(sqlc.narg('status'), status),
-    max_concurrent_tasks = COALESCE(sqlc.narg('max_concurrent_tasks'), max_concurrent_tasks),
     tools = COALESCE(sqlc.narg('tools'), tools),
     triggers = COALESCE(sqlc.narg('triggers'), triggers),
     instructions = COALESCE(sqlc.narg('instructions'), instructions),

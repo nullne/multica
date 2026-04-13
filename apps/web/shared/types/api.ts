@@ -13,6 +13,9 @@ export interface CreateIssueRequest {
   max_verification_rounds?: number;
   parent_issue_id?: string;
   due_date?: string;
+  dispatch_provider?: string;
+  dispatch_daemon_id?: string;
+  dispatch_daemon_label?: string;
 }
 
 export interface UpdateIssueRequest {

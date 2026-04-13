@@ -11,10 +11,93 @@ import (
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
+type DaemonResponse struct {
+	ID          string   `json:"id"`
+	WorkspaceID string   `json:"workspace_id"`
+	DaemonID    string   `json:"daemon_id"`
+	Status      string   `json:"status"`
+	CLIVersion  string   `json:"cli_version"`
+	DeviceName  string   `json:"device_name"`
+	DeviceInfo  string   `json:"device_info"`
+	Labels      []string `json:"labels"`
+	Metadata    any      `json:"metadata"`
+	LastSeenAt  *string  `json:"last_seen_at"`
+	CreatedAt   string   `json:"created_at"`
+	UpdatedAt   string   `json:"updated_at"`
+}
+
+func daemonToResponse(d db.Daemon) DaemonResponse {
+	var metadata any
+	if d.Metadata != nil {
+		json.Unmarshal(d.Metadata, &metadata)
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	labels := d.Labels
+	if labels == nil {
+		labels = []string{}
+	}
+	return DaemonResponse{
+		ID:          uuidToString(d.ID),
+		WorkspaceID: uuidToString(d.WorkspaceID),
+		DaemonID:    d.DaemonID,
+		Status:      d.Status,
+		CLIVersion:  d.CliVersion,
+		DeviceName:  d.DeviceName,
+		DeviceInfo:  d.DeviceInfo,
+		Labels:      labels,
+		Metadata:    metadata,
+		LastSeenAt:  timestampToPtr(d.LastSeenAt),
+		CreatedAt:   timestampToString(d.CreatedAt),
+		UpdatedAt:   timestampToString(d.UpdatedAt),
+	}
+}
+
+func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
+	daemonID := chi.URLParam(r, "daemonId")
+
+	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return
+	}
+
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+		return
+	}
+
+	var req struct {
+		DeviceName *string  `json:"device_name"`
+		Labels     []string `json:"labels"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	params := db.UpdateDaemonFieldsParams{ID: parseUUID(daemonID)}
+	if req.DeviceName != nil {
+		params.DeviceName = pgtype.Text{String: *req.DeviceName, Valid: true}
+	}
+	if req.Labels != nil {
+		params.Labels = req.Labels
+	}
+
+	updated, err := h.Queries.UpdateDaemonFields(r.Context(), params)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update daemon")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, daemonToResponse(updated))
+}
+
 type AgentRuntimeResponse struct {
 	ID          string  `json:"id"`
 	WorkspaceID string  `json:"workspace_id"`
 	DaemonID    *string `json:"daemon_id"`
+	DaemonRef   *string `json:"daemon_ref"`
 	Name        string  `json:"name"`
 	RuntimeMode string  `json:"runtime_mode"`
 	Provider    string  `json:"provider"`
@@ -39,6 +122,7 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 		ID:          uuidToString(rt.ID),
 		WorkspaceID: uuidToString(rt.WorkspaceID),
 		DaemonID:    textToPtr(rt.DaemonID),
+		DaemonRef:   uuidToPtr(rt.DaemonRef),
 		Name:        rt.Name,
 		RuntimeMode: rt.RuntimeMode,
 		Provider:    rt.Provider,
@@ -187,6 +271,23 @@ func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request)
 	resp := make([]HourlyActivity, len(rows))
 	for i, row := range rows {
 		resp[i] = HourlyActivity{Hour: int(row.Hour), Count: int(row.Count)}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
+	workspaceID := resolveWorkspaceID(r)
+
+	daemons, err := h.Queries.ListDaemons(r.Context(), parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list daemons")
+		return
+	}
+
+	resp := make([]DaemonResponse, len(daemons))
+	for i, d := range daemons {
+		resp[i] = daemonToResponse(d)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

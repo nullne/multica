@@ -36,6 +36,7 @@ type Task struct {
 	TriggerCommentID string         `json:"trigger_comment_id,omitempty"` // comment that triggered this task
 	GitHubToken      string         `json:"github_token,omitempty"`
 	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
+	ProviderAPIKey   string         `json:"provider_api_key,omitempty"` // workspace-level API key
 }
 
 // AgentData holds agent details returned by the claim endpoint.
