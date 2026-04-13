@@ -445,15 +445,20 @@ function TaskRunEntry({ task }: { task: AgentTask }) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-5 mt-1 max-h-64 overflow-y-auto rounded border bg-muted/30 px-3 py-2 space-y-0.5">
+          {task.status === "failed" && task.error && (
+            <div className="rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive mb-1">
+              {task.error}
+            </div>
+          )}
           {items === null ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
               <Loader2 className="h-3 w-3 animate-spin" />
               Loading...
             </div>
-          ) : items.length === 0 ? (
+          ) : items.length === 0 && !(task.status === "failed" && task.error) ? (
             <p className="text-xs text-muted-foreground py-2">No execution data recorded.</p>
           ) : (
-            items.map((item, idx) => (
+            items?.map((item, idx) => (
               <TimelineRow key={`${item.seq}-${idx}`} item={item} />
             ))
           )}

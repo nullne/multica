@@ -544,34 +544,37 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
                       {dispatchDaemonId
                         ? (daemons.find((d) => d.id === dispatchDaemonId)?.device_name || "Daemon")
                         : dispatchDaemonLabel
-                          ? `label: ${dispatchDaemonLabel}`
+                          ? dispatchDaemonLabel
                           : "Any daemon"}
                     </span>
                   </PillButton>
                 } />
                 <DropdownMenuContent align="start">
                   <DropdownMenuItem onClick={() => { setDispatchDaemonId(undefined); setDispatchDaemonLabel(undefined); }}>
+                    <Check className={`size-3.5 ${!dispatchDaemonId && !dispatchDaemonLabel ? "opacity-100" : "opacity-0"}`} />
                     Any daemon
                   </DropdownMenuItem>
-                  {daemons.length > 0 && (
-                    <>
-                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Daemons</div>
-                      {daemons.map((d) => (
-                        <DropdownMenuItem key={d.id} onClick={() => { setDispatchDaemonId(d.id); setDispatchDaemonLabel(undefined); }}>
-                          <span className={d.status === "online" ? "" : "text-muted-foreground"}>
-                            {d.device_name || d.daemon_id}
-                          </span>
-                          <span className={`ml-auto h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`} />
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
                   {allDaemonLabels.length > 0 && (
                     <>
                       <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">By label</div>
                       {allDaemonLabels.map((label) => (
                         <DropdownMenuItem key={label} onClick={() => { setDispatchDaemonLabel(label); setDispatchDaemonId(undefined); }}>
+                          <Check className={`size-3.5 ${dispatchDaemonLabel === label ? "opacity-100" : "opacity-0"}`} />
                           {label}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
+                  {daemons.length > 0 && (
+                    <>
+                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Daemons</div>
+                      {daemons.map((d) => (
+                        <DropdownMenuItem key={d.id} onClick={() => { setDispatchDaemonId(d.id); setDispatchDaemonLabel(undefined); }}>
+                          <Check className={`size-3.5 ${dispatchDaemonId === d.id ? "opacity-100" : "opacity-0"}`} />
+                          <span className={d.status === "online" ? "" : "text-muted-foreground"}>
+                            {d.device_name || d.daemon_id}
+                          </span>
+                          <span className={`ml-auto h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`} />
                         </DropdownMenuItem>
                       ))}
                     </>
