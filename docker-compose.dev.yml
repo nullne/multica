@@ -93,15 +93,14 @@ services:
     image: golang:1.26-alpine
     working_dir: /app/server
     command: >
-      sh -c "apk add --no-cache nodejs npm bubblewrap > /dev/null 2>&1 &&
-             npm install -g @openai/codex > /dev/null 2>&1 &&
-             printenv OPENAI_API_KEY | codex login --with-api-key &&
+      sh -c "apk add --no-cache nodejs npm bubblewrap curl bash > /dev/null 2>&1 &&
              go build -o /usr/local/bin/multica ./cmd/multica &&
              multica daemon start --foreground"
     environment:
       MULTICA_SERVER_URL: http://backend:8080
       MULTICA_DAEMON_ID: dev-daemon
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      IS_SANDBOX: "1"
+      CLAUDE_CODE_BUBBLEWRAP: "1"
       no_proxy: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
       NO_PROXY: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
     volumes:
