@@ -42,6 +42,7 @@ type IssueResponse struct {
 	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
+	Labels                []LabelResponse         `json:"labels"`
 	Reactions             []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments           []AttachmentResponse    `json:"attachments,omitempty"`
 }
@@ -98,6 +99,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DispatchProvider:      textToPtr(i.DispatchProvider),
 		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
 		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
+		Labels:                []LabelResponse{},
 		CreatedAt:             timestampToString(i.CreatedAt),
 		UpdatedAt:             timestampToString(i.UpdatedAt),
 	}
@@ -154,6 +156,32 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		resp[i] = issueToResponse(issue, prefix)
 	}
 
+	// Batch-fetch labels for all issues.
+	if len(issues) > 0 {
+		issueIDs := make([]pgtype.UUID, len(issues))
+		for i, issue := range issues {
+			issueIDs[i] = issue.ID
+		}
+		labelRows, err := h.Queries.ListLabelsForIssues(ctx, issueIDs)
+		if err == nil {
+			labelMap := make(map[string][]LabelResponse)
+			for _, row := range labelRows {
+				iid := uuidToString(row.IssueID)
+				labelMap[iid] = append(labelMap[iid], LabelResponse{
+					ID:          uuidToString(row.ID),
+					WorkspaceID: uuidToString(row.WorkspaceID),
+					Name:        row.Name,
+					Color:       row.Color,
+				})
+			}
+			for i := range resp {
+				if labels, ok := labelMap[resp[i].ID]; ok {
+					resp[i].Labels = labels
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issues": resp,
 		"total":  len(resp),
@@ -168,6 +196,15 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
+
+	// Fetch issue labels.
+	labels, err := h.Queries.ListLabelsForIssue(r.Context(), issue.ID)
+	if err == nil && len(labels) > 0 {
+		resp.Labels = make([]LabelResponse, len(labels))
+		for i, l := range labels {
+			resp.Labels[i] = labelToResponse(l)
+		}
+	}
 
 	// Fetch issue reactions.
 	reactions, err := h.Queries.ListIssueReactions(r.Context(), issue.ID)

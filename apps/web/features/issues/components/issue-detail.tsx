@@ -68,6 +68,7 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueStore } from "@/features/issues";
+import { LabelPicker } from "@/features/labels/components";
 import { useIssueViewStore } from "@/features/issues/stores/view-store";
 import { useIssuesScopeStore } from "@/features/issues/stores/issues-scope-store";
 import { useIssueTimeline } from "@/features/issues/hooks/use-issue-timeline";
@@ -448,6 +449,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
+  const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const scopedIssues = useMemo(() => {
@@ -456,8 +458,8 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
     return allIssues;
   }, [allIssues, scope]);
   const filteredIssues = useMemo(
-    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters }),
-    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters],
+    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters }),
+    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters],
   );
   const navigationIssues = useMemo(() => {
     if (!issue) return [];
@@ -1312,6 +1314,18 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                       assigneeType={issue.assignee_type}
                       assigneeId={issue.assignee_id}
                       onUpdate={handleUpdateField}
+                      align="start"
+                    />
+                  </PropRow>
+
+                  {/* Labels */}
+                  <PropRow label="Labels">
+                    <LabelPicker
+                      issueId={issue.id}
+                      selected={issue.labels ?? []}
+                      onUpdate={(labels) =>
+                        useIssueStore.getState().updateIssue(issue.id, { labels })
+                      }
                       align="start"
                     />
                   </PropRow>

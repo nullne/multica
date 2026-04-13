@@ -37,11 +37,18 @@ export default function RuntimesPage() {
     if (workspace) fetchAll();
   }, [workspace, fetchAll]);
 
+  // Refresh on daemon register/deregister events.
   const handleDaemonEvent = useCallback(() => {
     fetchAll();
   }, [fetchAll]);
-
   useWSEvent("daemon:register", handleDaemonEvent);
+
+  // Poll periodically to pick up status & auth changes from heartbeats.
+  useEffect(() => {
+    if (!workspace) return;
+    const interval = setInterval(fetchAll, 30_000);
+    return () => clearInterval(interval);
+  }, [workspace, fetchAll]);
 
   const selected = daemons.find((d) => d.id === selectedDaemonId) ?? null;
 
@@ -99,6 +106,7 @@ export default function RuntimesPage() {
       <div className="flex flex-1 min-h-0 flex-col">
         <RuntimeList
           daemons={daemons}
+          runtimes={runtimes}
           selectedId={selectedDaemonId}
           onSelect={setSelectedDaemonId}
         />
@@ -122,6 +130,7 @@ export default function RuntimesPage() {
       >
         <RuntimeList
           daemons={daemons}
+          runtimes={runtimes}
           selectedId={selectedDaemonId}
           onSelect={setSelectedDaemonId}
         />

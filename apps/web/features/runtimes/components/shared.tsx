@@ -1,4 +1,4 @@
-import { Monitor, Cloud, Wifi, WifiOff, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
+import { Monitor, Cloud, Wifi, WifiOff, RefreshCw, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { ProviderAuthStatus } from "@/shared/types";
 
@@ -11,6 +11,14 @@ export function RuntimeModeIcon({ mode }: { mode: string }) {
 }
 
 export function StatusBadge({ status }: { status: string }) {
+  if (status === "updating") {
+    return (
+      <Badge variant="secondary" className="bg-info/10 text-info">
+        <RefreshCw className="h-3 w-3 animate-spin" />
+        Updating
+      </Badge>
+    );
+  }
   const isOnline = status === "online";
   return (
     <Badge

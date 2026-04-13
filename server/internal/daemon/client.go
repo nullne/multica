@@ -139,10 +139,11 @@ func (c *Client) ReportUsage(ctx context.Context, runtimeID string, entries []ma
 
 // HeartbeatResponse contains the server's response to a heartbeat, including any pending actions.
 type HeartbeatResponse struct {
-	Status         string          `json:"status"`
-	PendingPing    *PendingPing    `json:"pending_ping,omitempty"`
-	PendingUpdate  *PendingUpdate  `json:"pending_update,omitempty"`   // legacy single update
-	PendingUpdates []PendingUpdate `json:"pending_updates,omitempty"`  // daemon-level batch
+	Status         string                       `json:"status"`
+	PendingPing    *PendingPing                 `json:"pending_ping,omitempty"`
+	PendingUpdate  *PendingUpdate               `json:"pending_update,omitempty"`    // legacy single update
+	PendingUpdates []PendingUpdate              `json:"pending_updates,omitempty"`   // daemon-level batch
+	ProviderConfig map[string]ProviderConfig    `json:"provider_config,omitempty"`
 }
 
 // PendingPing represents a ping test request from the server.

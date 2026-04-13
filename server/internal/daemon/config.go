@@ -93,7 +93,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			Model: strings.TrimSpace(os.Getenv("MULTICA_OPENCODE_MODEL")),
 		}
 	}
-	cursorPath := envOrDefault("MULTICA_CURSOR_PATH", "cursor-agent")
+	cursorPath := envOrDefault("MULTICA_CURSOR_PATH", "agent")
 	if _, err := exec.LookPath(cursorPath); err == nil {
 		agents["cursor"] = AgentEntry{
 			Path:  cursorPath,

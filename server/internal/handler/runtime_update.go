@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 // ---------------------------------------------------------------------------
@@ -241,6 +242,7 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // ReportUpdateResult receives the update result from the daemon.
+// It also updates the daemon/runtime DB status to reflect the update lifecycle.
 func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 	updateID := chi.URLParam(r, "updateId")
 
@@ -254,18 +256,42 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	update := h.UpdateStore.Get(updateID)
+
 	switch req.Status {
 	case "completed":
 		h.UpdateStore.Complete(updateID, req.Output)
 	case "failed":
 		h.UpdateStore.Fail(updateID, req.Error)
 	case "running":
-		// No-op: status is already "running" from PopPending. This call is
-		// just a progress signal from the daemon to confirm it received the
-		// update command and is executing it.
+		// Mark daemon/runtime as "updating" in DB.
+		if update != nil {
+			if update.DaemonID != "" {
+				if update.Target == "multica" {
+					h.Queries.SetDaemonAndRuntimesUpdating(r.Context(), parseUUID(update.DaemonID))
+				} else {
+					h.Queries.SetDaemonStatus(r.Context(), db.SetDaemonStatusParams{ID: parseUUID(update.DaemonID), Status: "updating"})
+				}
+			} else if update.RuntimeID != "" {
+				h.Queries.SetRuntimeStatus(r.Context(), db.SetRuntimeStatusParams{ID: parseUUID(update.RuntimeID), Status: "updating"})
+			}
+		}
 	default:
 		writeError(w, http.StatusBadRequest, "invalid status: "+req.Status)
 		return
+	}
+
+	// Restore status to "online" when update finishes (success or failure).
+	if (req.Status == "completed" || req.Status == "failed") && update != nil {
+		if update.DaemonID != "" {
+			h.Queries.SetDaemonStatus(r.Context(), db.SetDaemonStatusParams{ID: parseUUID(update.DaemonID), Status: "online"})
+			// For multica updates, also restore runtimes.
+			if update.Target == "multica" {
+				h.Queries.UpdateRuntimesHeartbeatByDaemon(r.Context(), parseUUID(update.DaemonID))
+			}
+		} else if update.RuntimeID != "" {
+			h.Queries.SetRuntimeStatus(r.Context(), db.SetRuntimeStatusParams{ID: parseUUID(update.RuntimeID), Status: "online"})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

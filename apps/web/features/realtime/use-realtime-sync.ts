@@ -5,6 +5,7 @@ import type { WSClient } from "@/shared/api";
 import { toast } from "sonner";
 import { useIssueStore } from "@/features/issues";
 import { useInboxStore } from "@/features/inbox";
+import { useLabelStore } from "@/features/labels";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useAuthStore } from "@/features/auth";
 import { createLogger } from "@/shared/logger";
@@ -17,6 +18,9 @@ import type {
   IssueCreatedPayload,
   IssueDeletedPayload,
   InboxNewPayload,
+  LabelCreatedPayload,
+  LabelUpdatedPayload,
+  LabelDeletedPayload,
 } from "@/shared/types";
 
 const logger = createLogger("realtime-sync");
@@ -40,6 +44,7 @@ export function useRealtimeSync(ws: WSClient | null) {
     // Event types handled by specific handlers below — skip generic refresh
     const specificEvents = new Set([
       "issue:updated", "issue:created", "issue:deleted", "inbox:new",
+      "label:created", "label:updated", "label:deleted",
     ]);
 
     const refreshMap: Record<string, () => void> = {
@@ -108,6 +113,21 @@ export function useRealtimeSync(ws: WSClient | null) {
       if (issue_id) useIssueStore.getState().removeIssue(issue_id);
     });
 
+    const unsubLabelCreated = ws.on("label:created", (p) => {
+      const { label } = p as LabelCreatedPayload;
+      if (label) useLabelStore.getState().addLabel(label);
+    });
+
+    const unsubLabelUpdated = ws.on("label:updated", (p) => {
+      const { label } = p as LabelUpdatedPayload;
+      if (label?.id) useLabelStore.getState().updateLabel(label.id, label);
+    });
+
+    const unsubLabelDeleted = ws.on("label:deleted", (p) => {
+      const { label_id } = p as LabelDeletedPayload;
+      if (label_id) useLabelStore.getState().removeLabel(label_id);
+    });
+
     const unsubInboxNew = ws.on("inbox:new", (p) => {
       const { item } = p as InboxNewPayload;
       if (!item) return;
@@ -154,6 +174,9 @@ export function useRealtimeSync(ws: WSClient | null) {
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
+      unsubLabelCreated();
+      unsubLabelUpdated();
+      unsubLabelDeleted();
       unsubInboxNew();
       unsubWsDeleted();
       unsubMemberRemoved();
@@ -173,6 +196,7 @@ export function useRealtimeSync(ws: WSClient | null) {
         await Promise.all([
           useIssueStore.getState().fetch(),
           useInboxStore.getState().fetch(),
+          useLabelStore.getState().fetch(),
           useWorkspaceStore.getState().refreshAgents(),
           useWorkspaceStore.getState().refreshMembers(),
           useWorkspaceStore.getState().refreshSkills(),

@@ -46,6 +46,31 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
           {issue.identifier}
         </span>
         <span className="min-w-0 flex-1 truncate">{issue.title}</span>
+        {issue.labels.length > 0 && (
+          <span className="hidden md:flex items-center gap-1 shrink-0">
+            {issue.labels.slice(0, 3).map((l) => (
+              <span
+                key={l.id}
+                className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] border truncate max-w-[80px]"
+                style={{
+                  borderColor: l.color + "40",
+                  backgroundColor: l.color + "15",
+                }}
+              >
+                <span
+                  className="h-1.5 w-1.5 rounded-full shrink-0"
+                  style={{ backgroundColor: l.color }}
+                />
+                <span className="truncate">{l.name}</span>
+              </span>
+            ))}
+            {issue.labels.length > 3 && (
+              <span className="text-[10px] text-muted-foreground">
+                +{issue.labels.length - 3}
+              </span>
+            )}
+          </span>
+        )}
         {issue.due_date && (
           <span className="hidden sm:inline shrink-0 text-xs text-muted-foreground">
             {formatDate(issue.due_date)}

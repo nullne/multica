@@ -42,6 +42,7 @@ type Daemon struct {
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
 	restartBinary string             // non-empty after a successful update; path to the new binary
 	updating      atomic.Bool        // prevents concurrent update attempts
+	reconciling   atomic.Bool        // prevents concurrent reconcileProviders
 }
 
 // New creates a new Daemon instance.
@@ -245,7 +246,73 @@ func (d *Daemon) providerToRuntimeMap() map[string]string {
 }
 
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
-	// First pass: build runtimes from locally available agents.
+	runtimes := d.detectLocalRuntimes(ctx)
+
+	// If no local agents, do a bootstrap registration to fetch workspace
+	// provider config, auto-install missing CLIs, then re-detect.
+	if len(runtimes) == 0 {
+		resp, err := d.doRegister(ctx, workspaceID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap register: %w", err)
+		}
+		if resp.ProviderConfig != nil {
+			d.mu.Lock()
+			for k, v := range resp.ProviderConfig {
+				d.providerConfigs[k] = v
+			}
+			d.mu.Unlock()
+			d.autoInstallProviders(ctx, resp.ProviderConfig)
+		}
+		runtimes = d.detectLocalRuntimes(ctx)
+		if len(runtimes) == 0 {
+			return nil, fmt.Errorf("no agent runtimes could be registered (even after auto-install)")
+		}
+	}
+
+	resp, err := d.doRegister(ctx, workspaceID, runtimes)
+	if err != nil {
+		return nil, fmt.Errorf("register runtimes: %w", err)
+	}
+	if len(resp.Runtimes) == 0 {
+		return nil, fmt.Errorf("register runtimes: empty response")
+	}
+
+	// Capture daemon UUID from server response.
+	if resp.Daemon != nil && resp.Daemon.ID != "" {
+		d.mu.Lock()
+		d.daemonUUID = resp.Daemon.ID
+		d.mu.Unlock()
+	}
+
+	// Store provider configs and auto-install any remaining missing providers.
+	if resp.ProviderConfig != nil {
+		d.mu.Lock()
+		for k, v := range resp.ProviderConfig {
+			d.providerConfigs[k] = v
+		}
+		d.mu.Unlock()
+
+		agentsBefore := len(d.cfg.Agents)
+		d.autoInstallProviders(ctx, resp.ProviderConfig)
+
+		// If new agents were installed, re-register so they get runtime entries.
+		if len(d.cfg.Agents) > agentsBefore {
+			updated := d.detectLocalRuntimes(ctx)
+			if len(updated) > len(runtimes) {
+				d.logger.Info("re-registering with newly installed providers", "before", len(runtimes), "after", len(updated))
+				if reResp, err := d.doRegister(ctx, workspaceID, updated); err == nil {
+					resp = reResp
+				}
+			}
+		}
+	}
+
+	return resp, nil
+}
+
+// detectLocalRuntimes probes locally installed agent CLIs and returns their
+// registration payloads.
+func (d *Daemon) detectLocalRuntimes(ctx context.Context) []map[string]string {
 	var runtimes []map[string]string
 	for name, entry := range d.cfg.Agents {
 		version, err := agent.DetectVersion(ctx, entry.Path)
@@ -267,10 +334,15 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		})
 		d.logger.Info("detected provider auth", "provider", name, "auth_status", authStatus)
 	}
-	if len(runtimes) == 0 {
-		return nil, fmt.Errorf("no agent runtimes could be registered")
-	}
+	return runtimes
+}
 
+// doRegister sends a registration request to the server. runtimes may be nil
+// for a bootstrap registration (to fetch provider config before any CLIs are installed).
+func (d *Daemon) doRegister(ctx context.Context, workspaceID string, runtimes []map[string]string) (*RegisterResponse, error) {
+	if runtimes == nil {
+		runtimes = []map[string]string{}
+	}
 	req := map[string]any{
 		"workspace_id": workspaceID,
 		"daemon_id":    d.cfg.DaemonID,
@@ -278,34 +350,53 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"cli_version":  d.cfg.CLIVersion,
 		"runtimes":     runtimes,
 	}
+	return d.client.Register(ctx, req)
+}
 
-	resp, err := d.client.Register(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("register runtimes: %w", err)
+// reconcileProviders checks heartbeat provider config against locally installed
+// agents and auto-installs + re-registers any missing ones.
+func (d *Daemon) reconcileProviders(ctx context.Context, config map[string]ProviderConfig) {
+	d.mu.Lock()
+	for k, v := range config {
+		d.providerConfigs[k] = v
 	}
-	if len(resp.Runtimes) == 0 {
-		return nil, fmt.Errorf("register runtimes: empty response")
+	d.mu.Unlock()
+
+	agentsBefore := len(d.cfg.Agents)
+	d.autoInstallProviders(ctx, config)
+
+	if len(d.cfg.Agents) <= agentsBefore {
+		return
 	}
 
-	// Capture daemon UUID from server response.
-	if resp.Daemon != nil && resp.Daemon.ID != "" {
+	// New agents installed — re-register all workspaces so the new runtimes
+	// get entries on the server and can receive tasks.
+	d.mu.Lock()
+	wsIDs := make([]string, 0, len(d.workspaces))
+	for id := range d.workspaces {
+		wsIDs = append(wsIDs, id)
+	}
+	d.mu.Unlock()
+
+	for _, wsID := range wsIDs {
+		runtimes := d.detectLocalRuntimes(ctx)
+		resp, err := d.doRegister(ctx, wsID, runtimes)
+		if err != nil {
+			d.logger.Warn("re-register after auto-install failed", "workspace_id", wsID, "error", err)
+			continue
+		}
+		runtimeIDs := make([]string, len(resp.Runtimes))
+		for i, rt := range resp.Runtimes {
+			runtimeIDs[i] = rt.ID
+		}
 		d.mu.Lock()
-		d.daemonUUID = resp.Daemon.ID
-		d.mu.Unlock()
-	}
-
-	// Store provider configs from server response.
-	if resp.ProviderConfig != nil {
-		d.mu.Lock()
-		for k, v := range resp.ProviderConfig {
-			d.providerConfigs[k] = v
+		d.workspaces[wsID] = &workspaceState{workspaceID: wsID, runtimeIDs: runtimeIDs}
+		for _, rt := range resp.Runtimes {
+			d.runtimeIndex[rt.ID] = rt
 		}
 		d.mu.Unlock()
-
-		d.autoInstallProviders(ctx, resp.ProviderConfig)
+		d.logger.Info("re-registered with new providers", "workspace_id", wsID, "runtimes", len(resp.Runtimes))
 	}
-
-	return resp, nil
 }
 
 // autoInstallProviders installs code agent CLIs that are enabled in the workspace
@@ -329,10 +420,20 @@ func (d *Daemon) autoInstallProviders(ctx context.Context, providerConfig map[st
 		}
 
 		// Re-probe the installed CLI.
-		path, lookupErr := exec.LookPath(providerBinaryName(provider))
+		binName := providerBinaryName(provider)
+		path, lookupErr := exec.LookPath(binName)
 		if lookupErr != nil {
-			d.logger.Warn("auto-install succeeded but CLI not found on PATH", "provider", provider, "error", lookupErr)
-			continue
+			// Some installers (e.g. cursor) place binaries outside $PATH.
+			for _, fallback := range providerFallbackPaths(binName) {
+				if _, err := os.Stat(fallback); err == nil {
+					path = fallback
+					break
+				}
+			}
+			if path == "" {
+				d.logger.Warn("auto-install succeeded but CLI not found on PATH", "provider", provider, "error", lookupErr)
+				continue
+			}
 		}
 
 		d.cfg.Agents[provider] = AgentEntry{Path: path}
@@ -355,6 +456,19 @@ func (d *Daemon) resolveProviderAPIKey(provider, taskAPIKey string) string {
 	return ""
 }
 
+// providerFallbackPaths returns additional paths to check when the binary is
+// not on $PATH. Some installers (e.g. cursor) place binaries in ~/.local/bin.
+func providerFallbackPaths(binName string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, ".local", "bin", binName),
+		filepath.Join("/usr", "local", "bin", binName),
+	}
+}
+
 // providerBinaryName returns the expected binary name for a provider.
 func providerBinaryName(provider string) string {
 	switch provider {
@@ -365,7 +479,7 @@ func providerBinaryName(provider string) string {
 	case "opencode":
 		return "opencode"
 	case "cursor":
-		return "cursor-agent"
+		return "agent"
 	default:
 		return provider
 	}
@@ -589,6 +703,16 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 				if resp.PendingUpdate != nil {
 					go d.handleUpdate(ctx, dUUID, resp.PendingUpdate)
 				}
+
+				// Auto-install newly enabled providers (same cadence as auth check).
+				// Run async to avoid blocking heartbeat loop (installs can take minutes).
+				if refreshAuth && len(resp.ProviderConfig) > 0 && d.reconciling.CompareAndSwap(false, true) {
+					go func() {
+						defer d.reconciling.Store(false)
+						d.reconcileProviders(ctx, resp.ProviderConfig)
+					}()
+				}
+
 				continue
 			}
 
@@ -893,6 +1017,15 @@ func (d *Daemon) pollLoop(ctx context.Context) error {
 		default:
 		}
 
+		// Skip polling while a CLI update is in progress.
+		if d.updating.Load() || d.reconciling.Load() {
+			if err := sleepWithContext(ctx, d.cfg.PollInterval); err != nil {
+				wg.Wait()
+				return err
+			}
+			continue
+		}
+
 		runtimeIDs := d.allRuntimeIDs()
 		if len(runtimeIDs) == 0 {
 			if err := sleepWithContext(ctx, d.cfg.PollInterval); err != nil {
@@ -1128,6 +1261,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 			agentEnv["OPENAI_API_KEY"] = apiKey
 		case "opencode":
 			agentEnv["OPENAI_API_KEY"] = apiKey
+		case "cursor":
+			agentEnv["CURSOR_API_KEY"] = apiKey
 		}
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively

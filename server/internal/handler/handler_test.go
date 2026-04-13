@@ -111,17 +111,17 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 		)
 		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
 		RETURNING id
-	`, workspaceID, "Handler Test Runtime", "handler_test_runtime", "Handler test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "Handler Test Runtime", "codex", "Handler test runtime").Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id, tools, triggers
+			workspace_id, name, description,
+			visibility, owner_id, tools, triggers, providers
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4, '[]'::jsonb, '[]'::jsonb)
-	`, workspaceID, "Handler Test Agent", runtimeID, userID); err != nil {
+		VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'])
+	`, workspaceID, "Handler Test Agent", userID); err != nil {
 		return "", "", err
 	}
 
@@ -351,25 +351,25 @@ func TestAgentGitHubCodeAccess(t *testing.T) {
 	}
 	agentID := agents[0].ID
 
-	// Default should be "write".
-	if agents[0].GitHubCodeAccess != "write" {
-		t.Errorf("default github_code_access = %q, want 'write'", agents[0].GitHubCodeAccess)
+	// Default should be "read".
+	if agents[0].GitHubCodeAccess != "read" {
+		t.Errorf("default github_code_access = %q, want 'read'", agents[0].GitHubCodeAccess)
 	}
 
-	// Update to "read".
+	// Update to "write".
 	w = httptest.NewRecorder()
 	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
-		"github_code_access": "read",
+		"github_code_access": "write",
 	})
 	req = withURLParam(req, "id", agentID)
 	testHandler.UpdateAgent(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("UpdateAgent(read): expected 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("UpdateAgent(write): expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var updated AgentResponse
 	json.NewDecoder(w.Body).Decode(&updated)
-	if updated.GitHubCodeAccess != "read" {
-		t.Errorf("after update: github_code_access = %q, want 'read'", updated.GitHubCodeAccess)
+	if updated.GitHubCodeAccess != "write" {
+		t.Errorf("after update: github_code_access = %q, want 'write'", updated.GitHubCodeAccess)
 	}
 
 	// Update to "admin".
@@ -401,7 +401,7 @@ func TestAgentGitHubCodeAccess(t *testing.T) {
 	// Restore to default.
 	w = httptest.NewRecorder()
 	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
-		"github_code_access": "write",
+		"github_code_access": "read",
 	})
 	req = withURLParam(req, "id", agentID)
 	testHandler.UpdateAgent(w, req)
@@ -724,11 +724,11 @@ func TestResolveActor(t *testing.T) {
 		t.Fatalf("failed to create test issue: %v", err)
 	}
 
-	// Look up runtime_id for the agent.
+	// Look up a runtime in the same workspace.
 	var runtimeID string
-	err = testPool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentID).Scan(&runtimeID)
+	err = testPool.QueryRow(ctx, `SELECT id FROM agent_runtime WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&runtimeID)
 	if err != nil {
-		t.Fatalf("failed to get agent runtime_id: %v", err)
+		t.Fatalf("failed to get runtime_id: %v", err)
 	}
 
 	var taskID string

@@ -33,8 +33,7 @@ create_agent() {
     --arg name "$name" \
     --arg desc "$description" \
     --arg inst "$instructions" \
-    --arg rid "$RUNTIME_ID" \
-    '{name:$name, description:$desc, instructions:$inst, runtime_id:$rid, visibility:"workspace", max_concurrent_tasks:1}')
+    '{name:$name, description:$desc, instructions:$inst, visibility:"workspace", max_concurrent_tasks:1}')
   RESP=$(api POST /api/agents -d "$BODY")
   ANAME=$(echo "$RESP" | jq -r '.name // empty')
   if [ -z "$ANAME" ]; then
@@ -70,17 +69,11 @@ if [ -z "$WORKSPACE_ID" ]; then
 fi
 echo "  Workspace: ${WORKSPACE_NAME} (${WORKSPACE_ID})"
 
-# 3. Register a codex runtime
-echo "  Registering codex runtime..."
-REG_BODY="{\"workspace_id\":\"${WORKSPACE_ID}\",\"daemon_id\":\"dev-daemon\",\"device_name\":\"dev-container\",\"cli_version\":\"dev\",\"runtimes\":[{\"name\":\"Codex (dev)\",\"type\":\"codex\",\"version\":\"dev\",\"status\":\"online\"}]}"
-REG_RESP=$(api POST /api/daemon/register -d "$REG_BODY")
-RUNTIME_ID=$(echo "$REG_RESP" | jq -r '.runtimes[0].id // empty')
-if [ -z "$RUNTIME_ID" ]; then
-  echo "  ERROR: runtime registration failed"
-  echo "  $REG_RESP"
-  exit 1
-fi
-echo "  Runtime: ${RUNTIME_ID}"
+# 3. Register daemon (no runtimes — daemon will auto-install providers on startup)
+echo "  Registering daemon..."
+REG_BODY="{\"workspace_id\":\"${WORKSPACE_ID}\",\"daemon_id\":\"dev-daemon\",\"device_name\":\"dev-container\",\"cli_version\":\"dev\",\"runtimes\":[]}"
+api POST /api/daemon/register -d "$REG_BODY" > /dev/null
+echo "  Daemon registered."
 
 # 4. Create two agents: Coder (executor) and Reviewer (verifier)
 echo "  Creating agents..."

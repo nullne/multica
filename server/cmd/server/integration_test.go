@@ -132,17 +132,17 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 		)
 		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
 		RETURNING id
-	`, workspaceID, "Integration Test Runtime", "integration_test_runtime", "Integration test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "Integration Test Runtime", "codex", "Integration test runtime").Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id, tools, triggers
+			workspace_id, name, description,
+			visibility, owner_id, tools, triggers, providers
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4, '[]'::jsonb, '[]'::jsonb)
-	`, workspaceID, "Integration Test Agent", runtimeID, userID); err != nil {
+		VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'])
+	`, workspaceID, "Integration Test Agent", userID); err != nil {
 		return "", "", err
 	}
 

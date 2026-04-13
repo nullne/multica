@@ -2,16 +2,19 @@ import { useState } from "react";
 import { Monitor, Plus, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Daemon, AgentRuntime } from "@/shared/types";
 import { api } from "@/shared/api";
+import { useRuntimeStore } from "../store";
 import { formatLastSeen } from "../utils";
-import { StatusBadge, InfoField } from "./shared";
+import { StatusBadge, AuthStatusBadge, InfoField } from "./shared";
 import { UpdateSection } from "./update-section";
 import { UsageSection } from "./usage-section";
 import { PingSection } from "./ping-section";
 
 function LabelsEditor({ daemon }: { daemon: Daemon }) {
+  const patchDaemon = useRuntimeStore((s) => s.patchDaemon);
   const [labels, setLabels] = useState<string[]>(daemon.labels ?? []);
   const [newLabel, setNewLabel] = useState("");
 
@@ -19,6 +22,7 @@ function LabelsEditor({ daemon }: { daemon: Daemon }) {
     setLabels(next);
     try {
       await api.updateDaemon(daemon.id, { labels: next });
+      patchDaemon(daemon.id, { labels: next });
     } catch {
       toast.error("Failed to update labels");
       setLabels(daemon.labels ?? []);
@@ -79,30 +83,16 @@ function LabelsEditor({ daemon }: { daemon: Daemon }) {
   );
 }
 
-function ProviderCard({ runtime }: { runtime: AgentRuntime }) {
-  const version =
-    runtime.metadata && typeof runtime.metadata === "object" && "version" in runtime.metadata
-      ? String((runtime.metadata as Record<string, unknown>).version)
-      : null;
-
+function ProviderTabContent({ runtime }: { runtime: AgentRuntime }) {
   return (
-    <div className="rounded-lg border px-4 py-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium capitalize">{runtime.provider}</span>
-        {version && (
-          <span className="text-xs text-muted-foreground font-mono">{version}</span>
-        )}
-      </div>
-
-      <div>
-        <h4 className="text-xs text-muted-foreground mb-2">Token Usage</h4>
-        <UsageSection runtimeId={runtime.id} />
-      </div>
+    <div className="space-y-4 pt-3">
+      <UsageSection runtimeId={runtime.id} />
     </div>
   );
 }
 
 function EditableDeviceName({ daemon }: { daemon: Daemon }) {
+  const patchDaemon = useRuntimeStore((s) => s.patchDaemon);
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(daemon.device_name || daemon.daemon_id);
 
@@ -114,6 +104,7 @@ function EditableDeviceName({ daemon }: { daemon: Daemon }) {
     }
     try {
       await api.updateDaemon(daemon.id, { device_name: trimmed });
+      patchDaemon(daemon.id, { device_name: trimmed });
       setEditing(false);
     } catch {
       toast.error("Failed to update name");
@@ -144,6 +135,28 @@ function EditableDeviceName({ daemon }: { daemon: Daemon }) {
   );
 }
 
+interface ProviderEntry {
+  provider: string;
+  runtime: AgentRuntime | null;
+}
+
+function buildProviderEntries(
+  daemonRuntimes: AgentRuntime[],
+  enabledProviders: string[],
+): ProviderEntry[] {
+  const entries: ProviderEntry[] = daemonRuntimes.map((rt) => ({
+    provider: rt.provider,
+    runtime: rt,
+  }));
+  const installedSet = new Set(daemonRuntimes.map((r) => r.provider));
+  for (const name of enabledProviders) {
+    if (!installedSet.has(name)) {
+      entries.push({ provider: name, runtime: null });
+    }
+  }
+  return entries;
+}
+
 export function DaemonDetail({
   daemon,
   runtimes,
@@ -151,7 +164,9 @@ export function DaemonDetail({
   daemon: Daemon;
   runtimes: AgentRuntime[];
 }) {
+  const enabledProviders = useRuntimeStore((s) => s.enabledProviders);
   const daemonRuntimes = runtimes.filter((r) => r.daemon_ref === daemon.id);
+  const providerEntries = buildProviderEntries(daemonRuntimes, enabledProviders);
   const firstRuntimeId = daemonRuntimes[0]?.id;
 
   return (
@@ -160,7 +175,7 @@ export function DaemonDetail({
         <div className="flex min-w-0 items-center gap-2">
           <div
             className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
-              daemon.status === "online" ? "bg-success/10" : "bg-muted"
+              daemon.status === "online" ? "bg-success/10" : daemon.status === "updating" ? "bg-info/10" : "bg-muted"
             }`}
           >
             <Monitor className="h-3.5 w-3.5" />
@@ -180,14 +195,6 @@ export function DaemonDetail({
           <InfoField
             label="Last Seen"
             value={formatLastSeen(daemon.last_seen_at)}
-          />
-          <InfoField
-            label="Providers"
-            value={
-              daemonRuntimes.length > 0
-                ? daemonRuntimes.map((r) => r.provider).join(", ")
-                : "none"
-            }
           />
         </div>
 
@@ -223,17 +230,44 @@ export function DaemonDetail({
           </div>
         )}
 
-        {/* Providers */}
-        {daemonRuntimes.length > 0 && (
+        {/* Providers with tabs */}
+        {providerEntries.length > 0 && (
           <div>
             <h3 className="text-xs font-medium text-muted-foreground mb-3">
-              Providers ({daemonRuntimes.length})
+              Providers ({providerEntries.length})
             </h3>
-            <div className="space-y-3">
-              {daemonRuntimes.map((rt) => (
-                <ProviderCard key={rt.id} runtime={rt} />
-              ))}
-            </div>
+            {providerEntries.length === 1 && providerEntries[0] ? (
+              providerEntries[0].runtime ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium capitalize">{providerEntries[0].provider}</span>
+                    <AuthStatusBadge authStatus={providerEntries[0].runtime.auth_status} />
+                  </div>
+                  <ProviderTabContent runtime={providerEntries[0].runtime} />
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium capitalize">{providerEntries[0].provider}</span>
+                  <AuthStatusBadge authStatus="not_installed" />
+                </div>
+              )
+            ) : (
+              <Tabs defaultValue={providerEntries[0]?.provider ?? ""}>
+                <TabsList>
+                  {providerEntries.map((entry) => (
+                    <TabsTrigger key={entry.provider} value={entry.provider} className="gap-1.5">
+                      <span className="capitalize">{entry.provider}</span>
+                      <AuthStatusBadge authStatus={entry.runtime?.auth_status ?? "not_installed"} />
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+                {providerEntries.map((entry) => (
+                  <TabsContent key={entry.provider} value={entry.provider}>
+                    {entry.runtime && <ProviderTabContent runtime={entry.runtime} />}
+                  </TabsContent>
+                ))}
+              </Tabs>
+            )}
           </div>
         )}
 

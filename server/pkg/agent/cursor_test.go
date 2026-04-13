@@ -9,7 +9,7 @@ import (
 
 func TestNewReturnsCursorBackend(t *testing.T) {
 	t.Parallel()
-	b, err := New("cursor", Config{ExecutablePath: "/nonexistent/cursor-agent"})
+	b, err := New("cursor", Config{ExecutablePath: "/nonexistent/agent"})
 	if err != nil {
 		t.Fatalf("New(cursor) error: %v", err)
 	}

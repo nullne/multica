@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CalendarDays, Check, ChevronRight, Cpu, Monitor, Maximize2, Minimize2, ShieldCheck, ShieldOff, UserMinus, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { IssueStatus, IssuePriority, IssueAssigneeType, Daemon } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueAssigneeType, Daemon, Label } from "@/shared/types";
 import {
   Dialog,
   DialogContent,
@@ -29,6 +29,7 @@ import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich
 import { TitleEditor } from "@/components/common/title-editor";
 import { StatusIcon, PriorityIcon, canAssignAgent } from "@/features/issues/components";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
+import { useLabelStore } from "@/features/labels";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useIssueStore } from "@/features/issues";
@@ -88,6 +89,12 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [verifierAgentId, setVerifierAgentId] = useState<string | undefined>(draft.verifierAgentId);
   const [maxVerificationRounds, setMaxVerificationRounds] = useState<number | undefined>(draft.maxVerificationRounds);
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Labels
+  const [selectedLabels, setSelectedLabels] = useState<Label[]>([]);
+  const allLabels = useLabelStore((s) => s.labels);
+  const [labelOpen, setLabelOpen] = useState(false);
+  const [labelFilter, setLabelFilter] = useState("");
 
   // Dispatch hints (visible when assignee is an agent)
   const [dispatchProvider, setDispatchProvider] = useState<string | undefined>();
@@ -175,7 +182,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
     if (!title.trim() || submitting) return;
     setSubmitting(true);
     try {
-      const issue = await api.createIssue({
+      let issue = await api.createIssue({
         title: title.trim(),
         description: descEditorRef.current?.getMarkdown()?.trim() || undefined,
         status,
@@ -189,6 +196,14 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         dispatch_daemon_id: dispatchDaemonId,
         dispatch_daemon_label: dispatchDaemonLabel,
       });
+      if (selectedLabels.length > 0) {
+        try {
+          const labels = await api.setIssueLabels(issue.id, selectedLabels.map((l) => l.id));
+          issue = { ...issue, labels };
+        } catch {
+          // Labels failed but issue was created — not fatal.
+        }
+      }
       useIssueStore.getState().addIssue(issue);
       clearDraft();
       onClose();
@@ -343,6 +358,73 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
             </DropdownMenuContent>
           </DropdownMenu>
 
+          {/* Labels */}
+          <Popover open={labelOpen} onOpenChange={(v) => { setLabelOpen(v); if (!v) setLabelFilter(""); }}>
+            <PopoverTrigger
+              render={
+                <PillButton>
+                  {selectedLabels.length > 0 ? (
+                    <div className="flex items-center gap-1 overflow-hidden">
+                      {selectedLabels.slice(0, 2).map((l) => (
+                        <span
+                          key={l.id}
+                          className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs truncate"
+                          style={{ backgroundColor: l.color + "15" }}
+                        >
+                          <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
+                          <span className="truncate max-w-[60px]">{l.name}</span>
+                        </span>
+                      ))}
+                      {selectedLabels.length > 2 && (
+                        <span className="text-muted-foreground">+{selectedLabels.length - 2}</span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground">Labels</span>
+                  )}
+                </PillButton>
+              }
+            />
+            <PopoverContent align="start" className="w-52 p-0">
+              <div className="px-2 py-1.5 border-b">
+                <input
+                  type="text"
+                  value={labelFilter}
+                  onChange={(e) => setLabelFilter(e.target.value)}
+                  placeholder="Filter labels..."
+                  className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
+                />
+              </div>
+              <div className="p-1 max-h-60 overflow-y-auto">
+                {allLabels
+                  .filter((l) => l.name.toLowerCase().includes(labelFilter.toLowerCase()))
+                  .map((label) => (
+                    <button
+                      key={label.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedLabels((prev) =>
+                          prev.some((l) => l.id === label.id)
+                            ? prev.filter((l) => l.id !== label.id)
+                            : [...prev, label],
+                        );
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+                    >
+                      <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: label.color }} />
+                      <span className="flex-1 text-left truncate">{label.name}</span>
+                      {selectedLabels.some((l) => l.id === label.id) && (
+                        <Check className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      )}
+                    </button>
+                  ))}
+                {allLabels.length === 0 && (
+                  <div className="px-2 py-3 text-center text-sm text-muted-foreground">No labels yet</div>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+
           {/* Assignee — Popover for search support */}
           <Popover open={assigneeOpen} onOpenChange={(v) => { setAssigneeOpen(v); if (!v) setAssigneeFilter(""); }}>
             <PopoverTrigger
@@ -462,34 +544,37 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
                       {dispatchDaemonId
                         ? (daemons.find((d) => d.id === dispatchDaemonId)?.device_name || "Daemon")
                         : dispatchDaemonLabel
-                          ? `label: ${dispatchDaemonLabel}`
+                          ? dispatchDaemonLabel
                           : "Any daemon"}
                     </span>
                   </PillButton>
                 } />
                 <DropdownMenuContent align="start">
                   <DropdownMenuItem onClick={() => { setDispatchDaemonId(undefined); setDispatchDaemonLabel(undefined); }}>
+                    <Check className={`size-3.5 ${!dispatchDaemonId && !dispatchDaemonLabel ? "opacity-100" : "opacity-0"}`} />
                     Any daemon
                   </DropdownMenuItem>
-                  {daemons.length > 0 && (
-                    <>
-                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Daemons</div>
-                      {daemons.map((d) => (
-                        <DropdownMenuItem key={d.id} onClick={() => { setDispatchDaemonId(d.id); setDispatchDaemonLabel(undefined); }}>
-                          <span className={d.status === "online" ? "" : "text-muted-foreground"}>
-                            {d.device_name || d.daemon_id}
-                          </span>
-                          <span className={`ml-auto h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`} />
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
                   {allDaemonLabels.length > 0 && (
                     <>
                       <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">By label</div>
                       {allDaemonLabels.map((label) => (
                         <DropdownMenuItem key={label} onClick={() => { setDispatchDaemonLabel(label); setDispatchDaemonId(undefined); }}>
+                          <Check className={`size-3.5 ${dispatchDaemonLabel === label ? "opacity-100" : "opacity-0"}`} />
                           {label}
+                        </DropdownMenuItem>
+                      ))}
+                    </>
+                  )}
+                  {daemons.length > 0 && (
+                    <>
+                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Daemons</div>
+                      {daemons.map((d) => (
+                        <DropdownMenuItem key={d.id} onClick={() => { setDispatchDaemonId(d.id); setDispatchDaemonLabel(undefined); }}>
+                          <Check className={`size-3.5 ${dispatchDaemonId === d.id ? "opacity-100" : "opacity-0"}`} />
+                          <span className={d.status === "online" ? "" : "text-muted-foreground"}>
+                            {d.device_name || d.daemon_id}
+                          </span>
+                          <span className={`ml-auto h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`} />
                         </DropdownMenuItem>
                       ))}
                     </>

@@ -184,9 +184,21 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Put("/criteria", h.UpdateCriteria)
 				r.Post("/criteria/approve", h.ApproveCriteria)
 				r.Post("/criteria/reject", h.RejectCriteria)
+					r.Get("/labels", h.ListIssueLabels)
+					r.Put("/labels", h.SetIssueLabels)
 					r.Post("/reactions", h.AddIssueReaction)
 					r.Delete("/reactions", h.RemoveIssueReaction)
 					r.Get("/attachments", h.ListAttachments)
+				})
+			})
+
+			// Labels
+			r.Route("/api/labels", func(r chi.Router) {
+				r.Get("/", h.ListLabels)
+				r.Post("/", h.CreateLabel)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Put("/", h.UpdateLabel)
+					r.Delete("/", h.DeleteLabel)
 				})
 			})
 

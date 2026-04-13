@@ -28,6 +28,13 @@ export interface AcceptanceCriterion {
 
 export type CriteriaStatus = "pending" | "approved";
 
+export interface Label {
+  id: string;
+  workspace_id: string;
+  name: string;
+  color: string;
+}
+
 export interface Issue {
   id: string;
   workspace_id: string;
@@ -51,6 +58,7 @@ export interface Issue {
   dispatch_provider: string | null;
   dispatch_daemon_id: string | null;
   dispatch_daemon_label: string | null;
+  labels: Label[];
   reactions?: IssueReaction[];
   created_at: string;
   updated_at: string;

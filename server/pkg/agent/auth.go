@@ -88,7 +88,7 @@ func checkOpencodeAuth(ctx context.Context, execPath string) string {
 	return AuthStatusUnauthenticated
 }
 
-// checkCursorAuth runs `cursor-agent status` and checks the output.
+// checkCursorAuth runs `agent status` and checks the output.
 // Authenticated: "✓ Logged in as ..."
 // Unauthenticated: "Not logged in" or similar.
 func checkCursorAuth(ctx context.Context, execPath string) string {

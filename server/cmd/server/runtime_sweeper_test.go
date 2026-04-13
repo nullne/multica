@@ -16,12 +16,13 @@ func setupSweeperTestFixture(t *testing.T, taskStatus string) (string, string, s
 	t.Helper()
 	ctx := context.Background()
 
-	// Find the integration test agent
+	// Find the integration test agent and a runtime in the same workspace
 	var agentID, runtimeID string
 	err := testPool.QueryRow(ctx, `
-		SELECT a.id, a.runtime_id FROM agent a
+		SELECT a.id, ar.id FROM agent a
 		JOIN member m ON m.workspace_id = a.workspace_id
 		JOIN "user" u ON u.id = m.user_id
+		JOIN agent_runtime ar ON ar.workspace_id = a.workspace_id
 		WHERE u.email = $1
 		LIMIT 1
 	`, integrationTestEmail).Scan(&agentID, &runtimeID)
