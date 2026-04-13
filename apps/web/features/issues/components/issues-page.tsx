@@ -31,7 +31,7 @@ export function IssuesPage() {
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
-  const labelFilters = useIssueViewStore((s) => s.labelFilters);
+  const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
 
   useEffect(() => {
     initFilterWorkspaceSync();

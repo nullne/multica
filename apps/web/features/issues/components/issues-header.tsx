@@ -89,14 +89,14 @@ function getActiveFilterCount(state: {
   assigneeFilters: ActorFilterValue[];
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
-  labelFilters: string[];
+  labelFilters?: string[];
 }) {
   let count = 0;
   if (state.statusFilters.length > 0) count++;
   if (state.priorityFilters.length > 0) count++;
   if (state.assigneeFilters.length > 0 || state.includeNoAssignee) count++;
   if (state.creatorFilters.length > 0) count++;
-  if (state.labelFilters.length > 0) count++;
+  if ((state.labelFilters ?? []).length > 0) count++;
   return count;
 }
 
@@ -286,7 +286,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
-  const labelFilters = useIssueViewStore((s) => s.labelFilters);
+  const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const cardProperties = useIssueViewStore((s) => s.cardProperties);

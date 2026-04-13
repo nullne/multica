@@ -449,7 +449,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
-  const labelFilters = useIssueViewStore((s) => s.labelFilters);
+  const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const scopedIssues = useMemo(() => {
