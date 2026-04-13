@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import { Bot, ChevronRight, Loader2, ArrowDown, Brain, AlertCircle, Clock, CheckCircle2, XCircle, Square } from "lucide-react";
 import { api } from "@/shared/api";
 import { useWSEvent } from "@/features/realtime";
@@ -272,7 +273,9 @@ export function AgentLiveCard({ issueId, agentName }: AgentLiveCardProps) {
             {(activeTask?.agent_id ? getActorName("agent", activeTask.agent_id) : agentName) ?? "Agent"} is working
           </span>
           {runtimeLabel && (
-            <span className="text-muted-foreground font-normal shrink-0">on {runtimeLabel}</span>
+            <Link href="/runtimes" className="text-muted-foreground font-normal shrink-0 hover:text-foreground hover:underline transition-colors">
+              on {runtimeLabel}
+            </Link>
           )}
         </div>
         <span className="ml-auto text-xs text-muted-foreground tabular-nums shrink-0">{elapsed}</span>
@@ -431,7 +434,11 @@ function TaskRunEntry({ task }: { task: AgentTask }) {
           {new Date(task.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
         </span>
         {duration && <span className="text-muted-foreground">{duration}</span>}
-        {runLabel && <span className="text-muted-foreground">{runLabel}</span>}
+        {runLabel && (
+          <Link href="/runtimes" className="text-muted-foreground hover:text-foreground hover:underline transition-colors" onClick={(e) => e.stopPropagation()}>
+            {runLabel}
+          </Link>
+        )}
         <span className={cn("ml-auto capitalize", task.status === "completed" ? "text-success" : "text-destructive")}>
           {task.status}
         </span>

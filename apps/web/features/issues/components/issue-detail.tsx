@@ -66,6 +66,7 @@ import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueStore } from "@/features/issues";
 import { useIssueViewStore } from "@/features/issues/stores/view-store";
 import { useIssuesScopeStore } from "@/features/issues/stores/issues-scope-store";
@@ -404,7 +405,12 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const workspace = useWorkspaceStore((s) => s.workspace);
   const members = useWorkspaceStore((s) => s.members);
   const agents = useWorkspaceStore((s) => s.agents);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
   const currentMemberRole = members.find((m) => m.user_id === user?.id)?.role;
+
+  useEffect(() => {
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   // Single source of truth: read issue directly from global store
   const issue = useIssueStore((s) => s.issues.find((i) => i.id === id)) ?? null;
