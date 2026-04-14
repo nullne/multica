@@ -94,7 +94,7 @@ export default function RuntimesPage() {
             <Button variant="ghost" size="icon-xs" onClick={() => setSelectedDaemonId("")}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className="text-sm font-medium truncate">Daemons</span>
+            <span className="text-sm font-medium truncate">Environments</span>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
             <DaemonDetail key={selected.id} daemon={selected} runtimes={runtimes} />
@@ -144,7 +144,7 @@ export default function RuntimesPage() {
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
             <Server className="h-10 w-10 text-muted-foreground/30" />
-            <p className="mt-3 text-sm">Select a daemon to view details</p>
+            <p className="mt-3 text-sm">Select an environment to view details</p>
           </div>
         )}
       </ResizablePanel>

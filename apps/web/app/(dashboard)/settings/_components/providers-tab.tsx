@@ -125,7 +125,7 @@ export function ProvidersTab() {
         <h2 className="text-lg font-semibold">Providers</h2>
         <p className="text-sm text-muted-foreground">
           Configure code agent providers for this workspace. When API keys are set,
-          daemons use them automatically — no per-user login required.
+          environments use them automatically — no per-user login required.
         </p>
       </div>
 
@@ -221,7 +221,7 @@ export function ProvidersTab() {
               className="text-xs"
             />
             <p className="text-xs text-muted-foreground">
-              Target multica CLI version for daemon updates.
+              Target multica CLI version for environment updates.
             </p>
           </div>
         </CardContent>

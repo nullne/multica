@@ -145,9 +145,9 @@ export function RuntimeList({
         return;
       }
       const result = await api.updateAllDaemons(workspace.id, targets);
-      toast.success(`Updating ${result.daemons_count} daemon(s) — ${result.updates_queued} update(s) queued`);
+      toast.success(`Updating ${result.daemons_count} environment(s) — ${result.updates_queued} update(s) queued`);
     } catch {
-      toast.error("Failed to trigger daemon updates");
+      toast.error("Failed to trigger environment updates");
     } finally {
       setUpdating(false);
     }
@@ -159,7 +159,7 @@ export function RuntimeList({
   return (
     <div className="overflow-y-auto h-full border-r">
       <div className="flex h-12 items-center justify-between border-b px-4">
-        <h1 className="text-sm font-semibold">Daemons</h1>
+        <h1 className="text-sm font-semibold">Environments</h1>
         <div className="flex items-center gap-2">
           {hasOnline && (
             <Button
@@ -167,7 +167,7 @@ export function RuntimeList({
               size="xs"
               onClick={handleUpdateAll}
               disabled={updating}
-              title="Update all daemons to target versions"
+              title="Update all environments to target versions"
             >
               <ArrowUpCircle className="h-3.5 w-3.5" />
             </Button>
@@ -181,14 +181,14 @@ export function RuntimeList({
         <div className="flex flex-col items-center justify-center px-4 py-12">
           <Server className="h-8 w-8 text-muted-foreground/40" />
           <p className="mt-3 text-sm text-muted-foreground">
-            No daemons registered
+            No environments registered
           </p>
           <p className="mt-1 text-xs text-muted-foreground text-center">
             Run{" "}
             <code className="rounded bg-muted px-1 py-0.5">
               multica daemon start
             </code>{" "}
-            to register a daemon.
+            to register an environment.
           </p>
         </div>
       ) : (

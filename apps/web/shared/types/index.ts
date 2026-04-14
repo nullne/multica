@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction, AcceptanceCriterion, CriteriaStatus, Label } from "./issue";
+export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueCreatorType, IssueReaction, AcceptanceCriterion, CriteriaStatus, Label } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -36,3 +36,19 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
+export type {
+  Webhook,
+  WebhookAction,
+  CreateIssueActionConfig,
+  WebhookWithActions,
+  WebhookSourceType,
+  WebhookStatus,
+  CreateWebhookRequest,
+  CreateWebhookResponse,
+  UpdateWebhookRequest,
+  UpdateWebhookActionRequest,
+  WebhookEvent,
+  WebhookEventStatus,
+  AdapterKey,
+  AdapterInfo,
+} from "./webhook";

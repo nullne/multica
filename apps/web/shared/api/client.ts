@@ -38,6 +38,14 @@ import type {
   TimelineEntry,
   TaskMessagePayload,
   Attachment,
+  WebhookWithActions,
+  WebhookAction,
+  CreateWebhookRequest,
+  CreateWebhookResponse,
+  UpdateWebhookRequest,
+  UpdateWebhookActionRequest,
+  WebhookEvent,
+  AdapterInfo,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
 
@@ -683,5 +691,51 @@ export class ApiClient {
 
   async deleteAttachment(id: string): Promise<void> {
     await this.fetch(`/api/attachments/${id}`, { method: "DELETE" });
+  }
+
+  // Webhooks
+  async listWebhooks(): Promise<WebhookWithActions[]> {
+    return this.fetch("/api/webhooks");
+  }
+
+  async getWebhook(id: string): Promise<WebhookWithActions> {
+    return this.fetch(`/api/webhooks/${id}`);
+  }
+
+  async createWebhook(data: CreateWebhookRequest): Promise<CreateWebhookResponse> {
+    return this.fetch("/api/webhooks", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateWebhook(id: string, data: UpdateWebhookRequest): Promise<WebhookWithActions> {
+    return this.fetch(`/api/webhooks/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteWebhook(id: string): Promise<void> {
+    await this.fetch(`/api/webhooks/${id}`, { method: "DELETE" });
+  }
+
+  async regenerateWebhookToken(id: string): Promise<CreateWebhookResponse> {
+    return this.fetch(`/api/webhooks/${id}/regenerate-token`, { method: "POST" });
+  }
+
+  async listWebhookEvents(id: string): Promise<WebhookEvent[]> {
+    return this.fetch(`/api/webhooks/${id}/events`);
+  }
+
+  async updateWebhookAction(webhookId: string, actionId: string, data: UpdateWebhookActionRequest): Promise<WebhookAction> {
+    return this.fetch(`/api/webhooks/${webhookId}/actions/${actionId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listWebhookAdapters(): Promise<AdapterInfo[]> {
+    return this.fetch("/api/webhook-adapters");
   }
 }

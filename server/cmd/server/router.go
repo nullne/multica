@@ -85,6 +85,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	r.Post("/auth/send-code", h.SendCode)
 	r.Post("/auth/verify-code", h.VerifyCode)
 
+	// Webhook ingest (public — authenticated by webhook token, not JWT)
+	r.Post("/api/webhooks/{id}", h.IngestWebhook)
+
 	// Daemon API routes (all require a valid token)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.Auth(queries))
@@ -256,6 +259,24 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Get("/{runtimeId}/ping/{pingId}", h.GetPing)
 				r.Post("/{runtimeId}/update", h.InitiateUpdate)
 				r.Get("/{runtimeId}/update/{updateId}", h.GetUpdate)
+			})
+
+			// Webhooks (CRUD — workspace-scoped management)
+			r.Get("/api/webhook-adapters", h.ListWebhookAdapters)
+			r.Route("/api/webhooks", func(r chi.Router) {
+				r.Get("/", h.ListWebhooks)
+				r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/", h.CreateWebhook)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetWebhook)
+					r.Put("/", h.UpdateWebhook)
+					r.Delete("/", h.DeleteWebhook)
+					r.Post("/regenerate-token", h.RegenerateWebhookToken)
+					r.Get("/events", h.ListWebhookEvents)
+					r.Get("/actions", h.ListWebhookActions)
+					r.Post("/actions", h.CreateWebhookAction)
+					r.Put("/actions/{actionId}", h.UpdateWebhookAction)
+					r.Delete("/actions/{actionId}", h.DeleteWebhookAction)
+				})
 			})
 
 			// Inbox

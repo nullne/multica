@@ -8,7 +8,7 @@ const pingStatusConfig: Record<
   RuntimePingStatus,
   { label: string; icon: typeof Loader2; color: string }
 > = {
-  pending: { label: "Waiting for daemon...", icon: Loader2, color: "text-muted-foreground" },
+  pending: { label: "Waiting for environment...", icon: Loader2, color: "text-muted-foreground" },
   running: { label: "Running test...", icon: Loader2, color: "text-info" },
   completed: { label: "Connected", icon: CheckCircle2, color: "text-success" },
   failed: { label: "Failed", icon: XCircle, color: "text-destructive" },

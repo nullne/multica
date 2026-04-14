@@ -416,7 +416,7 @@ function DispatchHints({ issue, onUpdate }: { issue: Issue; onUpdate: (updates: 
           ))}
         </PropertyPicker>
       </PropRow>
-      <PropRow label="Daemon">
+      <PropRow label="Environment">
         <DaemonPicker
           daemonId={issue.dispatch_daemon_id}
           daemonLabel={issue.dispatch_daemon_label}

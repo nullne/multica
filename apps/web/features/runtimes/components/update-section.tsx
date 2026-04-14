@@ -56,7 +56,7 @@ const statusConfig: Record<
   { label: string; icon: typeof Loader2; color: string }
 > = {
   pending: {
-    label: "Waiting for daemon...",
+    label: "Waiting for environment...",
     icon: Loader2,
     color: "text-muted-foreground",
   },
@@ -66,7 +66,7 @@ const statusConfig: Record<
     color: "text-info",
   },
   completed: {
-    label: "Update complete. Daemon is restarting...",
+    label: "Update complete. Environment is restarting...",
     icon: CheckCircle2,
     color: "text-success",
   },
