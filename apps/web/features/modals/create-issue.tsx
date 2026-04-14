@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { CalendarDays, Check, ChevronRight, Cpu, Monitor, Maximize2, Minimize2, ShieldCheck, ShieldOff, UserMinus, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { IssueStatus, IssuePriority, IssueAssigneeType, Daemon, Label } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueAssigneeType, Label } from "@/shared/types";
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,8 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Button } from "@/components/ui/button";
 import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
 import { TitleEditor } from "@/components/common/title-editor";
-import { StatusIcon, PriorityIcon, canAssignAgent } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, canAssignAgent, DaemonPicker } from "@/features/issues/components";
+import { useRuntimeStore } from "@/features/runtimes";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { useLabelStore } from "@/features/labels";
 import { useAuthStore } from "@/features/auth";
@@ -61,6 +62,14 @@ function PillButton({
       {children}
     </button>
   );
+}
+
+function DaemonTriggerLabel({ daemonId, daemonLabel }: { daemonId?: string; daemonLabel?: string }) {
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const name = daemonId
+    ? (daemons.find((d) => d.id === daemonId)?.device_name || "Daemon")
+    : daemonLabel ?? "Any daemon";
+  return <span>{name}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,19 +109,15 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [dispatchProvider, setDispatchProvider] = useState<string | undefined>();
   const [dispatchDaemonId, setDispatchDaemonId] = useState<string | undefined>();
   const [dispatchDaemonLabel, setDispatchDaemonLabel] = useState<string | undefined>();
-  const [daemons, setDaemons] = useState<Daemon[]>([]);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
 
   const selectedAgent = assigneeType === "agent" && assigneeId
     ? agents.find((a) => a.id === assigneeId)
     : null;
 
   useEffect(() => {
-    if (selectedAgent) {
-      api.listDaemons().then(setDaemons).catch(() => {});
-    }
-  }, [selectedAgent]);
-
-  const allDaemonLabels = [...new Set(daemons.flatMap((d) => d.labels))].sort();
+    if (selectedAgent) fetchAllRuntimes();
+  }, [selectedAgent, fetchAllRuntimes]);
 
   // Assignee popover
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -536,51 +541,23 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              <DropdownMenu>
-                <DropdownMenuTrigger render={
-                  <PillButton>
+              <DaemonPicker
+                daemonId={dispatchDaemonId ?? null}
+                daemonLabel={dispatchDaemonLabel ?? null}
+                provider={dispatchProvider ?? null}
+                onSelect={(id, label) => {
+                  setDispatchDaemonId(id ?? undefined);
+                  setDispatchDaemonLabel(label ?? undefined);
+                }}
+                align="start"
+                triggerRender={<PillButton />}
+                trigger={
+                  <>
                     <Monitor className="size-3.5 text-muted-foreground" />
-                    <span>
-                      {dispatchDaemonId
-                        ? (daemons.find((d) => d.id === dispatchDaemonId)?.device_name || "Daemon")
-                        : dispatchDaemonLabel
-                          ? dispatchDaemonLabel
-                          : "Any daemon"}
-                    </span>
-                  </PillButton>
-                } />
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem onClick={() => { setDispatchDaemonId(undefined); setDispatchDaemonLabel(undefined); }}>
-                    <Check className={`size-3.5 ${!dispatchDaemonId && !dispatchDaemonLabel ? "opacity-100" : "opacity-0"}`} />
-                    Any daemon
-                  </DropdownMenuItem>
-                  {allDaemonLabels.length > 0 && (
-                    <>
-                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">By label</div>
-                      {allDaemonLabels.map((label) => (
-                        <DropdownMenuItem key={label} onClick={() => { setDispatchDaemonLabel(label); setDispatchDaemonId(undefined); }}>
-                          <Check className={`size-3.5 ${dispatchDaemonLabel === label ? "opacity-100" : "opacity-0"}`} />
-                          {label}
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
-                  {daemons.length > 0 && (
-                    <>
-                      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Daemons</div>
-                      {daemons.map((d) => (
-                        <DropdownMenuItem key={d.id} onClick={() => { setDispatchDaemonId(d.id); setDispatchDaemonLabel(undefined); }}>
-                          <Check className={`size-3.5 ${dispatchDaemonId === d.id ? "opacity-100" : "opacity-0"}`} />
-                          <span className={d.status === "online" ? "" : "text-muted-foreground"}>
-                            {d.device_name || d.daemon_id}
-                          </span>
-                          <span className={`ml-auto h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-success" : "bg-muted-foreground/40"}`} />
-                        </DropdownMenuItem>
-                      ))}
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                    <DaemonTriggerLabel daemonId={dispatchDaemonId} daemonLabel={dispatchDaemonLabel} />
+                  </>
+                }
+              />
             </>
           )}
 

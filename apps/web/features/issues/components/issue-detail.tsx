@@ -59,7 +59,7 @@ import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
-import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
@@ -378,28 +378,52 @@ function PropRow({
   );
 }
 
-function DispatchHints({ issue }: { issue: { dispatch_provider: string | null; dispatch_daemon_id: string | null; dispatch_daemon_label: string | null } }) {
-  const daemons = useRuntimeStore((s) => s.daemons);
-  const daemonName = issue.dispatch_daemon_id
-    ? (() => {
-        const d = daemons.find((d) => d.id === issue.dispatch_daemon_id);
-        return d?.device_name || d?.daemon_id || null;
-      })()
-    : null;
+function DispatchHints({ issue, onUpdate }: { issue: Issue; onUpdate: (updates: Partial<UpdateIssueRequest>) => void }) {
+  const agents = useWorkspaceStore((s) => s.agents);
+  const agent = agents.find((a) => a.id === issue.assignee_id);
+  const providers = agent?.providers ?? [];
+
+  const [providerOpen, setProviderOpen] = useState(false);
 
   return (
     <>
       <PropRow label="Provider">
-        <span className={issue.dispatch_provider ? "capitalize" : "text-muted-foreground"}>
-          {issue.dispatch_provider ?? "Auto"}
-        </span>
+        <PropertyPicker
+          open={providerOpen}
+          onOpenChange={setProviderOpen}
+          width="w-40"
+          align="start"
+          trigger={
+            <span className={issue.dispatch_provider ? "capitalize" : "text-muted-foreground"}>
+              {issue.dispatch_provider ?? "Auto"}
+            </span>
+          }
+        >
+          <PickerItem
+            selected={!issue.dispatch_provider}
+            onClick={() => { onUpdate({ dispatch_provider: null }); setProviderOpen(false); }}
+          >
+            <span className="text-muted-foreground">Auto</span>
+          </PickerItem>
+          {providers.map((p) => (
+            <PickerItem
+              key={p}
+              selected={issue.dispatch_provider === p}
+              onClick={() => { onUpdate({ dispatch_provider: p }); setProviderOpen(false); }}
+            >
+              <span className="capitalize">{p}</span>
+            </PickerItem>
+          ))}
+        </PropertyPicker>
       </PropRow>
       <PropRow label="Daemon">
-        <span className={issue.dispatch_daemon_label || issue.dispatch_daemon_id ? "" : "text-muted-foreground"}>
-          {issue.dispatch_daemon_label
-            ? `label: ${issue.dispatch_daemon_label}`
-            : daemonName ?? "Auto"}
-        </span>
+        <DaemonPicker
+          daemonId={issue.dispatch_daemon_id}
+          daemonLabel={issue.dispatch_daemon_label}
+          provider={issue.dispatch_provider}
+          onUpdate={onUpdate}
+          align="start"
+        />
       </PropRow>
     </>
   );
@@ -1370,7 +1394,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
 
                   {/* Dispatch hints — visible when assignee is an agent */}
                   {issue.assignee_type === "agent" && issue.assignee_id && (
-                    <DispatchHints issue={issue} />
+                    <DispatchHints issue={issue} onUpdate={handleUpdateField} />
                   )}
                 </div>}
               </div>

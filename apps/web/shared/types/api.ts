@@ -29,6 +29,9 @@ export interface UpdateIssueRequest {
   max_verification_rounds?: number | null;
   position?: number;
   due_date?: string | null;
+  dispatch_provider?: string | null;
+  dispatch_daemon_id?: string | null;
+  dispatch_daemon_label?: string | null;
 }
 
 export interface ListIssuesParams {

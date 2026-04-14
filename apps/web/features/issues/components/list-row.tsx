@@ -6,6 +6,7 @@ import type { Issue } from "@/shared/types";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { PriorityIcon } from "./priority-icon";
+import { AgentDispatchBadge } from "./agent-dispatch-badge";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -77,11 +78,15 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
           </span>
         )}
         {issue.assignee_type && issue.assignee_id && (
-          <ActorAvatar
-            actorType={issue.assignee_type}
-            actorId={issue.assignee_id}
-            size={20}
-          />
+          issue.assignee_type === "agent" ? (
+            <AgentDispatchBadge issue={issue} layout="inline" />
+          ) : (
+            <ActorAvatar
+              actorType={issue.assignee_type}
+              actorId={issue.assignee_id}
+              size={20}
+            />
+          )
         )}
       </Link>
     </div>

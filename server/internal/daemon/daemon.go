@@ -1254,6 +1254,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	// Inject workspace-level provider API key if available.
 	// This allows running without per-user CLI auth (e.g. `claude login`).
 	if apiKey := d.resolveProviderAPIKey(provider, task.ProviderAPIKey); apiKey != "" {
+		d.logger.Info("injecting provider API key", "provider", provider, "key_len", len(apiKey), "from_task", task.ProviderAPIKey != "")
 		switch provider {
 		case "claude":
 			agentEnv["ANTHROPIC_API_KEY"] = apiKey
@@ -1264,11 +1265,18 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		case "cursor":
 			agentEnv["CURSOR_API_KEY"] = apiKey
 		}
+	} else {
+		d.logger.Warn("no provider API key available", "provider", provider, "task_key_present", task.ProviderAPIKey != "")
 	}
 	// Point Codex to the per-task CODEX_HOME so it discovers skills natively
 	// without polluting the system ~/.codex/skills/.
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
+		if provider == "codex" || provider == "opencode" {
+			if key := agentEnv["OPENAI_API_KEY"]; key != "" {
+				execenv.WriteCodexAuth(env.CodexHome, key, d.logger)
+			}
+		}
 	}
 	// Inject GitHub token for authenticated git operations and `gh` CLI.
 	if task.GitHubToken != "" {

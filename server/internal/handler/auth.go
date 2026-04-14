@@ -158,6 +158,10 @@ func (h *Handler) ensureUserWorkspace(ctx context.Context, user db.User) error {
 		return err
 	}
 
+	if _, err := qtx.UpdateWorkspace(ctx, updateSettingsOnly(workspace.ID, defaultProviderSettings())); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 

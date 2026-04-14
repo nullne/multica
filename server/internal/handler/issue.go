@@ -589,9 +589,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"creator_id":             uuidToString(prevIssue.CreatorID),
 	})
 
-	// Reconcile task queue when assignee changes (not on status changes —
-	// agents manage issue status themselves via the CLI).
-	if assigneeChanged || verifierChanged {
+	dispatchChanged := (prevIssue.DispatchProvider != issue.DispatchProvider ||
+		prevIssue.DispatchDaemonID != issue.DispatchDaemonID ||
+		prevIssue.DispatchDaemonLabel != issue.DispatchDaemonLabel)
+
+	// Reconcile task queue when assignee or dispatch hints change (not on
+	// status changes — agents manage issue status themselves via the CLI).
+	if assigneeChanged || verifierChanged || dispatchChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
