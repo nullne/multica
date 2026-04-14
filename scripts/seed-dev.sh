@@ -33,7 +33,7 @@ create_agent() {
     --arg name "$name" \
     --arg desc "$description" \
     --arg inst "$instructions" \
-    '{name:$name, description:$desc, instructions:$inst, visibility:"workspace", max_concurrent_tasks:1}')
+    '{name:$name, description:$desc, instructions:$inst, providers:["claude"], visibility:"workspace", max_concurrent_tasks:1}')
   RESP=$(api POST /api/agents -d "$BODY")
   ANAME=$(echo "$RESP" | jq -r '.name // empty')
   if [ -z "$ANAME" ]; then
