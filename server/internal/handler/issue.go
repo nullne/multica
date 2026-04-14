@@ -24,6 +24,8 @@ type IssueResponse struct {
 	Identifier            string                  `json:"identifier"`
 	Title                 string                  `json:"title"`
 	Description           *string                 `json:"description"`
+	LinkedBranch          *string                 `json:"linked_branch"`
+	LinkedPRURL           *string                 `json:"linked_pr_url"`
 	Status                string                  `json:"status"`
 	Priority              string                  `json:"priority"`
 	AssigneeType          *string                 `json:"assignee_type"`
@@ -83,6 +85,8 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		Identifier:            identifier,
 		Title:                 i.Title,
 		Description:           textToPtr(i.Description),
+		LinkedBranch:          textToPtr(i.LinkedBranch),
+		LinkedPRURL:           textToPtr(i.LinkedPrUrl),
 		Status:                i.Status,
 		Priority:              i.Priority,
 		AssigneeType:          textToPtr(i.AssigneeType),
@@ -797,7 +801,7 @@ func (h *Handler) ApproveCriteria(w http.ResponseWriter, r *http.Request) {
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(updated, prefix)
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
-		"issue":            resp,
+		"issue":             resp,
 		"criteria_approved": true,
 	})
 

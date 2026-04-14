@@ -191,6 +191,8 @@ type Issue struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	Number                int32              `json:"number"`
 	VerifierAgentID       pgtype.UUID        `json:"verifier_agent_id"`
+	LinkedBranch          pgtype.Text        `json:"linked_branch"`
+	LinkedPrUrl           pgtype.Text        `json:"linked_pr_url"`
 	MaxVerificationRounds pgtype.Int4        `json:"max_verification_rounds"`
 	CriteriaStatus        pgtype.Text        `json:"criteria_status"`
 	DispatchProvider      pgtype.Text        `json:"dispatch_provider"`

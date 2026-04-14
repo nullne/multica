@@ -322,6 +322,23 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	if err := json.Unmarshal(result, &payload); err != nil {
 		slog.Debug("task completion payload parse failed", "task_id", util.UUIDToString(task.ID), "error", err)
 	}
+	if payload.BranchName != "" || payload.PRURL != "" {
+		issue, updateErr := s.Queries.UpdateIssueDevLinks(ctx, db.UpdateIssueDevLinksParams{
+			ID:           task.IssueID,
+			LinkedBranch: pgtype.Text{String: payload.BranchName, Valid: payload.BranchName != ""},
+			LinkedPrUrl:  pgtype.Text{String: payload.PRURL, Valid: payload.PRURL != ""},
+		})
+		if updateErr != nil {
+			slog.Warn("update issue dev links failed",
+				"issue_id", util.UUIDToString(task.IssueID),
+				"task_id", util.UUIDToString(task.ID),
+				"error", updateErr,
+			)
+		} else {
+			s.broadcastIssueUpdated(issue)
+		}
+	}
+
 	output := redact.Text(payload.Output)
 
 	taskCtx := parseVerificationTaskContext(task.Context)
@@ -366,7 +383,7 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 		issue, err := s.Queries.UpdateIssueAcceptanceCriteria(ctx, db.UpdateIssueAcceptanceCriteriaParams{
 			ID:                 task.IssueID,
 			AcceptanceCriteria: criteriaJSON,
-			CriteriaStatus:    pgtype.Text{String: "pending", Valid: true},
+			CriteriaStatus:     pgtype.Text{String: "pending", Valid: true},
 		})
 		if err != nil {
 			return fmt.Errorf("save acceptance criteria: %w", err)
@@ -814,6 +831,8 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		"identifier":          issuePrefix + "-" + strconv.Itoa(int(issue.Number)),
 		"title":               issue.Title,
 		"description":         util.TextToPtr(issue.Description),
+		"linked_branch":       util.TextToPtr(issue.LinkedBranch),
+		"linked_pr_url":       util.TextToPtr(issue.LinkedPrUrl),
 		"status":              issue.Status,
 		"priority":            issue.Priority,
 		"assignee_type":       util.TextToPtr(issue.AssigneeType),

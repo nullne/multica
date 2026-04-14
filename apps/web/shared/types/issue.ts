@@ -43,6 +43,8 @@ export interface Issue {
   identifier: string;
   title: string;
   description: string | null;
+  linked_branch?: string | null;
+  linked_pr_url?: string | null;
   status: IssueStatus;
   priority: IssuePriority;
   assignee_type: IssueAssigneeType | null;

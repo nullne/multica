@@ -72,5 +72,13 @@ UPDATE issue SET
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateIssueDevLinks :one
+UPDATE issue SET
+    linked_branch = COALESCE(sqlc.narg('linked_branch'), linked_branch),
+    linked_pr_url = COALESCE(sqlc.narg('linked_pr_url'), linked_pr_url),
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: DeleteIssue :exec
 DELETE FROM issue WHERE id = $1;
