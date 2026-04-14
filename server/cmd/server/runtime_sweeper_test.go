@@ -301,6 +301,212 @@ func TestSweepDispatchedStaleTask(t *testing.T) {
 	}
 }
 
+// TestSweepUpdatingDaemonMarksOffline verifies that the sweeper marks
+// daemons stuck in "updating" status as offline (the fix for the bug where
+// only status='online' was swept).
+func TestSweepUpdatingDaemonMarksOffline(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	// Create a daemon in 'updating' status with stale last_seen_at.
+	var daemonID string
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO daemon (workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
+		VALUES ($1, 'sweep-updating-test', 'updating', '0.1.0', 'test-box', '', '{}'::jsonb, now() - interval '5 minutes')
+		RETURNING id
+	`, testWorkspaceID).Scan(&daemonID)
+	if err != nil {
+		t.Fatalf("failed to create test daemon: %v", err)
+	}
+
+	// Create a runtime under this daemon also in 'updating' status.
+	var runtimeID string
+	err = testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_ref, name, runtime_mode, provider, status, auth_status, device_info, metadata, last_seen_at
+		)
+		VALUES ($1, $2, 'test-claude', 'local', 'claude', 'updating', 'ready', '', '{}'::jsonb, now() - interval '5 minutes')
+		RETURNING id
+	`, testWorkspaceID, daemonID).Scan(&runtimeID)
+	if err != nil {
+		t.Fatalf("failed to create test runtime: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonID)
+	})
+
+	queries := db.New(testPool)
+	bus := events.New()
+
+	// Run the stale runtime sweeper.
+	sweepStaleRuntimes(ctx, queries, bus)
+
+	// Verify daemon is now offline.
+	var daemonStatus string
+	err = testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, daemonID).Scan(&daemonStatus)
+	if err != nil {
+		t.Fatalf("failed to query daemon: %v", err)
+	}
+	if daemonStatus != "offline" {
+		t.Fatalf("expected daemon status 'offline' after sweep, got '%s'", daemonStatus)
+	}
+
+	// Verify runtime is now offline.
+	var runtimeStatus string
+	err = testPool.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&runtimeStatus)
+	if err != nil {
+		t.Fatalf("failed to query runtime: %v", err)
+	}
+	if runtimeStatus != "offline" {
+		t.Fatalf("expected runtime status 'offline' after sweep, got '%s'", runtimeStatus)
+	}
+}
+
+// TestSweepOnlineDaemonNotSweptWhenRecent verifies that daemons with
+// recent heartbeats are not swept regardless of status.
+func TestSweepOnlineDaemonNotSweptWhenRecent(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	// Create a daemon with recent last_seen_at.
+	var daemonID string
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO daemon (workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
+		VALUES ($1, 'sweep-recent-test', 'online', '0.1.0', 'test-box', '', '{}'::jsonb, now())
+		RETURNING id
+	`, testWorkspaceID).Scan(&daemonID)
+	if err != nil {
+		t.Fatalf("failed to create test daemon: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonID)
+	})
+
+	queries := db.New(testPool)
+
+	staleDaemons, err := queries.MarkStaleDaemonsOffline(ctx, 45.0)
+	if err != nil {
+		t.Fatalf("MarkStaleDaemonsOffline failed: %v", err)
+	}
+
+	for _, sd := range staleDaemons {
+		if sd.ID.Bytes == parseUUIDBytes(daemonID) {
+			t.Fatal("recently heartbeated daemon should NOT be swept")
+		}
+	}
+
+	// Verify daemon is still online.
+	var status string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, daemonID).Scan(&status)
+	if status != "online" {
+		t.Fatalf("expected daemon still 'online', got '%s'", status)
+	}
+}
+
+// TestSweepFailsTasksForUpdatingRuntimes verifies that after the sweeper
+// marks an 'updating' runtime as offline, its tasks are also failed.
+func TestSweepFailsTasksForUpdatingRuntimes(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	// Find the integration test agent.
+	var agentID string
+	err := testPool.QueryRow(ctx, `
+		SELECT a.id FROM agent a
+		JOIN member m ON m.workspace_id = a.workspace_id
+		JOIN "user" u ON u.id = m.user_id
+		WHERE u.email = $1
+		LIMIT 1
+	`, integrationTestEmail).Scan(&agentID)
+	if err != nil {
+		t.Fatalf("failed to find test agent: %v", err)
+	}
+
+	// Create a daemon + runtime in 'updating' with stale heartbeat.
+	var daemonID string
+	err = testPool.QueryRow(ctx, `
+		INSERT INTO daemon (workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
+		VALUES ($1, 'sweep-task-test', 'updating', '0.1.0', 'test-box', '', '{}'::jsonb, now() - interval '5 minutes')
+		RETURNING id
+	`, testWorkspaceID).Scan(&daemonID)
+	if err != nil {
+		t.Fatalf("failed to create test daemon: %v", err)
+	}
+
+	var runtimeID string
+	err = testPool.QueryRow(ctx, `
+		INSERT INTO agent_runtime (
+			workspace_id, daemon_ref, name, runtime_mode, provider, status, auth_status, device_info, metadata, last_seen_at
+		)
+		VALUES ($1, $2, 'test-claude', 'local', 'claude', 'updating', 'ready', '', '{}'::jsonb, now() - interval '5 minutes')
+		RETURNING id
+	`, testWorkspaceID, daemonID).Scan(&runtimeID)
+	if err != nil {
+		t.Fatalf("failed to create test runtime: %v", err)
+	}
+
+	// Create an issue and a running task on this runtime.
+	var issueID string
+	err = testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id)
+		SELECT $1, 'Sweep updating task test', 'in_progress', 'none', 'member', m.user_id, 'agent', $2
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID, agentID).Scan(&issueID)
+	if err != nil {
+		t.Fatalf("failed to create test issue: %v", err)
+	}
+
+	var taskID string
+	err = testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, dispatched_at, started_at)
+		VALUES ($1, $2, $3, 'running', 0, now() - interval '1 hour', now() - interval '1 hour')
+		RETURNING id
+	`, agentID, runtimeID, issueID).Scan(&taskID)
+	if err != nil {
+		t.Fatalf("failed to create test task: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
+		testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
+		testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonID)
+	})
+
+	queries := db.New(testPool)
+	bus := events.New()
+
+	// Run the sweeper — should mark daemon+runtime offline, then fail the task.
+	sweepStaleRuntimes(ctx, queries, bus)
+
+	// Verify runtime is offline.
+	var runtimeStatus string
+	testPool.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE id = $1`, runtimeID).Scan(&runtimeStatus)
+	if runtimeStatus != "offline" {
+		t.Fatalf("expected runtime 'offline', got '%s'", runtimeStatus)
+	}
+
+	// Verify task is failed.
+	var taskStatus string
+	testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus)
+	if taskStatus != "failed" {
+		t.Fatalf("expected task status 'failed' after updating runtime was swept, got '%s'", taskStatus)
+	}
+}
+
 // parseUUIDBytes converts a UUID string to the 16-byte array used by pgtype.UUID.
 func parseUUIDBytes(s string) [16]byte {
 	s = strings.ReplaceAll(s, "-", "")

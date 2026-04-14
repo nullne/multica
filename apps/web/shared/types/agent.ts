@@ -8,11 +8,13 @@ export type AgentTriggerType = "on_assign" | "on_comment" | "scheduled";
 
 export type GitHubCodeAccess = "read" | "write" | "admin";
 
+export type DaemonStatus = "online" | "offline" | "updating";
+
 export interface Daemon {
   id: string;
   workspace_id: string;
   daemon_id: string;
-  status: "online" | "offline";
+  status: DaemonStatus;
   cli_version: string;
   device_name: string;
   device_info: string;
@@ -25,6 +27,8 @@ export interface Daemon {
 
 export type ProviderAuthStatus = "unknown" | "not_installed" | "unauthenticated" | "ready";
 
+export type RuntimeStatus = "online" | "offline" | "updating";
+
 export interface RuntimeDevice {
   id: string;
   workspace_id: string;
@@ -33,7 +37,7 @@ export interface RuntimeDevice {
   name: string;
   runtime_mode: AgentRuntimeMode;
   provider: string;
-  status: "online" | "offline";
+  status: RuntimeStatus;
   auth_status: ProviderAuthStatus;
   device_info: string;
   metadata: Record<string, unknown>;
