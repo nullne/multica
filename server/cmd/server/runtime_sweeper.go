@@ -46,8 +46,8 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, bus *events.Bus
 	}
 }
 
-// sweepStaleRuntimes marks runtimes offline if they haven't heartbeated,
-// then fails any tasks belonging to those offline runtimes.
+// sweepStaleRuntimes marks runtimes and daemons offline if they haven't
+// heartbeated, then fails any tasks belonging to those offline runtimes.
 func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, bus *events.Bus) {
 	// Mark stale daemons offline first.
 	staleDaemons, err := queries.MarkStaleDaemonsOffline(ctx, staleThresholdSeconds)
@@ -68,15 +68,17 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, bus *events.Bu
 	for _, row := range staleDaemons {
 		workspaces[util.UUIDToString(row.WorkspaceID)] = true
 	}
+	for _, row := range staleRows {
+		workspaces[util.UUIDToString(row.WorkspaceID)] = true
+	}
+
+	if len(staleRows) > 0 {
+		slog.Info("runtime sweeper: marked stale runtimes offline", "count", len(staleRows), "workspaces", len(workspaces))
+	}
+
 	if len(staleRows) == 0 && len(staleDaemons) == 0 {
 		return
 	}
-	for _, row := range staleRows {
-		wsID := util.UUIDToString(row.WorkspaceID)
-		workspaces[wsID] = true
-	}
-
-	slog.Info("runtime sweeper: marked stale runtimes offline", "count", len(staleRows), "workspaces", len(workspaces))
 
 	// Fail orphaned tasks (dispatched/running) whose runtimes just went offline.
 	failedTasks, err := queries.FailTasksForOfflineRuntimes(ctx)
