@@ -23,6 +23,7 @@ import (
 type workspaceState struct {
 	workspaceID string
 	runtimeIDs  []string
+	daemonUUID  string // server-assigned daemon row UUID for this workspace
 }
 
 // Daemon is the local agent runtime that polls for and executes tasks.
@@ -37,7 +38,6 @@ type Daemon struct {
 	runtimeIndex    map[string]Runtime            // runtimeID -> Runtime for provider lookups
 	taskBranches    map[string]string             // taskID -> latest checked out branch
 	providerConfigs map[string]ProviderConfig     // provider -> workspace-level config (API keys, etc.)
-	daemonUUID      string                        // server-assigned daemon row UUID (set after first registration)
 	reloading       sync.Mutex                    // prevents concurrent reloadWorkspaces
 
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
@@ -123,28 +123,32 @@ func (d *Daemon) deregisterRuntimes() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	d.mu.Lock()
-	dUUID := d.daemonUUID
-	d.mu.Unlock()
+	var legacyRuntimeIDs []string
+	var deregistered int
 
-	if dUUID != "" {
-		if err := d.client.DeregisterDaemon(ctx, dUUID); err != nil {
-			d.logger.Warn("failed to deregister daemon on shutdown", "error", err)
-		} else {
-			d.logger.Info("deregistered daemon", "daemon_uuid", dUUID)
+	for _, ws := range d.allWorkspaceStates() {
+		if ws.daemonUUID == "" {
+			legacyRuntimeIDs = append(legacyRuntimeIDs, ws.runtimeIDs...)
+			continue
 		}
-		return
+		if err := d.client.DeregisterDaemon(ctx, ws.daemonUUID); err != nil {
+			d.logger.Warn("failed to deregister daemon on shutdown", "workspace_id", ws.workspaceID, "error", err)
+		} else {
+			deregistered++
+		}
 	}
 
-	// Legacy fallback.
-	runtimeIDs := d.allRuntimeIDs()
-	if len(runtimeIDs) == 0 {
-		return
+	if deregistered > 0 {
+		d.logger.Info("deregistered daemons", "count", deregistered)
 	}
-	if err := d.client.Deregister(ctx, runtimeIDs); err != nil {
-		d.logger.Warn("failed to deregister runtimes on shutdown", "error", err)
-	} else {
-		d.logger.Info("deregistered runtimes", "count", len(runtimeIDs))
+
+	// Legacy fallback for workspaces without a daemon UUID.
+	if len(legacyRuntimeIDs) > 0 {
+		if err := d.client.Deregister(ctx, legacyRuntimeIDs); err != nil {
+			d.logger.Warn("failed to deregister runtimes on shutdown", "error", err)
+		} else {
+			d.logger.Info("deregistered runtimes", "count", len(legacyRuntimeIDs))
+		}
 	}
 }
 
@@ -195,8 +199,12 @@ func (d *Daemon) loadWatchedWorkspaces(ctx context.Context) error {
 			runtimeIDs[i] = rt.ID
 			d.logger.Info("registered runtime", "workspace_id", ws.ID, "runtime_id", rt.ID, "provider", rt.Provider)
 		}
+		var daemonUUID string
+		if resp.Daemon != nil {
+			daemonUUID = resp.Daemon.ID
+		}
 		d.mu.Lock()
-		d.workspaces[ws.ID] = &workspaceState{workspaceID: ws.ID, runtimeIDs: runtimeIDs}
+		d.workspaces[ws.ID] = &workspaceState{workspaceID: ws.ID, runtimeIDs: runtimeIDs, daemonUUID: daemonUUID}
 		for _, rt := range resp.Runtimes {
 			d.runtimeIndex[rt.ID] = rt
 		}
@@ -223,6 +231,18 @@ func (d *Daemon) allRuntimeIDs() []string {
 		ids = append(ids, ws.runtimeIDs...)
 	}
 	return ids
+}
+
+// allWorkspaceStates returns a snapshot of all workspace states.
+// Safe to use outside the mutex for iteration during network calls.
+func (d *Daemon) allWorkspaceStates() []workspaceState {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	states := make([]workspaceState, 0, len(d.workspaces))
+	for _, ws := range d.workspaces {
+		states = append(states, *ws)
+	}
+	return states
 }
 
 // findRuntime looks up a Runtime by its ID.
@@ -276,13 +296,6 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 	}
 	if len(resp.Runtimes) == 0 {
 		return nil, fmt.Errorf("register runtimes: empty response")
-	}
-
-	// Capture daemon UUID from server response.
-	if resp.Daemon != nil && resp.Daemon.ID != "" {
-		d.mu.Lock()
-		d.daemonUUID = resp.Daemon.ID
-		d.mu.Unlock()
 	}
 
 	// Store provider configs and auto-install any remaining missing providers.
@@ -614,8 +627,12 @@ func (d *Daemon) reloadWorkspaces(ctx context.Context) {
 			for i, rt := range resp.Runtimes {
 				runtimeIDs[i] = rt.ID
 			}
+			var daemonUUID string
+			if resp.Daemon != nil {
+				daemonUUID = resp.Daemon.ID
+			}
 			d.mu.Lock()
-			d.workspaces[id] = &workspaceState{workspaceID: id, runtimeIDs: runtimeIDs}
+			d.workspaces[id] = &workspaceState{workspaceID: id, runtimeIDs: runtimeIDs, daemonUUID: daemonUUID}
 			for _, rt := range resp.Runtimes {
 				d.runtimeIndex[rt.ID] = rt
 			}
@@ -665,7 +682,6 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 			authCheckCounter++
 			refreshAuth := authCheckCounter%authCheckInterval == 0
 
-			// Re-check provider auth status periodically.
 			var authStatuses map[string]string
 			if refreshAuth {
 				authStatuses = make(map[string]string)
@@ -674,22 +690,23 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 				}
 			}
 
-			d.mu.Lock()
-			dUUID := d.daemonUUID
-			d.mu.Unlock()
+			var legacyRuntimeIDs []string
 
-			// Use daemon-level heartbeat if we have a daemon UUID.
-			if dUUID != "" {
-				resp, err := d.client.SendDaemonHeartbeat(ctx, dUUID, authStatuses)
+			for _, ws := range d.allWorkspaceStates() {
+				if ws.daemonUUID == "" {
+					legacyRuntimeIDs = append(legacyRuntimeIDs, ws.runtimeIDs...)
+					continue
+				}
+
+				resp, err := d.client.SendDaemonHeartbeat(ctx, ws.daemonUUID, authStatuses)
 				if err != nil {
-					d.logger.Warn("heartbeat failed", "daemon_uuid", dUUID, "error", err)
+					d.logger.Warn("heartbeat failed", "daemon_uuid", ws.daemonUUID, "workspace_id", ws.workspaceID, "error", err)
 					continue
 				}
 
 				if resp.PendingPing != nil {
-					rids := d.allRuntimeIDs()
-					if len(rids) > 0 {
-						rt := d.findRuntime(rids[0])
+					if len(ws.runtimeIDs) > 0 {
+						rt := d.findRuntime(ws.runtimeIDs[0])
 						if rt != nil {
 							go d.handlePing(ctx, *rt, resp.PendingPing.ID)
 						}
@@ -698,27 +715,23 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 
 				for _, update := range resp.PendingUpdates {
 					u := update
-					go d.handleUpdate(ctx, dUUID, &u)
+					go d.handleUpdate(ctx, ws.daemonUUID, &u)
 				}
-				// Legacy single update field.
 				if resp.PendingUpdate != nil {
-					go d.handleUpdate(ctx, dUUID, resp.PendingUpdate)
+					go d.handleUpdate(ctx, ws.daemonUUID, resp.PendingUpdate)
 				}
 
 				// Auto-install newly enabled providers (same cadence as auth check).
-				// Run async to avoid blocking heartbeat loop (installs can take minutes).
 				if refreshAuth && len(resp.ProviderConfig) > 0 && d.reconciling.CompareAndSwap(false, true) {
 					go func() {
 						defer d.reconciling.Store(false)
 						d.reconcileProviders(ctx, resp.ProviderConfig)
 					}()
 				}
-
-				continue
 			}
 
-			// Fallback: per-runtime heartbeat (pre-migration daemons).
-			for _, rid := range d.allRuntimeIDs() {
+			// Fallback: per-runtime heartbeat for workspaces without a daemon UUID.
+			for _, rid := range legacyRuntimeIDs {
 				resp, err := d.client.SendHeartbeat(ctx, rid)
 				if err != nil {
 					d.logger.Warn("heartbeat failed", "runtime_id", rid, "error", err)
