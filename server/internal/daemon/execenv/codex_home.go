@@ -96,6 +96,21 @@ func ensureSymlink(src, dst string) error {
 	return os.Symlink(src, dst)
 }
 
+// WriteCodexAuth writes an auth.json file into the codex-home directory
+// so that codex app-server can authenticate with the OpenAI API.
+// Codex ignores the OPENAI_API_KEY env var when CODEX_HOME is set but
+// has no auth.json; it only reads credentials from auth.json.
+func WriteCodexAuth(codexHome, apiKey string, logger *slog.Logger) {
+	authPath := filepath.Join(codexHome, "auth.json")
+	if _, err := os.Stat(authPath); err == nil {
+		return
+	}
+	content := fmt.Sprintf(`{"auth_mode":"apikey","OPENAI_API_KEY":%q}`, apiKey)
+	if err := os.WriteFile(authPath, []byte(content), 0o600); err != nil {
+		logger.Warn("execenv: write codex auth.json failed", "error", err)
+	}
+}
+
 // copyFileIfExists copies src to dst. If src doesn't exist, it's a no-op.
 // If dst already exists, it's not overwritten.
 func copyFileIfExists(src, dst string) error {

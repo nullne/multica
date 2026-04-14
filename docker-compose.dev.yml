@@ -90,10 +90,11 @@ services:
         condition: service_healthy
 
   daemon:
-    image: golang:1.26-alpine
+    image: golang:1.26-bookworm
     working_dir: /app/server
     command: >
-      sh -c "apk add --no-cache nodejs npm bubblewrap curl bash > /dev/null 2>&1 &&
+      sh -c "apt-get update && apt-get install -y --no-install-recommends nodejs npm bubblewrap curl > /dev/null 2>&1 &&
+             export PATH=\"$$HOME/.local/bin:$$PATH\" &&
              go build -o /usr/local/bin/multica ./cmd/multica &&
              multica daemon start --foreground"
     environment:
@@ -101,6 +102,7 @@ services:
       MULTICA_DAEMON_ID: dev-daemon
       IS_SANDBOX: "1"
       CLAUDE_CODE_BUBBLEWRAP: "1"
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
       no_proxy: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
       NO_PROXY: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
     volumes:

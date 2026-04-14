@@ -4,3 +4,4 @@ export { PriorityPicker } from "./priority-picker";
 export { AssigneePicker, canAssignAgent } from "./assignee-picker";
 export { VerifierPicker, VerifierIcon } from "./verifier-picker";
 export { DueDatePicker } from "./due-date-picker";
+export { DaemonPicker } from "./daemon-picker";

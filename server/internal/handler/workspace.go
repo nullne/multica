@@ -189,6 +189,12 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ws, err = qtx.UpdateWorkspace(r.Context(), updateSettingsOnly(ws.ID, defaultProviderSettings()))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set default providers: "+err.Error())
+		return
+	}
+
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create workspace")
 		return

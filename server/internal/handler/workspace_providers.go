@@ -30,6 +30,17 @@ type WorkspaceProviderSettings struct {
 // SupportedProviders lists the provider keys recognised by multica.
 var SupportedProviders = []string{"claude", "codex", "opencode", "cursor"}
 
+// defaultProviderSettings returns the JSON bytes for the default workspace
+// settings with cursor enabled out of the box.
+func defaultProviderSettings() []byte {
+	b, _ := json.Marshal(WorkspaceProviderSettings{
+		Providers: map[string]ProviderConfig{
+			"codex": {Enabled: true},
+		},
+	})
+	return b
+}
+
 // redactAPIKey masks an API key, showing only the last 4 characters.
 func redactAPIKey(key string) string {
 	if len(key) <= 4 {
