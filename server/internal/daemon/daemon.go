@@ -91,13 +91,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 
-	runtimeIDs := d.allRuntimeIDs()
-	if len(runtimeIDs) == 0 {
-		return fmt.Errorf("no runtimes registered")
-	}
-
 	// Deregister runtimes on shutdown (uses a fresh context since ctx will be cancelled).
 	defer d.deregisterRuntimes()
+
+	if len(d.allRuntimeIDs()) == 0 {
+		d.logger.Warn("no runtimes registered — daemon will wait for providers to become available via heartbeat")
+	}
 
 	// Start config watcher for hot-reload.
 	go d.configWatchLoop(ctx)
@@ -177,11 +176,16 @@ func (d *Daemon) loadWatchedWorkspaces(ctx context.Context) error {
 		return fmt.Errorf("no watched workspaces configured: run 'multica workspace watch <id>' to add one")
 	}
 
-	var registered int
 	for _, ws := range cfg.WatchedWorkspaces {
 		resp, err := d.registerRuntimesForWorkspace(ctx, ws.ID)
 		if err != nil {
-			d.logger.Error("failed to register runtimes", "workspace_id", ws.ID, "name", ws.Name, "error", err)
+			d.logger.Warn("failed to register runtimes", "workspace_id", ws.ID, "name", ws.Name, "error", err)
+			// Still track the workspace so heartbeat/reconcile can register runtimes later.
+			d.mu.Lock()
+			if _, ok := d.workspaces[ws.ID]; !ok {
+				d.workspaces[ws.ID] = &workspaceState{workspaceID: ws.ID}
+			}
+			d.mu.Unlock()
 			continue
 		}
 		runtimeIDs := make([]string, len(resp.Runtimes))
@@ -204,11 +208,6 @@ func (d *Daemon) loadWatchedWorkspaces(ctx context.Context) error {
 		}
 
 		d.logger.Info("watching workspace", "workspace_id", ws.ID, "name", ws.Name, "runtimes", len(resp.Runtimes), "repos", len(resp.Repos))
-		registered++
-	}
-
-	if registered == 0 {
-		return fmt.Errorf("failed to register runtimes for any of the %d watched workspace(s)", len(cfg.WatchedWorkspaces))
 	}
 	return nil
 }
