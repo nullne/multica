@@ -1,17 +1,14 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -420,110 +417,58 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, userToResponse(updatedUser))
 }
 
-type OAuthCallbackRequest struct {
-	Code        string `json:"code"`
-	RedirectURI string `json:"redirect_uri"`
-}
-
-type oauthTokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
-}
-
-type oauthUserInfo struct {
-	Sub     string `json:"sub"`
-	Email   string `json:"email"`
-	Name    string `json:"name"`
-	Picture string `json:"picture"`
-}
-
-func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
-	gatewayURL := os.Getenv("AUTH_GATEWAY_URL")
-	clientID := os.Getenv("AUTH_OAUTH_CLIENT_ID")
-	clientSecret := os.Getenv("AUTH_OAUTH_CLIENT_SECRET")
-
-	if gatewayURL == "" || clientID == "" {
-		writeError(w, http.StatusServiceUnavailable, "OAuth is not configured")
+// GatewayLogin reads the gateway JWT from the _claw_auth cookie, verifies it
+// using AUTH_JWT_SECRET, and issues a local multica JWT for the user.
+func (h *Handler) GatewayLogin(w http.ResponseWriter, r *http.Request) {
+	jwtSecret := os.Getenv("AUTH_JWT_SECRET")
+	if jwtSecret == "" {
+		writeError(w, http.StatusServiceUnavailable, "gateway auth is not configured")
 		return
 	}
 
-	var req OAuthCallbackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	cookieName := os.Getenv("AUTH_COOKIE_NAME")
+	if cookieName == "" {
+		cookieName = "_claw_auth"
+	}
+
+	cookie, err := r.Cookie(cookieName)
+	if err != nil || cookie.Value == "" {
+		writeError(w, http.StatusUnauthorized, "gateway auth cookie not found")
 		return
 	}
 
-	if req.Code == "" || req.RedirectURI == "" {
-		writeError(w, http.StatusBadRequest, "code and redirect_uri are required")
+	// Verify the gateway JWT using the shared secret.
+	gatewayToken, err := jwt.Parse(cookie.Value, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return []byte(jwtSecret), nil
+	})
+	if err != nil || !gatewayToken.Valid {
+		slog.Warn("gateway-login: invalid gateway token", "error", err)
+		writeError(w, http.StatusUnauthorized, "invalid gateway token")
 		return
 	}
 
-	// Exchange authorization code for access token.
-	tokenParams := url.Values{
-		"grant_type":   {"authorization_code"},
-		"code":         {req.Code},
-		"redirect_uri": {req.RedirectURI},
-		"client_id":    {clientID},
-	}
-	if clientSecret != "" {
-		tokenParams.Set("client_secret", clientSecret)
-	}
-
-	tokenResp, err := http.Post(
-		gatewayURL+"/api/oauth/token",
-		"application/x-www-form-urlencoded",
-		bytes.NewBufferString(tokenParams.Encode()),
-	)
-	if err != nil {
-		slog.Error("oauth: failed to exchange code", "error", err)
-		writeError(w, http.StatusBadGateway, "failed to contact auth gateway")
-		return
-	}
-	defer tokenResp.Body.Close()
-
-	tokenBody, _ := io.ReadAll(tokenResp.Body)
-	if tokenResp.StatusCode != http.StatusOK {
-		slog.Warn("oauth: token exchange failed", "status", tokenResp.StatusCode, "body", string(tokenBody))
-		writeError(w, http.StatusUnauthorized, "authorization code exchange failed")
+	claims, ok := gatewayToken.Claims.(jwt.MapClaims)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid gateway token claims")
 		return
 	}
 
-	var tokenData oauthTokenResponse
-	if err := json.Unmarshal(tokenBody, &tokenData); err != nil {
-		writeError(w, http.StatusBadGateway, "invalid token response from auth gateway")
+	if approved, _ := claims["approved"].(bool); !approved {
+		writeError(w, http.StatusForbidden, "user is not approved")
 		return
 	}
 
-	// Fetch user info from auth gateway.
-	userInfoReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, gatewayURL+"/api/oauth/userinfo", nil)
-	userInfoReq.Header.Set("Authorization", "Bearer "+tokenData.AccessToken)
-
-	userInfoResp, err := http.DefaultClient.Do(userInfoReq)
-	if err != nil {
-		slog.Error("oauth: failed to fetch userinfo", "error", err)
-		writeError(w, http.StatusBadGateway, "failed to fetch user info from auth gateway")
-		return
-	}
-	defer userInfoResp.Body.Close()
-
-	if userInfoResp.StatusCode != http.StatusOK {
-		writeError(w, http.StatusUnauthorized, "failed to verify user with auth gateway")
+	email, _ := claims["email"].(string)
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "gateway token missing email")
 		return
 	}
 
-	var userInfo oauthUserInfo
-	if err := json.NewDecoder(userInfoResp.Body).Decode(&userInfo); err != nil {
-		writeError(w, http.StatusBadGateway, "invalid userinfo response from auth gateway")
-		return
-	}
-
-	if userInfo.Email == "" {
-		writeError(w, http.StatusBadRequest, "auth gateway did not return an email")
-		return
-	}
-
-	email := strings.ToLower(strings.TrimSpace(userInfo.Email))
+	email = strings.ToLower(strings.TrimSpace(email))
+	name, _ := claims["name"].(string)
 
 	user, err := h.findOrCreateUser(r.Context(), email)
 	if err != nil {
@@ -531,12 +476,8 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update name/avatar if the user was just created with a default name.
-	if userInfo.Name != "" && user.Name == strings.Split(email, "@")[0] {
-		params := db.UpdateUserParams{ID: user.ID, Name: userInfo.Name}
-		if userInfo.Picture != "" {
-			params.AvatarUrl = pgtype.Text{String: userInfo.Picture, Valid: true}
-		}
+	if name != "" && user.Name == strings.Split(email, "@")[0] {
+		params := db.UpdateUserParams{ID: user.ID, Name: name}
 		if updated, err := h.Queries.UpdateUser(r.Context(), params); err == nil {
 			user = updated
 		}
@@ -549,7 +490,7 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	tokenString, err := h.issueJWT(user)
 	if err != nil {
-		slog.Warn("oauth login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		slog.Warn("gateway login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
@@ -560,7 +501,7 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	slog.Info("user logged in via oauth", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	slog.Info("user logged in via gateway", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
 		User:  userToResponse(user),

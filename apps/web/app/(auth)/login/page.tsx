@@ -23,26 +23,6 @@ import {
 } from "@/components/ui/input-otp";
 import type { User } from "@/shared/types";
 
-const AUTH_URL = process.env.NEXT_PUBLIC_AUTH_URL;
-const AUTH_CLIENT_ID = process.env.NEXT_PUBLIC_AUTH_CLIENT_ID;
-
-function redirectToAuthGateway() {
-  if (!AUTH_URL || !AUTH_CLIENT_ID) return;
-
-  const state = crypto.randomUUID();
-  sessionStorage.setItem("oauth_state", state);
-
-  const redirectUri = `${window.location.origin}/auth/callback`;
-  const params = new URLSearchParams({
-    client_id: AUTH_CLIENT_ID,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    state,
-  });
-
-  window.location.href = `${AUTH_URL}/oauth/authorize?${params}`;
-}
-
 function validateCliCallback(cliCallback: string): boolean {
   try {
     const cbUrl = new URL(cliCallback);
@@ -73,25 +53,12 @@ function LoginPageContent() {
   const hydrateWorkspace = useWorkspaceStore((s) => s.hydrateWorkspace);
   const searchParams = useSearchParams();
 
-  const isCliFlow = !!searchParams.get("cli_callback");
-
   // Already authenticated — redirect to dashboard
   useEffect(() => {
-    if (!isLoading && user && !isCliFlow) {
+    if (!isLoading && user && !searchParams.get("cli_callback")) {
       router.replace(searchParams.get("next") || "/issues");
     }
-  }, [isLoading, user, router, searchParams, isCliFlow]);
-
-  // When auth gateway is configured and this is not a CLI flow,
-  // redirect to the external auth provider.
-  useEffect(() => {
-    if (isLoading) return;
-    if (user) return;
-    if (isCliFlow) return;
-    if (AUTH_URL && AUTH_CLIENT_ID) {
-      redirectToAuthGateway();
-    }
-  }, [isLoading, user, isCliFlow]);
+  }, [isLoading, user, router, searchParams]);
 
   const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
   const [email, setEmail] = useState(process.env.NEXT_PUBLIC_DEV_EMAIL ?? "");

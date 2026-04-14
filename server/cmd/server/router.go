@@ -84,7 +84,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	// Auth (public)
 	r.Post("/auth/send-code", h.SendCode)
 	r.Post("/auth/verify-code", h.VerifyCode)
-	r.Post("/auth/oauth/callback", h.OAuthCallback)
+	r.Post("/auth/gateway-login", h.GatewayLogin)
 
 	// Webhook ingest (public — authenticated by webhook token, not JWT)
 	r.Post("/api/webhooks/{id}", h.IngestWebhook)

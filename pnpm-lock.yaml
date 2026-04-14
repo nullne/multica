@@ -159,6 +159,9 @@ importers:
       input-otp:
         specifier: ^1.4.2
         version: 1.4.2(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      jose:
+        specifier: ^6.2.2
+        version: 6.2.2
       linkify-it:
         specifier: ^5.0.0
         version: 5.0.0
