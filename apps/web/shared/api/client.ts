@@ -154,6 +154,13 @@ export class ApiClient {
     });
   }
 
+  async exchangeOAuthCode(code: string, redirectUri: string): Promise<LoginResponse> {
+    return this.fetch("/auth/oauth/callback", {
+      method: "POST",
+      body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    });
+  }
+
   async getMe(): Promise<User> {
     return this.fetch("/api/me");
   }

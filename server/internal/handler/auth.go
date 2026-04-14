@@ -1,14 +1,17 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -415,4 +418,151 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, userToResponse(updatedUser))
+}
+
+type OAuthCallbackRequest struct {
+	Code        string `json:"code"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+type oauthTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+}
+
+type oauthUserInfo struct {
+	Sub     string `json:"sub"`
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+	Picture string `json:"picture"`
+}
+
+func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
+	gatewayURL := os.Getenv("AUTH_GATEWAY_URL")
+	clientID := os.Getenv("AUTH_OAUTH_CLIENT_ID")
+	clientSecret := os.Getenv("AUTH_OAUTH_CLIENT_SECRET")
+
+	if gatewayURL == "" || clientID == "" {
+		writeError(w, http.StatusServiceUnavailable, "OAuth is not configured")
+		return
+	}
+
+	var req OAuthCallbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Code == "" || req.RedirectURI == "" {
+		writeError(w, http.StatusBadRequest, "code and redirect_uri are required")
+		return
+	}
+
+	// Exchange authorization code for access token.
+	tokenParams := url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {req.Code},
+		"redirect_uri": {req.RedirectURI},
+		"client_id":    {clientID},
+	}
+	if clientSecret != "" {
+		tokenParams.Set("client_secret", clientSecret)
+	}
+
+	tokenResp, err := http.Post(
+		gatewayURL+"/api/oauth/token",
+		"application/x-www-form-urlencoded",
+		bytes.NewBufferString(tokenParams.Encode()),
+	)
+	if err != nil {
+		slog.Error("oauth: failed to exchange code", "error", err)
+		writeError(w, http.StatusBadGateway, "failed to contact auth gateway")
+		return
+	}
+	defer tokenResp.Body.Close()
+
+	tokenBody, _ := io.ReadAll(tokenResp.Body)
+	if tokenResp.StatusCode != http.StatusOK {
+		slog.Warn("oauth: token exchange failed", "status", tokenResp.StatusCode, "body", string(tokenBody))
+		writeError(w, http.StatusUnauthorized, "authorization code exchange failed")
+		return
+	}
+
+	var tokenData oauthTokenResponse
+	if err := json.Unmarshal(tokenBody, &tokenData); err != nil {
+		writeError(w, http.StatusBadGateway, "invalid token response from auth gateway")
+		return
+	}
+
+	// Fetch user info from auth gateway.
+	userInfoReq, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, gatewayURL+"/api/oauth/userinfo", nil)
+	userInfoReq.Header.Set("Authorization", "Bearer "+tokenData.AccessToken)
+
+	userInfoResp, err := http.DefaultClient.Do(userInfoReq)
+	if err != nil {
+		slog.Error("oauth: failed to fetch userinfo", "error", err)
+		writeError(w, http.StatusBadGateway, "failed to fetch user info from auth gateway")
+		return
+	}
+	defer userInfoResp.Body.Close()
+
+	if userInfoResp.StatusCode != http.StatusOK {
+		writeError(w, http.StatusUnauthorized, "failed to verify user with auth gateway")
+		return
+	}
+
+	var userInfo oauthUserInfo
+	if err := json.NewDecoder(userInfoResp.Body).Decode(&userInfo); err != nil {
+		writeError(w, http.StatusBadGateway, "invalid userinfo response from auth gateway")
+		return
+	}
+
+	if userInfo.Email == "" {
+		writeError(w, http.StatusBadRequest, "auth gateway did not return an email")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(userInfo.Email))
+
+	user, err := h.findOrCreateUser(r.Context(), email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	// Update name/avatar if the user was just created with a default name.
+	if userInfo.Name != "" && user.Name == strings.Split(email, "@")[0] {
+		params := db.UpdateUserParams{ID: user.ID, Name: userInfo.Name}
+		if userInfo.Picture != "" {
+			params.AvatarUrl = pgtype.Text{String: userInfo.Picture, Valid: true}
+		}
+		if updated, err := h.Queries.UpdateUser(r.Context(), params); err == nil {
+			user = updated
+		}
+	}
+
+	if err := h.ensureUserWorkspace(r.Context(), user); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to provision workspace")
+		return
+	}
+
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		slog.Warn("oauth login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	if h.CFSigner != nil {
+		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(72 * time.Hour)) {
+			http.SetCookie(w, cookie)
+		}
+	}
+
+	slog.Info("user logged in via oauth", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	writeJSON(w, http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  userToResponse(user),
+	})
 }
