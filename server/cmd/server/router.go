@@ -135,6 +135,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Put("/", h.UpdateWorkspace)
 				r.Patch("/", h.UpdateWorkspace)
 				r.Post("/members", h.CreateMember)
+				r.Get("/providers", h.GetWorkspaceProviders)
+				r.Patch("/providers", h.UpdateWorkspaceProviders)
+				r.Post("/update-all-daemons", h.UpdateAllDaemons)
 				r.Get("/github/install-url", h.GitHubInstallURL)
 				r.Get("/github/status", h.GitHubStatus)
 				r.Post("/github/connect", h.GitHubConnect)
@@ -181,9 +184,21 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Put("/criteria", h.UpdateCriteria)
 				r.Post("/criteria/approve", h.ApproveCriteria)
 				r.Post("/criteria/reject", h.RejectCriteria)
+					r.Get("/labels", h.ListIssueLabels)
+					r.Put("/labels", h.SetIssueLabels)
 					r.Post("/reactions", h.AddIssueReaction)
 					r.Delete("/reactions", h.RemoveIssueReaction)
 					r.Get("/attachments", h.ListAttachments)
+				})
+			})
+
+			// Labels
+			r.Route("/api/labels", func(r chi.Router) {
+				r.Get("/", h.ListLabels)
+				r.Post("/", h.CreateLabel)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Put("/", h.UpdateLabel)
+					r.Delete("/", h.DeleteLabel)
 				})
 			})
 
@@ -228,8 +243,12 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				})
 			})
 
-			// Runtimes
-			r.Route("/api/runtimes", func(r chi.Router) {
+		// Daemons
+		r.Get("/api/daemons", h.ListDaemons)
+		r.Patch("/api/daemons/{daemonId}", h.UpdateDaemon)
+
+		// Runtimes
+		r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
 				r.Get("/{runtimeId}/usage", h.GetRuntimeUsage)
 				r.Get("/{runtimeId}/activity", h.GetRuntimeTaskActivity)

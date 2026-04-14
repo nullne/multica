@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction, AcceptanceCriterion, CriteriaStatus } from "./issue";
+export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueReaction, AcceptanceCriterion, CriteriaStatus, Label } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -9,6 +9,7 @@ export type {
   AgentTrigger,
   AgentTask,
   AgentRuntime,
+  Daemon,
   RuntimeDevice,
   CreateAgentRequest,
   UpdateAgentRequest,
@@ -23,8 +24,11 @@ export type {
   RuntimePingStatus,
   RuntimeUpdate,
   RuntimeUpdateStatus,
+  ProviderAuthStatus,
+  DaemonStatus,
+  RuntimeStatus,
 } from "./agent";
-export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser } from "./workspace";
+export type { Workspace, WorkspaceRepo, ProviderConfig, WorkspaceProviderSettings, Member, MemberRole, User, MemberWithUser } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { Comment, CommentType, CommentAuthorType, Reaction } from "./comment";
 export type { TimelineEntry } from "./activity";

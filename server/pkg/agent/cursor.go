@@ -19,10 +19,10 @@ type cursorBackend struct {
 func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
-		execPath = "cursor-agent"
+		execPath = "agent"
 	}
 	if _, err := exec.LookPath(execPath); err != nil {
-		return nil, fmt.Errorf("cursor-agent executable not found at %q: %w", execPath, err)
+		return nil, fmt.Errorf("cursor agent executable not found at %q: %w", execPath, err)
 	}
 
 	timeout := opts.Timeout
@@ -41,7 +41,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		args = append(args, "--model", opts.Model)
 	}
 	if opts.MaxTurns > 0 {
-		b.cfg.Logger.Warn("cursor-agent does not support --max-turns; ignoring", "maxTurns", opts.MaxTurns)
+		b.cfg.Logger.Warn("cursor agent does not support --max-turns; ignoring", "maxTurns", opts.MaxTurns)
 	}
 	if opts.ResumeSessionID != "" {
 		args = append(args, "--resume", opts.ResumeSessionID)
@@ -63,10 +63,10 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return nil, fmt.Errorf("start cursor-agent: %w", err)
+		return nil, fmt.Errorf("start cursor agent: %w", err)
 	}
 
-	b.cfg.Logger.Info("cursor-agent started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
+	b.cfg.Logger.Info("cursor agent started", "pid", cmd.Process.Pid, "cwd", opts.Cwd, "model", opts.Model)
 
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
@@ -127,16 +127,16 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 		if runCtx.Err() == context.DeadlineExceeded {
 			finalStatus = "timeout"
-			finalError = fmt.Sprintf("cursor-agent timed out after %s", timeout)
+			finalError = fmt.Sprintf("cursor agent timed out after %s", timeout)
 		} else if runCtx.Err() == context.Canceled {
 			finalStatus = "aborted"
 			finalError = "execution cancelled"
 		} else if exitErr != nil && finalStatus == "completed" {
 			finalStatus = "failed"
-			finalError = fmt.Sprintf("cursor-agent exited with error: %v", exitErr)
+			finalError = fmt.Sprintf("cursor agent exited with error: %v", exitErr)
 		}
 
-		b.cfg.Logger.Info("cursor-agent finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
+		b.cfg.Logger.Info("cursor agent finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
 
 		resCh <- Result{
 			Status:     finalStatus,

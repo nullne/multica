@@ -1,0 +1,2 @@
+ALTER TABLE agent_runtime DROP COLUMN IF EXISTS daemon_ref;
+DROP TABLE IF EXISTS daemon;

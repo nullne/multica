@@ -12,13 +12,16 @@ import type {
   UpdateAgentRequest,
   AgentTask,
   AgentRuntime,
+  Daemon,
   InboxItem,
   IssueSubscriber,
   Comment,
   Reaction,
   IssueReaction,
+  Label,
   Workspace,
   WorkspaceRepo,
+  WorkspaceProviderSettings,
   MemberWithUser,
   User,
   Skill,
@@ -325,6 +328,17 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
   }
 
+  async listDaemons(): Promise<Daemon[]> {
+    return this.fetch("/api/daemons");
+  }
+
+  async updateDaemon(daemonId: string, data: { device_name?: string; labels?: string[] }): Promise<Daemon> {
+    return this.fetch(`/api/daemons/${daemonId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
   async listRuntimes(params?: { workspace_id?: string }): Promise<AgentRuntime[]> {
     const search = new URLSearchParams();
     const wsId = params?.workspace_id ?? this.workspaceId;
@@ -409,6 +423,36 @@ export class ApiClient {
     });
   }
 
+  // Labels
+  async listLabels(): Promise<Label[]> {
+    return this.fetch("/api/labels");
+  }
+
+  async createLabel(data: { name: string; color: string }): Promise<Label> {
+    return this.fetch("/api/labels", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateLabel(id: string, data: { name: string; color: string }): Promise<Label> {
+    return this.fetch(`/api/labels/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteLabel(id: string): Promise<void> {
+    await this.fetch(`/api/labels/${id}`, { method: "DELETE" });
+  }
+
+  async setIssueLabels(issueId: string, labelIds: string[]): Promise<Label[]> {
+    return this.fetch(`/api/issues/${issueId}/labels`, {
+      method: "PUT",
+      body: JSON.stringify({ label_ids: labelIds }),
+    });
+  }
+
   // Inbox
   async listInbox(): Promise<InboxItem[]> {
     return this.fetch("/api/inbox");
@@ -462,6 +506,25 @@ export class ApiClient {
     return this.fetch(`/api/workspaces/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+  }
+
+  // Provider config
+  async getProviderConfig(workspaceId: string): Promise<WorkspaceProviderSettings> {
+    return this.fetch(`/api/workspaces/${workspaceId}/providers`);
+  }
+
+  async updateProviderConfig(workspaceId: string, data: WorkspaceProviderSettings): Promise<WorkspaceProviderSettings> {
+    return this.fetch(`/api/workspaces/${workspaceId}/providers`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateAllDaemons(workspaceId: string, targets: { target: string; version: string }[]): Promise<{ daemons_count: number; updates_queued: number }> {
+    return this.fetch(`/api/workspaces/${workspaceId}/update-all-daemons`, {
+      method: "POST",
+      body: JSON.stringify({ targets }),
     });
   }
 

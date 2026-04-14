@@ -9,6 +9,9 @@ import pg from "pg";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.PORT ?? "8080"}`;
 const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://multica:multica@localhost:5432/multica?sslmode=disable";
 
+// Cache tokens by email to avoid rate-limit issues when multiple tests login with the same email.
+const tokenCache = new Map<string, { token: string; workspaceId: string }>();
+
 interface TestWorkspace {
   id: string;
   name: string;
@@ -18,20 +21,37 @@ interface TestWorkspace {
 export class TestApiClient {
   private token: string | null = null;
   private workspaceId: string | null = null;
+  private email: string | null = null;
   private createdIssueIds: string[] = [];
 
   async login(email: string, name: string) {
-    // Step 1: Send verification code
-    const sendRes = await fetch(`${API_BASE}/auth/send-code`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    });
-    if (!sendRes.ok) {
-      // Rate limited — code already sent recently, read it from DB
-      if (sendRes.status !== 429) {
-        throw new Error(`send-code failed: ${sendRes.status}`);
+    this.email = email;
+
+    // Reuse cached token to avoid send-code rate limits across tests.
+    const cached = tokenCache.get(email);
+    if (cached) {
+      this.token = cached.token;
+      this.workspaceId = cached.workspaceId;
+      return { token: cached.token };
+    }
+
+    // Step 1: Send verification code (retry on 429 rate limit)
+    let sendOk = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const sendRes = await fetch(`${API_BASE}/auth/send-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (sendRes.ok) { sendOk = true; break; }
+      if (sendRes.status === 429) {
+        await new Promise((r) => setTimeout(r, 10_500));
+        continue;
       }
+      throw new Error(`send-code failed: ${sendRes.status}`);
+    }
+    if (!sendOk) {
+      throw new Error(`send-code rate limited after 3 retries for ${email}`);
     }
 
     // Step 2: Read code from database
@@ -84,6 +104,7 @@ export class TestApiClient {
     const workspace = workspaces.find((item) => item.slug === slug) ?? workspaces[0];
     if (workspace) {
       this.workspaceId = workspace.id;
+      this.cacheToken();
       return workspace;
     }
 
@@ -94,6 +115,7 @@ export class TestApiClient {
     if (res.ok) {
       const created = (await res.json()) as TestWorkspace;
       this.workspaceId = created.id;
+      this.cacheToken();
       return created;
     }
 
@@ -101,10 +123,18 @@ export class TestApiClient {
     const created = refreshed.find((item) => item.slug === slug) ?? refreshed[0];
     if (created) {
       this.workspaceId = created.id;
+      this.cacheToken();
       return created;
     }
 
     throw new Error(`Failed to ensure workspace ${slug}: ${res.status} ${res.statusText}`);
+  }
+
+  /** Cache the current token so subsequent TestApiClient instances can reuse it. */
+  private cacheToken() {
+    if (this.token && this.workspaceId && this.email) {
+      tokenCache.set(this.email, { token: this.token, workspaceId: this.workspaceId });
+    }
   }
 
   async createIssue(title: string, opts?: Record<string, unknown>) {
@@ -135,6 +165,23 @@ export class TestApiClient {
 
   getToken() {
     return this.token;
+  }
+
+  getWorkspaceId() {
+    return this.workspaceId;
+  }
+
+  async getProviderConfig(): Promise<{ providers?: Record<string, { enabled: boolean; api_key: string; target_version: string }>; multica_target_version?: string }> {
+    const res = await this.authedFetch(`/api/workspaces/${this.workspaceId}/providers`);
+    return res.json();
+  }
+
+  async updateProviderConfig(data: { providers?: Record<string, { enabled: boolean; api_key: string; target_version: string }>; multica_target_version?: string }) {
+    const res = await this.authedFetch(`/api/workspaces/${this.workspaceId}/providers`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    return res.json();
   }
 
   private async authedFetch(path: string, init?: RequestInit) {

@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type { Workspace, MemberWithUser, Agent, Skill } from "@/shared/types";
 import { useIssueStore } from "@/features/issues";
 import { useInboxStore } from "@/features/inbox";
+import { useLabelStore } from "@/features/labels";
 import { useRuntimeStore } from "@/features/runtimes";
 import { toast } from "sonner";
 import { api } from "@/shared/api";
@@ -90,6 +91,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       api.listSkills().catch(() => [] as Skill[]),
       useIssueStore.getState().fetch().catch(() => {}),
       useInboxStore.getState().fetch().catch(() => {}),
+      useLabelStore.getState().fetch().catch(() => {}),
     ]);
     logger.info("hydrate complete", "members:", nextMembers.length, "agents:", nextAgents.length);
     set({ members: nextMembers, agents: nextAgents, skills: nextSkills });
@@ -113,6 +115,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     // Clear ALL stale data across every store before hydrating.
     useIssueStore.getState().setIssues([]);
     useInboxStore.getState().setItems([]);
+    useLabelStore.getState().setLabels([]);
     useRuntimeStore.getState().setRuntimes([]);
     set({ workspace: ws, members: [], agents: [], skills: [] });
 

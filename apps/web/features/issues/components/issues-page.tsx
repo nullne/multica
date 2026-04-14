@@ -13,6 +13,7 @@ import { filterIssues } from "@/features/issues/utils/filter";
 import { BOARD_STATUSES } from "@/features/issues/config";
 import { useWorkspaceStore } from "@/features/workspace";
 import { WorkspaceAvatar } from "@/features/workspace";
+import { useRuntimeStore } from "@/features/runtimes";
 import { api } from "@/shared/api";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { IssuesHeader } from "./issues-header";
@@ -25,16 +26,22 @@ export function IssuesPage() {
   const loading = useIssueStore((s) => s.loading);
   const workspace = useWorkspaceStore((s) => s.workspace);
   const scope = useIssuesScopeStore((s) => s.scope);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
   const viewMode = useIssueViewStore((s) => s.viewMode);
   const statusFilters = useIssueViewStore((s) => s.statusFilters);
   const priorityFilters = useIssueViewStore((s) => s.priorityFilters);
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
+  const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
 
   useEffect(() => {
     initFilterWorkspaceSync();
   }, []);
+
+  useEffect(() => {
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   useEffect(() => {
     useIssueSelectionStore.getState().clear();
@@ -50,8 +57,8 @@ export function IssuesPage() {
   }, [allIssues, scope]);
 
   const issues = useMemo(
-    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters }),
-    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters],
+    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters }),
+    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters],
   );
 
   const visibleStatuses = useMemo(() => {

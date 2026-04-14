@@ -39,8 +39,12 @@ type IssueResponse struct {
 	CriteriaStatus        *string                 `json:"criteria_status"`
 	Position              float64                 `json:"position"`
 	DueDate               *string                 `json:"due_date"`
+	DispatchProvider      *string                 `json:"dispatch_provider"`
+	DispatchDaemonID      *string                 `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
+	Labels                []LabelResponse         `json:"labels"`
 	Reactions             []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments           []AttachmentResponse    `json:"attachments,omitempty"`
 }
@@ -96,6 +100,10 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		CriteriaStatus:        textToPtr(i.CriteriaStatus),
 		Position:              i.Position,
 		DueDate:               timestampToPtr(i.DueDate),
+		DispatchProvider:      textToPtr(i.DispatchProvider),
+		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
+		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
+		Labels:                []LabelResponse{},
 		CreatedAt:             timestampToString(i.CreatedAt),
 		UpdatedAt:             timestampToString(i.UpdatedAt),
 	}
@@ -152,6 +160,32 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		resp[i] = issueToResponse(issue, prefix)
 	}
 
+	// Batch-fetch labels for all issues.
+	if len(issues) > 0 {
+		issueIDs := make([]pgtype.UUID, len(issues))
+		for i, issue := range issues {
+			issueIDs[i] = issue.ID
+		}
+		labelRows, err := h.Queries.ListLabelsForIssues(ctx, issueIDs)
+		if err == nil {
+			labelMap := make(map[string][]LabelResponse)
+			for _, row := range labelRows {
+				iid := uuidToString(row.IssueID)
+				labelMap[iid] = append(labelMap[iid], LabelResponse{
+					ID:          uuidToString(row.ID),
+					WorkspaceID: uuidToString(row.WorkspaceID),
+					Name:        row.Name,
+					Color:       row.Color,
+				})
+			}
+			for i := range resp {
+				if labels, ok := labelMap[resp[i].ID]; ok {
+					resp[i].Labels = labels
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issues": resp,
 		"total":  len(resp),
@@ -166,6 +200,15 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
+
+	// Fetch issue labels.
+	labels, err := h.Queries.ListLabelsForIssue(r.Context(), issue.ID)
+	if err == nil && len(labels) > 0 {
+		resp.Labels = make([]LabelResponse, len(labels))
+		for i, l := range labels {
+			resp.Labels[i] = labelToResponse(l)
+		}
+	}
 
 	// Fetch issue reactions.
 	reactions, err := h.Queries.ListIssueReactions(r.Context(), issue.ID)
@@ -202,6 +245,9 @@ type CreateIssueRequest struct {
 	MaxVerificationRounds *int32  `json:"max_verification_rounds"`
 	ParentIssueID         *string `json:"parent_issue_id"`
 	DueDate               *string `json:"due_date"`
+	DispatchProvider      *string `json:"dispatch_provider"`
+	DispatchDaemonID      *string `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string `json:"dispatch_daemon_label"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +370,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DueDate:               dueDate,
 		Number:                issueNumber,
 		MaxVerificationRounds: maxVerificationRounds,
+		DispatchProvider:      ptrToText(req.DispatchProvider),
+		DispatchDaemonID:      parseOptionalUUID(req.DispatchDaemonID),
+		DispatchDaemonLabel:   ptrToText(req.DispatchDaemonLabel),
 	})
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -362,6 +411,9 @@ type UpdateIssueRequest struct {
 	MaxVerificationRounds *int32   `json:"max_verification_rounds"`
 	Position              *float64 `json:"position"`
 	DueDate               *string  `json:"due_date"`
+	DispatchProvider      *string  `json:"dispatch_provider"`
+	DispatchDaemonID      *string  `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string  `json:"dispatch_daemon_label"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +450,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		VerifierAgentID:       prevIssue.VerifierAgentID,
 		DueDate:               prevIssue.DueDate,
 		MaxVerificationRounds: prevIssue.MaxVerificationRounds,
+		DispatchProvider:      prevIssue.DispatchProvider,
+		DispatchDaemonID:      prevIssue.DispatchDaemonID,
+		DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
 	}
 
 	// COALESCE fields — only set when explicitly provided
@@ -456,6 +511,15 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		} else {
 			params.MaxVerificationRounds = pgtype.Int4{Valid: false}
 		}
+	}
+	if _, ok := rawFields["dispatch_provider"]; ok {
+		params.DispatchProvider = ptrToText(req.DispatchProvider)
+	}
+	if _, ok := rawFields["dispatch_daemon_id"]; ok {
+		params.DispatchDaemonID = parseOptionalUUID(req.DispatchDaemonID)
+	}
+	if _, ok := rawFields["dispatch_daemon_label"]; ok {
+		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
@@ -529,9 +593,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"creator_id":             uuidToString(prevIssue.CreatorID),
 	})
 
-	// Reconcile task queue when assignee changes (not on status changes —
-	// agents manage issue status themselves via the CLI).
-	if assigneeChanged || verifierChanged {
+	dispatchChanged := (prevIssue.DispatchProvider != issue.DispatchProvider ||
+		prevIssue.DispatchDaemonID != issue.DispatchDaemonID ||
+		prevIssue.DispatchDaemonLabel != issue.DispatchDaemonLabel)
+
+	// Reconcile task queue when assignee or dispatch hints change (not on
+	// status changes — agents manage issue status themselves via the CLI).
+	if assigneeChanged || verifierChanged || dispatchChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
@@ -611,7 +679,7 @@ func (h *Handler) isAgentTriggerEnabled(ctx context.Context, issue db.Issue, tri
 	}
 
 	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || len(agent.Providers) == 0 || agent.ArchivedAt.Valid {
 		return false
 	}
 
@@ -623,7 +691,7 @@ func (h *Handler) isAgentTriggerEnabled(ctx context.Context, issue db.Issue, tri
 // ID rather than deriving it from the issue assignee.
 func (h *Handler) isAgentMentionTriggerEnabled(ctx context.Context, agentID pgtype.UUID) bool {
 	agent, err := h.Queries.GetAgent(ctx, agentID)
-	if err != nil || !agent.RuntimeID.Valid {
+	if err != nil || len(agent.Providers) == 0 {
 		return false
 	}
 

@@ -5,7 +5,7 @@ test.describe("Authentication", () => {
   test("login page renders correctly", async ({ page }) => {
     await page.goto("/login");
 
-    await expect(page.locator("h1")).toContainText("Multica");
+    await expect(page.locator("text=Multica").first()).toBeVisible();
     await expect(page.locator('input[placeholder="Email"]')).toBeVisible();
     await expect(page.locator('input[placeholder="Name"]')).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toContainText(

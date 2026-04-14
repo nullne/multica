@@ -8,6 +8,7 @@ const NO_FILTER: IssueFilters = {
   assigneeFilters: [],
   includeNoAssignee: false,
   creatorFilters: [],
+  labelFilters: [],
 };
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
@@ -31,6 +32,10 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     criteria_status: null,
     position: 0,
     due_date: null,
+    dispatch_provider: null,
+    dispatch_daemon_id: null,
+    dispatch_daemon_label: null,
+    labels: [],
     created_at: "2025-01-01T00:00:00Z",
     updated_at: "2025-01-01T00:00:00Z",
     ...overrides,

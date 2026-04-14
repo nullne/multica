@@ -59,14 +59,16 @@ import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
-import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueStore } from "@/features/issues";
+import { LabelPicker } from "@/features/labels/components";
 import { useIssueViewStore } from "@/features/issues/stores/view-store";
 import { useIssuesScopeStore } from "@/features/issues/stores/issues-scope-store";
 import { useIssueTimeline } from "@/features/issues/hooks/use-issue-timeline";
@@ -376,6 +378,57 @@ function PropRow({
   );
 }
 
+function DispatchHints({ issue, onUpdate }: { issue: Issue; onUpdate: (updates: Partial<UpdateIssueRequest>) => void }) {
+  const agents = useWorkspaceStore((s) => s.agents);
+  const agent = agents.find((a) => a.id === issue.assignee_id);
+  const providers = agent?.providers ?? [];
+
+  const [providerOpen, setProviderOpen] = useState(false);
+
+  return (
+    <>
+      <PropRow label="Provider">
+        <PropertyPicker
+          open={providerOpen}
+          onOpenChange={setProviderOpen}
+          width="w-40"
+          align="start"
+          trigger={
+            <span className={issue.dispatch_provider ? "capitalize" : "text-muted-foreground"}>
+              {issue.dispatch_provider ?? "Auto"}
+            </span>
+          }
+        >
+          <PickerItem
+            selected={!issue.dispatch_provider}
+            onClick={() => { onUpdate({ dispatch_provider: null }); setProviderOpen(false); }}
+          >
+            <span className="text-muted-foreground">Auto</span>
+          </PickerItem>
+          {providers.map((p) => (
+            <PickerItem
+              key={p}
+              selected={issue.dispatch_provider === p}
+              onClick={() => { onUpdate({ dispatch_provider: p }); setProviderOpen(false); }}
+            >
+              <span className="capitalize">{p}</span>
+            </PickerItem>
+          ))}
+        </PropertyPicker>
+      </PropRow>
+      <PropRow label="Daemon">
+        <DaemonPicker
+          daemonId={issue.dispatch_daemon_id}
+          daemonLabel={issue.dispatch_daemon_label}
+          provider={issue.dispatch_provider}
+          onUpdate={onUpdate}
+          align="start"
+        />
+      </PropRow>
+    </>
+  );
+}
+
 
 // ---------------------------------------------------------------------------
 // Props
@@ -404,7 +457,12 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const workspace = useWorkspaceStore((s) => s.workspace);
   const members = useWorkspaceStore((s) => s.members);
   const agents = useWorkspaceStore((s) => s.agents);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
   const currentMemberRole = members.find((m) => m.user_id === user?.id)?.role;
+
+  useEffect(() => {
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   // Single source of truth: read issue directly from global store
   const issue = useIssueStore((s) => s.issues.find((i) => i.id === id)) ?? null;
@@ -415,6 +473,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
+  const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const scopedIssues = useMemo(() => {
@@ -423,8 +482,8 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
     return allIssues;
   }, [allIssues, scope]);
   const filteredIssues = useMemo(
-    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters }),
-    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters],
+    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters }),
+    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters],
   );
   const navigationIssues = useMemo(() => {
     if (!issue) return [];
@@ -1283,6 +1342,18 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     />
                   </PropRow>
 
+                  {/* Labels */}
+                  <PropRow label="Labels">
+                    <LabelPicker
+                      issueId={issue.id}
+                      selected={issue.labels ?? []}
+                      onUpdate={(labels) =>
+                        useIssueStore.getState().updateIssue(issue.id, { labels })
+                      }
+                      align="start"
+                    />
+                  </PropRow>
+
                   {/* Due date */}
                   <PropRow label="Due date">
                     <DueDatePicker
@@ -1319,6 +1390,11 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                         className="w-14 rounded border px-1.5 py-0.5 text-xs text-right bg-transparent outline-none focus:ring-1 focus:ring-ring"
                       />
                     </PropRow>
+                  )}
+
+                  {/* Dispatch hints — visible when assignee is an agent */}
+                  {issue.assignee_type === "agent" && issue.assignee_id && (
+                    <DispatchHints issue={issue} onUpdate={handleUpdateField} />
                   )}
                 </div>}
               </div>

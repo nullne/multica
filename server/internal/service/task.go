@@ -158,14 +158,36 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 		slog.Debug("mention task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
 		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
 	}
-	if !agent.RuntimeID.Valid {
-		slog.Error("mention task enqueue failed: agent has no runtime", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	if len(agent.Providers) == 0 {
+		slog.Error("task enqueue failed: agent has no providers", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
+		return db.AgentTaskQueue{}, fmt.Errorf("agent has no providers configured")
 	}
+
+	// Use issue-level dispatch hints to constrain runtime selection.
+	params := db.FindAvailableRuntimeConstrainedParams{
+		WorkspaceID: issue.WorkspaceID,
+		Providers:   agent.Providers,
+	}
+	if issue.DispatchProvider.Valid {
+		params.Provider = issue.DispatchProvider
+	}
+	if issue.DispatchDaemonID.Valid {
+		params.DaemonID = issue.DispatchDaemonID
+	}
+	if issue.DispatchDaemonLabel.Valid {
+		params.DaemonLabel = issue.DispatchDaemonLabel
+	}
+
+	runtime, err := s.Queries.FindAvailableRuntimeConstrained(ctx, params)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("no online runtime for providers %v (dispatch hints: provider=%s, daemon_label=%s)", agent.Providers, issue.DispatchProvider.String, issue.DispatchDaemonLabel.String)
+	}
+
+	runtimeID := runtime.ID
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:          agentID,
-		RuntimeID:        agent.RuntimeID,
+		RuntimeID:        runtimeID,
 		IssueID:          issue.ID,
 		Priority:         priorityToInt(issue.Priority),
 		TriggerCommentID: triggerCommentID,
@@ -207,20 +229,6 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID pgtype.UUID) (*db.A
 // ClaimTask atomically claims the next queued task for an agent,
 // respecting max_concurrent_tasks.
 func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	agent, err := s.Queries.GetAgent(ctx, agentID)
-	if err != nil {
-		return nil, fmt.Errorf("agent not found: %w", err)
-	}
-
-	running, err := s.Queries.CountRunningTasks(ctx, agentID)
-	if err != nil {
-		return nil, fmt.Errorf("count running tasks: %w", err)
-	}
-	if running >= int64(agent.MaxConcurrentTasks) {
-		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks)
-		return nil, nil // No capacity
-	}
-
 	task, err := s.Queries.ClaimAgentTask(ctx, agentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -843,10 +851,6 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 
 // agentToMap builds a simple map for broadcasting agent status updates.
 func agentToMap(a db.Agent) map[string]any {
-	var rc any
-	if a.RuntimeConfig != nil {
-		json.Unmarshal(a.RuntimeConfig, &rc)
-	}
 	var tools any
 	if a.Tools != nil {
 		json.Unmarshal(a.Tools, &tools)
@@ -856,24 +860,21 @@ func agentToMap(a db.Agent) map[string]any {
 		json.Unmarshal(a.Triggers, &triggers)
 	}
 	return map[string]any{
-		"id":                   util.UUIDToString(a.ID),
-		"workspace_id":         util.UUIDToString(a.WorkspaceID),
-		"runtime_id":           util.UUIDToString(a.RuntimeID),
-		"name":                 a.Name,
-		"description":          a.Description,
-		"avatar_url":           util.TextToPtr(a.AvatarUrl),
-		"runtime_mode":         a.RuntimeMode,
-		"runtime_config":       rc,
-		"visibility":           a.Visibility,
-		"status":               a.Status,
-		"max_concurrent_tasks": a.MaxConcurrentTasks,
-		"owner_id":             util.UUIDToPtr(a.OwnerID),
-		"skills":               []any{},
-		"tools":                tools,
-		"triggers":             triggers,
-		"created_at":           util.TimestampToString(a.CreatedAt),
-		"updated_at":           util.TimestampToString(a.UpdatedAt),
-		"archived_at":          util.TimestampToPtr(a.ArchivedAt),
-		"archived_by":          util.UUIDToPtr(a.ArchivedBy),
+		"id":           util.UUIDToString(a.ID),
+		"workspace_id": util.UUIDToString(a.WorkspaceID),
+		"providers":    a.Providers,
+		"name":         a.Name,
+		"description":  a.Description,
+		"avatar_url":   util.TextToPtr(a.AvatarUrl),
+		"visibility":   a.Visibility,
+		"status":       a.Status,
+		"owner_id":     util.UUIDToPtr(a.OwnerID),
+		"skills":       []any{},
+		"tools":        tools,
+		"triggers":     triggers,
+		"created_at":   util.TimestampToString(a.CreatedAt),
+		"updated_at":   util.TimestampToString(a.UpdatedAt),
+		"archived_at":  util.TimestampToPtr(a.ArchivedAt),
+		"archived_by":  util.UUIDToPtr(a.ArchivedBy),
 	}
 }

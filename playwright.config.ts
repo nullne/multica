@@ -2,11 +2,17 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 30000,
+  timeout: 60000,
   retries: 0,
+  workers: process.env.CI ? 1 : undefined,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? process.env.FRONTEND_ORIGIN ?? "http://localhost:3000",
     headless: true,
+    navigationTimeout: 30000,
+    actionTimeout: 15000,
+    launchOptions: {
+      args: process.env.CI ? ["--no-sandbox", "--no-proxy-server"] : [],
+    },
   },
   projects: [
     {

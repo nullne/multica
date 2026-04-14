@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import { Bot, ChevronRight, Loader2, ArrowDown, Brain, AlertCircle, Clock, CheckCircle2, XCircle, Square } from "lucide-react";
 import { api } from "@/shared/api";
 import { useWSEvent } from "@/features/realtime";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useActorName } from "@/features/workspace";
+import { useRuntimeStore } from "@/features/runtimes";
 import { redactSecrets } from "../utils/redact";
 
 // ─── Shared types & helpers ─────────────────────────────────────────────────
@@ -245,9 +247,18 @@ export function AgentLiveCard({ issueId, agentName }: AgentLiveCardProps) {
     }
   }, [activeTask, issueId, cancelling]);
 
+  const runtimes = useRuntimeStore((s) => s.runtimes);
+  const daemons = useRuntimeStore((s) => s.daemons);
+
   if (!activeTask) return null;
 
   const toolCount = items.filter((i) => i.type === "tool_use").length;
+  const taskRuntime = runtimes.find((r) => r.id === activeTask.runtime_id);
+  const taskDaemon = taskRuntime?.daemon_ref ? daemons.find((d) => d.id === taskRuntime.daemon_ref) : null;
+  const runtimeLabel = [
+    taskDaemon?.device_name || taskDaemon?.daemon_id,
+    taskRuntime?.provider,
+  ].filter(Boolean).join(" / ");
 
   return (
     <div className="rounded-lg border border-info/20 bg-info/5">
@@ -258,7 +269,14 @@ export function AgentLiveCard({ issueId, agentName }: AgentLiveCardProps) {
         </div>
         <div className="flex items-center gap-1.5 text-xs font-medium min-w-0">
           <Loader2 className="h-3 w-3 animate-spin text-info shrink-0" />
-          <span className="truncate">{(activeTask?.agent_id ? getActorName("agent", activeTask.agent_id) : agentName) ?? "Agent"} is working</span>
+          <span className="truncate">
+            {(activeTask?.agent_id ? getActorName("agent", activeTask.agent_id) : agentName) ?? "Agent"} is working
+          </span>
+          {runtimeLabel && (
+            <Link href="/runtimes" className="text-muted-foreground font-normal shrink-0 hover:text-foreground hover:underline transition-colors">
+              on {runtimeLabel}
+            </Link>
+          )}
         </div>
         <span className="ml-auto text-xs text-muted-foreground tabular-nums shrink-0">{elapsed}</span>
         {toolCount > 0 && (
@@ -377,8 +395,13 @@ export function TaskRunHistory({ issueId }: TaskRunHistoryProps) {
 }
 
 function TaskRunEntry({ task }: { task: AgentTask }) {
+  const runtimes = useRuntimeStore((s) => s.runtimes);
+  const daemonsStore = useRuntimeStore((s) => s.daemons);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<TimelineItem[] | null>(null);
+  const rt = runtimes.find((r) => r.id === task.runtime_id);
+  const dm = rt?.daemon_ref ? daemonsStore.find((d) => d.id === rt.daemon_ref) : null;
+  const runLabel = [dm?.device_name || dm?.daemon_id, rt?.provider].filter(Boolean).join(" / ");
 
   const loadMessages = useCallback(() => {
     if (items !== null) return; // already loaded
@@ -411,21 +434,31 @@ function TaskRunEntry({ task }: { task: AgentTask }) {
           {new Date(task.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
         </span>
         {duration && <span className="text-muted-foreground">{duration}</span>}
+        {runLabel && (
+          <Link href="/runtimes" className="text-muted-foreground hover:text-foreground hover:underline transition-colors" onClick={(e) => e.stopPropagation()}>
+            {runLabel}
+          </Link>
+        )}
         <span className={cn("ml-auto capitalize", task.status === "completed" ? "text-success" : "text-destructive")}>
           {task.status}
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-5 mt-1 max-h-64 overflow-y-auto rounded border bg-muted/30 px-3 py-2 space-y-0.5">
+          {task.status === "failed" && task.error && (
+            <div className="rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive mb-1">
+              {task.error}
+            </div>
+          )}
           {items === null ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
               <Loader2 className="h-3 w-3 animate-spin" />
               Loading...
             </div>
-          ) : items.length === 0 ? (
+          ) : items.length === 0 && !(task.status === "failed" && task.error) ? (
             <p className="text-xs text-muted-foreground py-2">No execution data recorded.</p>
           ) : (
-            items.map((item, idx) => (
+            items?.map((item, idx) => (
               <TimelineRow key={`${item.seq}-${idx}`} item={item} />
             ))
           )}

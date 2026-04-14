@@ -189,6 +189,12 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ws, err = qtx.UpdateWorkspace(r.Context(), updateSettingsOnly(ws.ID, defaultProviderSettings()))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set default providers: "+err.Error())
+		return
+	}
+
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create workspace")
 		return
@@ -205,6 +211,14 @@ type UpdateWorkspaceRequest struct {
 	Settings    any     `json:"settings"`
 	Repos       any     `json:"repos"`
 	IssuePrefix *string `json:"issue_prefix"`
+}
+
+// updateSettingsOnly builds UpdateWorkspaceParams that only touch the settings field.
+func updateSettingsOnly(id pgtype.UUID, settingsJSON []byte) db.UpdateWorkspaceParams {
+	return db.UpdateWorkspaceParams{
+		ID:       id,
+		Settings: settingsJSON,
+	}
 }
 
 func (h *Handler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {

@@ -111,17 +111,17 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 		)
 		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
 		RETURNING id
-	`, workspaceID, "Handler Test Runtime", "handler_test_runtime", "Handler test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "Handler Test Runtime", "codex", "Handler test runtime").Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
-			workspace_id, name, description, runtime_mode, runtime_config,
-			runtime_id, visibility, max_concurrent_tasks, owner_id, tools, triggers
+			workspace_id, name, description,
+			visibility, owner_id, tools, triggers, providers
 		)
-		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4, '[]'::jsonb, '[]'::jsonb)
-	`, workspaceID, "Handler Test Agent", runtimeID, userID); err != nil {
+		VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'])
+	`, workspaceID, "Handler Test Agent", userID); err != nil {
 		return "", "", err
 	}
 
@@ -351,25 +351,25 @@ func TestAgentGitHubCodeAccess(t *testing.T) {
 	}
 	agentID := agents[0].ID
 
-	// Default should be "write".
-	if agents[0].GitHubCodeAccess != "write" {
-		t.Errorf("default github_code_access = %q, want 'write'", agents[0].GitHubCodeAccess)
+	// Default should be "read".
+	if agents[0].GitHubCodeAccess != "read" {
+		t.Errorf("default github_code_access = %q, want 'read'", agents[0].GitHubCodeAccess)
 	}
 
-	// Update to "read".
+	// Update to "write".
 	w = httptest.NewRecorder()
 	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
-		"github_code_access": "read",
+		"github_code_access": "write",
 	})
 	req = withURLParam(req, "id", agentID)
 	testHandler.UpdateAgent(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("UpdateAgent(read): expected 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("UpdateAgent(write): expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var updated AgentResponse
 	json.NewDecoder(w.Body).Decode(&updated)
-	if updated.GitHubCodeAccess != "read" {
-		t.Errorf("after update: github_code_access = %q, want 'read'", updated.GitHubCodeAccess)
+	if updated.GitHubCodeAccess != "write" {
+		t.Errorf("after update: github_code_access = %q, want 'write'", updated.GitHubCodeAccess)
 	}
 
 	// Update to "admin".
@@ -401,7 +401,7 @@ func TestAgentGitHubCodeAccess(t *testing.T) {
 	// Restore to default.
 	w = httptest.NewRecorder()
 	req = newRequest("PUT", "/api/agents/"+agentID, map[string]any{
-		"github_code_access": "write",
+		"github_code_access": "read",
 	})
 	req = withURLParam(req, "id", agentID)
 	testHandler.UpdateAgent(w, req)
@@ -724,11 +724,11 @@ func TestResolveActor(t *testing.T) {
 		t.Fatalf("failed to create test issue: %v", err)
 	}
 
-	// Look up runtime_id for the agent.
+	// Look up a runtime in the same workspace.
 	var runtimeID string
-	err = testPool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, agentID).Scan(&runtimeID)
+	err = testPool.QueryRow(ctx, `SELECT id FROM agent_runtime WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&runtimeID)
 	if err != nil {
-		t.Fatalf("failed to get agent runtime_id: %v", err)
+		t.Fatalf("failed to get runtime_id: %v", err)
 	}
 
 	var taskID string
@@ -828,5 +828,693 @@ func TestDaemonRegisterMissingWorkspaceReturns404(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "workspace not found") {
 		t.Fatalf("DaemonRegister: expected workspace not found error, got %s", w.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Daemon / Runtime Status Lifecycle Tests
+// ---------------------------------------------------------------------------
+
+// daemonRegisterResponse is the shape returned by DaemonRegister.
+type daemonRegisterResponse struct {
+	Daemon   DaemonResponse       `json:"daemon"`
+	Runtimes []AgentRuntimeResponse `json:"runtimes"`
+}
+
+// registerDaemon is a test helper that registers a daemon and returns the
+// parsed response. It fails the test on any error.
+func registerDaemon(t *testing.T, daemonID, deviceName string, runtimes []map[string]any) daemonRegisterResponse {
+	t.Helper()
+	body := map[string]any{
+		"workspace_id": testWorkspaceID,
+		"daemon_id":    daemonID,
+		"device_name":  deviceName,
+		"cli_version":  "0.1.0",
+		"runtimes":     runtimes,
+	}
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/register", body)
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp daemonRegisterResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	return resp
+}
+
+// cleanupDaemon removes daemon and its runtimes created during tests.
+func cleanupDaemon(t *testing.T, daemonUUID string) {
+	t.Helper()
+	ctx := context.Background()
+	testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE daemon_ref = $1`, daemonUUID)
+	testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonUUID)
+}
+
+// TestDaemonRegisterSetsOnlineStatus verifies that registering a daemon
+// sets both the daemon and its runtimes to "online".
+func TestDaemonRegisterSetsOnlineStatus(t *testing.T) {
+	resp := registerDaemon(t, "status-test-daemon", "test-machine", []map[string]any{
+		{"name": "Test Claude", "type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		{"name": "Test Codex", "type": "codex", "version": "2.0.0", "status": "online", "auth_status": "unauthenticated"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// Daemon should be online.
+	if resp.Daemon.Status != "online" {
+		t.Fatalf("expected daemon status 'online', got '%s'", resp.Daemon.Status)
+	}
+	if resp.Daemon.DaemonID != "status-test-daemon" {
+		t.Fatalf("expected daemon_id 'status-test-daemon', got '%s'", resp.Daemon.DaemonID)
+	}
+
+	// All runtimes should be online.
+	if len(resp.Runtimes) != 2 {
+		t.Fatalf("expected 2 runtimes, got %d", len(resp.Runtimes))
+	}
+	for _, rt := range resp.Runtimes {
+		if rt.Status != "online" {
+			t.Fatalf("expected runtime status 'online', got '%s' for provider %s", rt.Status, rt.Provider)
+		}
+	}
+}
+
+// TestDaemonRegisterAuthStatusValues verifies that auth_status is correctly
+// stored for each runtime during registration.
+func TestDaemonRegisterAuthStatusValues(t *testing.T) {
+	resp := registerDaemon(t, "auth-status-daemon", "auth-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		{"type": "codex", "version": "2.0.0", "status": "online", "auth_status": "unauthenticated"},
+		{"type": "opencode", "version": "3.0.0", "status": "online", "auth_status": "not_installed"},
+		{"type": "cursor", "version": "4.0.0", "status": "online", "auth_status": "bogus_value"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	authByProvider := map[string]string{}
+	for _, rt := range resp.Runtimes {
+		authByProvider[rt.Provider] = rt.AuthStatus
+	}
+
+	// Valid values are passed through.
+	if authByProvider["claude"] != "ready" {
+		t.Fatalf("claude auth_status: expected 'ready', got '%s'", authByProvider["claude"])
+	}
+	if authByProvider["codex"] != "unauthenticated" {
+		t.Fatalf("codex auth_status: expected 'unauthenticated', got '%s'", authByProvider["codex"])
+	}
+	if authByProvider["opencode"] != "not_installed" {
+		t.Fatalf("opencode auth_status: expected 'not_installed', got '%s'", authByProvider["opencode"])
+	}
+	// Invalid values default to "unknown".
+	if authByProvider["cursor"] != "unknown" {
+		t.Fatalf("cursor auth_status: expected 'unknown' for invalid input, got '%s'", authByProvider["cursor"])
+	}
+}
+
+// TestDaemonRegisterOfflineRuntime verifies that a runtime explicitly
+// reported as offline during registration keeps offline status.
+func TestDaemonRegisterOfflineRuntime(t *testing.T) {
+	resp := registerDaemon(t, "offline-rt-daemon", "machine-1", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "offline", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// Daemon itself is online (it registered successfully).
+	if resp.Daemon.Status != "online" {
+		t.Fatalf("expected daemon status 'online', got '%s'", resp.Daemon.Status)
+	}
+	// But the runtime it reported is offline.
+	if len(resp.Runtimes) != 1 {
+		t.Fatalf("expected 1 runtime, got %d", len(resp.Runtimes))
+	}
+	if resp.Runtimes[0].Status != "offline" {
+		t.Fatalf("expected runtime status 'offline', got '%s'", resp.Runtimes[0].Status)
+	}
+}
+
+// TestDaemonHeartbeatRestoresOnlineStatus verifies that after a heartbeat,
+// the daemon and all its runtimes are set back to "online".
+func TestDaemonHeartbeatRestoresOnlineStatus(t *testing.T) {
+	// Register a daemon first.
+	resp := registerDaemon(t, "hb-test-daemon", "hb-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+	daemonUUID := resp.Daemon.ID
+
+	// Manually set daemon + runtimes to offline to simulate a stale sweep.
+	ctx := context.Background()
+	testPool.Exec(ctx, `UPDATE daemon SET status = 'offline' WHERE id = $1`, daemonUUID)
+	testPool.Exec(ctx, `UPDATE agent_runtime SET status = 'offline' WHERE daemon_ref = $1`, daemonUUID)
+
+	// Verify they're offline.
+	var status string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, daemonUUID).Scan(&status)
+	if status != "offline" {
+		t.Fatalf("precondition: expected daemon offline, got '%s'", status)
+	}
+
+	// Send heartbeat.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/heartbeat", map[string]any{
+		"daemon_id": daemonUUID,
+	})
+	testHandler.DaemonHeartbeat(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify daemon is back online.
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, daemonUUID).Scan(&status)
+	if status != "online" {
+		t.Fatalf("expected daemon status 'online' after heartbeat, got '%s'", status)
+	}
+
+	// Verify runtime is back online.
+	testPool.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE daemon_ref = $1`, daemonUUID).Scan(&status)
+	if status != "online" {
+		t.Fatalf("expected runtime status 'online' after heartbeat, got '%s'", status)
+	}
+}
+
+// TestDaemonHeartbeatUpdatesAuthStatus verifies that auth_statuses sent
+// during heartbeat update the runtime's auth_status.
+func TestDaemonHeartbeatUpdatesAuthStatus(t *testing.T) {
+	resp := registerDaemon(t, "hb-auth-daemon", "auth-hb-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "unauthenticated"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// Verify initial auth_status.
+	ctx := context.Background()
+	var authStatus string
+	testPool.QueryRow(ctx, `SELECT auth_status FROM agent_runtime WHERE daemon_ref = $1 AND provider = 'claude'`, resp.Daemon.ID).Scan(&authStatus)
+	if authStatus != "unauthenticated" {
+		t.Fatalf("precondition: expected auth_status 'unauthenticated', got '%s'", authStatus)
+	}
+
+	// Heartbeat with updated auth status.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/heartbeat", map[string]any{
+		"daemon_id": resp.Daemon.ID,
+		"auth_statuses": map[string]string{
+			"claude": "ready",
+		},
+	})
+	testHandler.DaemonHeartbeat(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify auth_status updated.
+	testPool.QueryRow(ctx, `SELECT auth_status FROM agent_runtime WHERE daemon_ref = $1 AND provider = 'claude'`, resp.Daemon.ID).Scan(&authStatus)
+	if authStatus != "ready" {
+		t.Fatalf("expected auth_status 'ready' after heartbeat, got '%s'", authStatus)
+	}
+}
+
+// TestDaemonDeregisterSetsOffline verifies that deregistering a daemon
+// sets both the daemon and all its runtimes to "offline".
+func TestDaemonDeregisterSetsOffline(t *testing.T) {
+	resp := registerDaemon(t, "dereg-daemon", "dereg-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		{"type": "codex", "version": "2.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// Verify all are online.
+	ctx := context.Background()
+	var count int
+	testPool.QueryRow(ctx, `SELECT count(*) FROM agent_runtime WHERE daemon_ref = $1 AND status = 'online'`, resp.Daemon.ID).Scan(&count)
+	if count != 2 {
+		t.Fatalf("precondition: expected 2 online runtimes, got %d", count)
+	}
+
+	// Deregister.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/deregister", map[string]any{
+		"daemon_id": resp.Daemon.ID,
+	})
+	testHandler.DaemonDeregister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonDeregister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Daemon should be offline.
+	var status string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, resp.Daemon.ID).Scan(&status)
+	if status != "offline" {
+		t.Fatalf("expected daemon status 'offline' after deregister, got '%s'", status)
+	}
+
+	// All runtimes should be offline.
+	testPool.QueryRow(ctx, `SELECT count(*) FROM agent_runtime WHERE daemon_ref = $1 AND status = 'offline'`, resp.Daemon.ID).Scan(&count)
+	if count != 2 {
+		t.Fatalf("expected 2 offline runtimes after deregister, got %d", count)
+	}
+}
+
+// TestDaemonReRegisterAfterDeregister verifies that re-registering a
+// previously deregistered daemon restores online status.
+func TestDaemonReRegisterAfterDeregister(t *testing.T) {
+	resp := registerDaemon(t, "rereg-daemon", "rereg-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// Deregister.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/deregister", map[string]any{
+		"daemon_id": resp.Daemon.ID,
+	})
+	testHandler.DaemonDeregister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonDeregister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Re-register with the same daemon_id.
+	resp2 := registerDaemon(t, "rereg-daemon", "rereg-machine", []map[string]any{
+		{"type": "claude", "version": "1.1.0", "status": "online", "auth_status": "ready"},
+	})
+
+	// Should reuse the same daemon row (upsert by workspace+daemon_id).
+	if resp2.Daemon.ID != resp.Daemon.ID {
+		t.Fatalf("expected same daemon UUID after re-register, got different: %s vs %s", resp.Daemon.ID, resp2.Daemon.ID)
+	}
+	if resp2.Daemon.Status != "online" {
+		t.Fatalf("expected daemon status 'online' after re-register, got '%s'", resp2.Daemon.Status)
+	}
+	if len(resp2.Runtimes) != 1 || resp2.Runtimes[0].Status != "online" {
+		t.Fatalf("expected runtime online after re-register")
+	}
+}
+
+// TestListDaemonsReturnsCorrectStatus verifies that ListDaemons returns
+// the real status from the database, matching what the management page sees.
+func TestListDaemonsReturnsCorrectStatus(t *testing.T) {
+	resp := registerDaemon(t, "list-status-daemon", "list-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// List daemons — should show online.
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/daemons?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListDaemons(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListDaemons: expected 200, got %d", w.Code)
+	}
+	var daemons []DaemonResponse
+	json.NewDecoder(w.Body).Decode(&daemons)
+
+	found := false
+	for _, d := range daemons {
+		if d.ID == resp.Daemon.ID {
+			found = true
+			if d.Status != "online" {
+				t.Fatalf("ListDaemons: expected status 'online', got '%s'", d.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("ListDaemons: registered daemon not found in list")
+	}
+
+	// Set daemon to offline, re-list.
+	ctx := context.Background()
+	testPool.Exec(ctx, `UPDATE daemon SET status = 'offline' WHERE id = $1`, resp.Daemon.ID)
+
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/daemons?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListDaemons(w, req)
+	json.NewDecoder(w.Body).Decode(&daemons)
+
+	for _, d := range daemons {
+		if d.ID == resp.Daemon.ID {
+			if d.Status != "offline" {
+				t.Fatalf("ListDaemons: expected status 'offline' after manual update, got '%s'", d.Status)
+			}
+		}
+	}
+
+	// Set daemon to updating, re-list — this is the key consistency check.
+	testPool.Exec(ctx, `UPDATE daemon SET status = 'updating' WHERE id = $1`, resp.Daemon.ID)
+
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/daemons?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListDaemons(w, req)
+	json.NewDecoder(w.Body).Decode(&daemons)
+
+	for _, d := range daemons {
+		if d.ID == resp.Daemon.ID {
+			if d.Status != "updating" {
+				t.Fatalf("ListDaemons: expected status 'updating', got '%s'", d.Status)
+			}
+		}
+	}
+}
+
+// TestListRuntimesReturnsCorrectStatus verifies that ListAgentRuntimes
+// returns the real status for each runtime.
+func TestListRuntimesReturnsCorrectStatus(t *testing.T) {
+	resp := registerDaemon(t, "list-rt-daemon", "list-rt-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	rtID := resp.Runtimes[0].ID
+
+	// List runtimes — should show online.
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/runtimes?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListAgentRuntimes(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgentRuntimes: expected 200, got %d", w.Code)
+	}
+	var runtimes []AgentRuntimeResponse
+	json.NewDecoder(w.Body).Decode(&runtimes)
+
+	for _, rt := range runtimes {
+		if rt.ID == rtID {
+			if rt.Status != "online" {
+				t.Fatalf("ListRuntimes: expected 'online', got '%s'", rt.Status)
+			}
+		}
+	}
+
+	// Set to updating, verify ListRuntimes reflects it.
+	ctx := context.Background()
+	testPool.Exec(ctx, `UPDATE agent_runtime SET status = 'updating' WHERE id = $1`, rtID)
+
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/runtimes?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListAgentRuntimes(w, req)
+	json.NewDecoder(w.Body).Decode(&runtimes)
+
+	for _, rt := range runtimes {
+		if rt.ID == rtID {
+			if rt.Status != "updating" {
+				t.Fatalf("ListRuntimes: expected 'updating', got '%s'", rt.Status)
+			}
+		}
+	}
+}
+
+// TestStaleDaemonInUpdatingStatusGetSwept verifies that daemons stuck in
+// "updating" status are swept to "offline" by MarkStaleDaemonsOffline.
+// This was a bug: the sweeper only checked status='online'.
+func TestStaleDaemonInUpdatingStatusGetsSwept(t *testing.T) {
+	resp := registerDaemon(t, "stale-updating-daemon", "stale-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	ctx := context.Background()
+
+	// Simulate: daemon is updating and then crashes (no more heartbeats).
+	// Set status to 'updating' and backdate last_seen_at.
+	testPool.Exec(ctx, `UPDATE daemon SET status = 'updating', last_seen_at = now() - interval '2 minutes' WHERE id = $1`, resp.Daemon.ID)
+	testPool.Exec(ctx, `UPDATE agent_runtime SET status = 'updating', last_seen_at = now() - interval '2 minutes' WHERE daemon_ref = $1`, resp.Daemon.ID)
+
+	// Verify precondition.
+	var status string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, resp.Daemon.ID).Scan(&status)
+	if status != "updating" {
+		t.Fatalf("precondition: expected daemon status 'updating', got '%s'", status)
+	}
+
+	// Run the sweeper query with a threshold of 45 seconds.
+	queries := db.New(testPool)
+	staleDaemons, err := queries.MarkStaleDaemonsOffline(ctx, 45.0)
+	if err != nil {
+		t.Fatalf("MarkStaleDaemonsOffline failed: %v", err)
+	}
+
+	// Verify our daemon was swept.
+	found := false
+	for _, sd := range staleDaemons {
+		if sd.ID == parseUUID(resp.Daemon.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected stale 'updating' daemon to be swept to offline")
+	}
+
+	// Verify DB status is now offline.
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, resp.Daemon.ID).Scan(&status)
+	if status != "offline" {
+		t.Fatalf("expected daemon status 'offline' after sweep, got '%s'", status)
+	}
+
+	// Now sweep runtimes too.
+	staleRuntimes, err := queries.MarkStaleRuntimesOffline(ctx, 45.0)
+	if err != nil {
+		t.Fatalf("MarkStaleRuntimesOffline failed: %v", err)
+	}
+
+	runtimeSwept := false
+	for _, sr := range staleRuntimes {
+		rtID := fmt.Sprintf("%x-%x-%x-%x-%x", sr.ID.Bytes[0:4], sr.ID.Bytes[4:6], sr.ID.Bytes[6:8], sr.ID.Bytes[8:10], sr.ID.Bytes[10:16])
+		if rtID == resp.Runtimes[0].ID {
+			runtimeSwept = true
+		}
+	}
+	if !runtimeSwept {
+		t.Fatal("expected stale 'updating' runtime to be swept to offline")
+	}
+
+	testPool.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE daemon_ref = $1`, resp.Daemon.ID).Scan(&status)
+	if status != "offline" {
+		t.Fatalf("expected runtime status 'offline' after sweep, got '%s'", status)
+	}
+}
+
+// TestStaleOnlineDaemonGetsSwept verifies the original sweep behavior
+// for daemons in "online" status with stale heartbeats.
+func TestStaleOnlineDaemonGetsSwept(t *testing.T) {
+	resp := registerDaemon(t, "stale-online-daemon", "stale-online-machine", []map[string]any{
+		{"type": "codex", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	ctx := context.Background()
+
+	// Backdate last_seen_at to simulate missed heartbeats.
+	testPool.Exec(ctx, `UPDATE daemon SET last_seen_at = now() - interval '2 minutes' WHERE id = $1`, resp.Daemon.ID)
+	testPool.Exec(ctx, `UPDATE agent_runtime SET last_seen_at = now() - interval '2 minutes' WHERE daemon_ref = $1`, resp.Daemon.ID)
+
+	queries := db.New(testPool)
+	staleDaemons, err := queries.MarkStaleDaemonsOffline(ctx, 45.0)
+	if err != nil {
+		t.Fatalf("MarkStaleDaemonsOffline failed: %v", err)
+	}
+
+	found := false
+	for _, sd := range staleDaemons {
+		if sd.ID == parseUUID(resp.Daemon.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected stale 'online' daemon to be swept to offline")
+	}
+
+	var status string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, resp.Daemon.ID).Scan(&status)
+	if status != "offline" {
+		t.Fatalf("expected daemon status 'offline', got '%s'", status)
+	}
+}
+
+// TestRecentDaemonNotSwept verifies that daemons with recent heartbeats
+// are NOT swept, regardless of status.
+func TestRecentDaemonNotSwept(t *testing.T) {
+	resp := registerDaemon(t, "recent-daemon", "recent-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// last_seen_at is now() from registration — well within threshold.
+	queries := db.New(testPool)
+	staleDaemons, err := queries.MarkStaleDaemonsOffline(context.Background(), 45.0)
+	if err != nil {
+		t.Fatalf("MarkStaleDaemonsOffline failed: %v", err)
+	}
+
+	for _, sd := range staleDaemons {
+		if sd.ID == parseUUID(resp.Daemon.ID) {
+			t.Fatal("recently registered daemon should NOT be swept")
+		}
+	}
+}
+
+// TestOfflineDaemonNotSwept verifies that already-offline daemons
+// are not touched by the sweeper (no duplicate events).
+func TestOfflineDaemonNotSwept(t *testing.T) {
+	resp := registerDaemon(t, "already-offline-daemon", "offline-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	ctx := context.Background()
+
+	// Mark offline and backdate.
+	testPool.Exec(ctx, `UPDATE daemon SET status = 'offline', last_seen_at = now() - interval '10 minutes' WHERE id = $1`, resp.Daemon.ID)
+
+	queries := db.New(testPool)
+	staleDaemons, err := queries.MarkStaleDaemonsOffline(ctx, 45.0)
+	if err != nil {
+		t.Fatalf("MarkStaleDaemonsOffline failed: %v", err)
+	}
+
+	for _, sd := range staleDaemons {
+		if sd.ID == parseUUID(resp.Daemon.ID) {
+			t.Fatal("already-offline daemon should NOT appear in sweep results")
+		}
+	}
+}
+
+// TestDaemonStatusConsistencyWithRuntimes verifies that SetDaemonAndRuntimesOffline
+// atomically sets both daemon and all runtimes to offline.
+func TestDaemonStatusConsistencyWithRuntimes(t *testing.T) {
+	resp := registerDaemon(t, "consistency-daemon", "consistency-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		{"type": "codex", "version": "2.0.0", "status": "online", "auth_status": "ready"},
+		{"type": "opencode", "version": "3.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	ctx := context.Background()
+	queries := db.New(testPool)
+
+	// Use SetDaemonAndRuntimesOffline (what deregister calls).
+	err := queries.SetDaemonAndRuntimesOffline(ctx, parseUUID(resp.Daemon.ID))
+	if err != nil {
+		t.Fatalf("SetDaemonAndRuntimesOffline failed: %v", err)
+	}
+
+	// Verify daemon is offline.
+	var daemonStatus string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, resp.Daemon.ID).Scan(&daemonStatus)
+	if daemonStatus != "offline" {
+		t.Fatalf("expected daemon 'offline', got '%s'", daemonStatus)
+	}
+
+	// Verify ALL runtimes are offline.
+	var onlineCount int
+	testPool.QueryRow(ctx, `SELECT count(*) FROM agent_runtime WHERE daemon_ref = $1 AND status != 'offline'`, resp.Daemon.ID).Scan(&onlineCount)
+	if onlineCount != 0 {
+		t.Fatalf("expected 0 non-offline runtimes, got %d", onlineCount)
+	}
+}
+
+// TestDaemonUpdatingStatusConsistencyWithRuntimes verifies that
+// SetDaemonAndRuntimesUpdating atomically sets both to "updating".
+func TestDaemonUpdatingStatusConsistencyWithRuntimes(t *testing.T) {
+	resp := registerDaemon(t, "updating-daemon", "updating-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		{"type": "codex", "version": "2.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	ctx := context.Background()
+	queries := db.New(testPool)
+
+	// Set updating.
+	err := queries.SetDaemonAndRuntimesUpdating(ctx, parseUUID(resp.Daemon.ID))
+	if err != nil {
+		t.Fatalf("SetDaemonAndRuntimesUpdating failed: %v", err)
+	}
+
+	// Verify daemon is updating.
+	var daemonStatus string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, resp.Daemon.ID).Scan(&daemonStatus)
+	if daemonStatus != "updating" {
+		t.Fatalf("expected daemon 'updating', got '%s'", daemonStatus)
+	}
+
+	// Verify ALL runtimes are updating.
+	var updatingCount int
+	testPool.QueryRow(ctx, `SELECT count(*) FROM agent_runtime WHERE daemon_ref = $1 AND status = 'updating'`, resp.Daemon.ID).Scan(&updatingCount)
+	if updatingCount != 2 {
+		t.Fatalf("expected 2 runtimes in 'updating', got %d", updatingCount)
+	}
+}
+
+// TestHeartbeatAfterUpdatingRestoresOnline verifies that a heartbeat
+// after the daemon was in "updating" status restores everything to "online".
+func TestHeartbeatAfterUpdatingRestoresOnline(t *testing.T) {
+	resp := registerDaemon(t, "hb-updating-daemon", "hb-updating-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	ctx := context.Background()
+	queries := db.New(testPool)
+
+	// Set to updating.
+	queries.SetDaemonAndRuntimesUpdating(ctx, parseUUID(resp.Daemon.ID))
+
+	// Heartbeat.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/heartbeat", map[string]any{
+		"daemon_id": resp.Daemon.ID,
+	})
+	testHandler.DaemonHeartbeat(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify daemon back to online.
+	var status string
+	testPool.QueryRow(ctx, `SELECT status FROM daemon WHERE id = $1`, resp.Daemon.ID).Scan(&status)
+	if status != "online" {
+		t.Fatalf("expected daemon 'online' after heartbeat, got '%s'", status)
+	}
+
+	// Verify runtime back to online.
+	testPool.QueryRow(ctx, `SELECT status FROM agent_runtime WHERE daemon_ref = $1`, resp.Daemon.ID).Scan(&status)
+	if status != "online" {
+		t.Fatalf("expected runtime 'online' after heartbeat, got '%s'", status)
+	}
+}
+
+// TestEffectiveAuthStatusWithWorkspaceAPIKey verifies that a runtime
+// reported as "unauthenticated" shows "ready" when the workspace has
+// an API key configured for that provider.
+func TestEffectiveAuthStatusWithWorkspaceAPIKey(t *testing.T) {
+	ctx := context.Background()
+
+	// Set workspace provider settings with a Claude API key.
+	settings := `{"providers":{"claude":{"enabled":true,"api_key":"sk-test-key"}}}`
+	testPool.Exec(ctx, `UPDATE workspace SET settings = $1::jsonb WHERE id = $2`, settings, testWorkspaceID)
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `UPDATE workspace SET settings = '{}'::jsonb WHERE id = $1`, testWorkspaceID)
+	})
+
+	resp := registerDaemon(t, "effective-auth-daemon", "auth-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "unauthenticated"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// The registration response should already compute effective auth.
+	if resp.Runtimes[0].AuthStatus != "ready" {
+		t.Fatalf("expected effective auth_status 'ready' (workspace has API key), got '%s'", resp.Runtimes[0].AuthStatus)
+	}
+
+	// ListAgentRuntimes should also return effective auth.
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/runtimes?workspace_id="+testWorkspaceID, nil)
+	testHandler.ListAgentRuntimes(w, req)
+	var runtimes []AgentRuntimeResponse
+	json.NewDecoder(w.Body).Decode(&runtimes)
+
+	for _, rt := range runtimes {
+		if rt.ID == resp.Runtimes[0].ID {
+			if rt.AuthStatus != "ready" {
+				t.Fatalf("ListRuntimes: expected effective auth_status 'ready', got '%s'", rt.AuthStatus)
+			}
+		}
 	}
 }

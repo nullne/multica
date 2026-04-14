@@ -84,6 +84,12 @@ func parseUUID(s string) pgtype.UUID       { return util.ParseUUID(s) }
 func uuidToString(u pgtype.UUID) string    { return util.UUIDToString(u) }
 func textToPtr(t pgtype.Text) *string      { return util.TextToPtr(t) }
 func ptrToText(s *string) pgtype.Text      { return util.PtrToText(s) }
+func parseOptionalUUID(s *string) pgtype.UUID {
+	if s == nil || *s == "" {
+		return pgtype.UUID{}
+	}
+	return parseUUID(*s)
+}
 func strToText(s string) pgtype.Text       { return util.StrToText(s) }
 func timestampToString(t pgtype.Timestamptz) string { return util.TimestampToString(t) }
 func timestampToPtr(t pgtype.Timestamptz) *string   { return util.TimestampToPtr(t) }
