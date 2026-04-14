@@ -10,6 +10,7 @@ export type IssueStatus =
 export type IssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 
 export type IssueAssigneeType = "member" | "agent";
+export type IssueCreatorType = "member" | "agent" | "webhook";
 
 export interface IssueReaction {
   id: string;
@@ -48,7 +49,7 @@ export interface Issue {
   assignee_id: string | null;
   verifier_agent_id: string | null;
   max_verification_rounds: number | null;
-  creator_type: IssueAssigneeType;
+  creator_type: IssueCreatorType;
   creator_id: string;
   parent_issue_id: string | null;
   acceptance_criteria: AcceptanceCriterion[];

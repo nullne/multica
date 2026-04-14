@@ -92,12 +92,12 @@ export const en: LandingDict = {
       label: "RUNTIMES",
       title: "One dashboard for all your compute",
       description:
-        "Local daemons and cloud runtimes, managed from a single panel. Real-time monitoring of online/offline status, usage charts, and activity heatmaps. Auto-detects local CLIs \u2014 plug in and go.",
+        "Local environments and cloud runtimes, managed from a single panel. Real-time monitoring of online/offline status, usage charts, and activity heatmaps. Auto-detects local CLIs \u2014 plug in and go.",
       cards: [
         {
           title: "Unified runtime panel",
           description:
-            "Local daemons and cloud runtimes in one view. No context switching between different management interfaces.",
+            "Local environments and cloud runtimes in one view. No context switching between different management interfaces.",
         },
         {
           title: "Real-time monitoring",
@@ -126,7 +126,7 @@ export const en: LandingDict = {
       {
         title: "Install the CLI & connect your machine",
         description:
-          "Run multica login to authenticate, then multica daemon start. The daemon auto-detects Claude Code and Codex on your machine \u2014 plug in and go.",
+          "Run multica login to authenticate, then multica daemon start. The environment auto-detects Claude Code and Codex on your machine \u2014 plug in and go.",
       },
       {
         title: "Create your first agent",
@@ -181,7 +181,7 @@ export const en: LandingDict = {
       {
         question: "What coding agents does Multica support?",
         answer:
-          "Multica currently supports Claude Code and OpenAI Codex out of the box. The daemon auto-detects whichever CLIs you have installed. More backends are on the roadmap \u2014 and since it\u2019s open source, you can add your own.",
+          "Multica currently supports Claude Code and OpenAI Codex out of the box. The environment auto-detects whichever CLIs you have installed. More backends are on the roadmap \u2014 and since it\u2019s open source, you can add your own.",
       },
       {
         question: "Do I need to self-host, or is there a cloud version?",
@@ -202,7 +202,7 @@ export const en: LandingDict = {
       {
         question: "Is my code safe? Where does agent execution happen?",
         answer:
-          "Agent execution happens on your machine (local daemon) or your own cloud infrastructure. Code never passes through Multica servers. The platform only coordinates task state and broadcasts events.",
+          "Agent execution happens on your machine (local environment) or your own cloud infrastructure. Code never passes through Multica servers. The platform only coordinates task state and broadcasts events.",
       },
       {
         question: "How many agents can I run?",
@@ -299,7 +299,7 @@ export const en: LandingDict = {
           "File upload with S3 + CloudFront signed URLs and attachment tracking",
           "Agent-driven repo checkout with bare clone cache for task isolation",
           "Batch operations for issue list view",
-          "Daemon authentication and security hardening",
+          "Environment authentication and security hardening",
         ],
       },
       {
@@ -308,7 +308,7 @@ export const en: LandingDict = {
         title: "Collaboration",
         changes: [
           "Email verification login and browser-based CLI auth",
-          "Multi-workspace daemon with hot-reload",
+          "Multi-workspace environment with hot-reload",
           "Runtime dashboard with usage charts and activity heatmaps",
           "Subscriber-driven notification model replacing hardcoded triggers",
           "Unified activity timeline with threaded comment replies",
@@ -326,7 +326,7 @@ export const en: LandingDict = {
           "Agent management UI with skills, tools, and triggers",
           "Unified agent SDK supporting Claude Code and Codex backends",
           "Comment CRUD with real-time WebSocket updates",
-          "Task service layer and daemon REST protocol",
+          "Task service layer and environment REST protocol",
           "Event bus with workspace-scoped WebSocket isolation",
           "Inbox notifications with unread badge and archive",
           "CLI with cobra subcommands for workspace and issue management",

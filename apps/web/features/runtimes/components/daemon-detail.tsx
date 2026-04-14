@@ -189,7 +189,7 @@ export function DaemonDetail({
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         <div className="grid grid-cols-2 gap-4">
-          <InfoField label="Daemon ID" value={daemon.daemon_id} mono />
+          <InfoField label="Environment ID" value={daemon.daemon_id} mono />
           <InfoField label="Status" value={daemon.status} />
           <InfoField label="CLI Version" value={daemon.cli_version || "unknown"} />
           <InfoField

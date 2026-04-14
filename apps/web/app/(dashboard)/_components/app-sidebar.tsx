@@ -53,7 +53,7 @@ const primaryNav = [
 
 const workspaceNav = [
   { href: "/agents", label: "Agents", icon: Bot },
-  { href: "/runtimes", label: "Daemons", icon: Monitor },
+  { href: "/runtimes", label: "Environments", icon: Monitor },
   { href: "/skills", label: "Skills", icon: BookOpenText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

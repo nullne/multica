@@ -321,6 +321,42 @@ type VerificationCode struct {
 	Attempts  int32              `json:"attempts"`
 }
 
+type Webhook struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Name               string             `json:"name"`
+	SourceType         string             `json:"source_type"`
+	TokenHash          string             `json:"token_hash"`
+	TokenPrefix        string             `json:"token_prefix"`
+	Status             string             `json:"status"`
+	DedupWindowSeconds int32              `json:"dedup_window_seconds"`
+	CreatedBy          pgtype.UUID        `json:"created_by"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WebhookAction struct {
+	ID         pgtype.UUID        `json:"id"`
+	WebhookID  pgtype.UUID        `json:"webhook_id"`
+	ActionType string             `json:"action_type"`
+	Config     []byte             `json:"config"`
+	Enabled    bool               `json:"enabled"`
+	Position   int32              `json:"position"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WebhookEventLog struct {
+	ID           pgtype.UUID        `json:"id"`
+	WebhookID    pgtype.UUID        `json:"webhook_id"`
+	DedupKey     string             `json:"dedup_key"`
+	Payload      []byte             `json:"payload"`
+	Status       string             `json:"status"`
+	IssueID      pgtype.UUID        `json:"issue_id"`
+	ErrorMessage pgtype.Text        `json:"error_message"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Workspace struct {
 	ID                   pgtype.UUID        `json:"id"`
 	Name                 string             `json:"name"`

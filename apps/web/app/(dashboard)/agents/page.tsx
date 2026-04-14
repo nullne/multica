@@ -213,7 +213,7 @@ function CreateAgentDialog({
               })}
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              Select one or more providers. Tasks will be dispatched to any online daemon.
+              Select one or more providers. Tasks will be dispatched to any online environment.
             </p>
           </div>
 
@@ -1336,7 +1336,7 @@ function SettingsTab({
           })}
         </div>
         <p className="mt-1.5 text-xs text-muted-foreground">
-          Select one or more. Tasks will be dispatched to any online daemon with a matching provider.
+          Select one or more. Tasks will be dispatched to any online environment with a matching provider.
         </p>
       </div>
 
