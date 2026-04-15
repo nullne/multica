@@ -95,6 +95,28 @@ func timestampToString(t pgtype.Timestamptz) string { return util.TimestampToStr
 func timestampToPtr(t pgtype.Timestamptz) *string   { return util.TimestampToPtr(t) }
 func uuidToPtr(u pgtype.UUID) *string      { return util.UUIDToPtr(u) }
 
+func bytesToStringMap(b []byte) map[string]string {
+	if len(b) == 0 {
+		return nil
+	}
+	var m map[string]string
+	if json.Unmarshal(b, &m) != nil || len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+func stringMapToBytes(m map[string]string) []byte {
+	if len(m) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 // publish sends a domain event through the event bus.
 func (h *Handler) publish(eventType, workspaceID, actorType, actorID string, payload any) {
 	h.Bus.Publish(events.Event{

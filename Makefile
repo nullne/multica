@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 .PHONY: help setup dev dev-local up down clean test \
-        test-go test-ts test-e2e check \
+        test-go test-ts test-e2e test-agent-compat check \
         build build-backend build-frontend \
         daemon cli \
         db-up db-down migrate-up migrate-down sqlc \
@@ -131,6 +131,9 @@ test-ts: ## Run TypeScript tests only (in Docker)
 
 test-e2e: ## Run E2E tests only (in Docker)
 	@bash scripts/docker-test.sh e2e
+
+test-agent-compat: ## Run agent CLI conformance tests (requires API keys via env)
+	@bash scripts/docker-test.sh agent-compat
 
 check: ## Run typecheck only (in Docker)
 	@bash scripts/docker-test.sh typecheck

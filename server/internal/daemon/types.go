@@ -34,9 +34,10 @@ type Task struct {
 	PriorSessionID   string         `json:"prior_session_id,omitempty"`   // Claude session ID from a previous task on this issue
 	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`     // work_dir from a previous task on this issue
 	TriggerCommentID string         `json:"trigger_comment_id,omitempty"` // comment that triggered this task
-	GitHubToken      string         `json:"github_token,omitempty"`
-	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
-	ProviderAPIKey   string         `json:"provider_api_key,omitempty"` // workspace-level API key
+	GitHubToken      string            `json:"github_token,omitempty"`
+	GitHubCodeAccess string            `json:"github_code_access,omitempty"`
+	ProviderAPIKey   string            `json:"provider_api_key,omitempty"` // workspace-level API key
+	Env              map[string]string `json:"env,omitempty"`              // user-supplied env from issue dispatch_env
 }
 
 // AgentData holds agent details returned by the claim endpoint.

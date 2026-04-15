@@ -361,6 +361,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// Also generate a scoped GitHub token if a GitHub App is configured.
 	if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
 		resp.WorkspaceID = uuidToString(issue.WorkspaceID)
+		resp.Env = bytesToStringMap(issue.DispatchEnv)
 		if ws, err := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID); err == nil {
 			if ws.Repos != nil {
 				var repos []RepoData
