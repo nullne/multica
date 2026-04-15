@@ -37,6 +37,7 @@ type Agent struct {
 	ArchivedBy       pgtype.UUID        `json:"archived_by"`
 	GithubCodeAccess string             `json:"github_code_access"`
 	Providers        []string           `json:"providers"`
+	DefaultDaemonID  pgtype.UUID        `json:"default_daemon_id"`
 }
 
 type AgentRuntime struct {
@@ -131,6 +132,7 @@ type Daemon struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	Labels      []string           `json:"labels"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
 }
 
 type DaemonConnection struct {

@@ -260,11 +260,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
-		return
-	}
-
 	workspaceID := resolveWorkspaceID(r)
 
 	// Get creator from context (set by auth middleware)
@@ -352,6 +347,13 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
+	// If no title provided, use the issue identifier (e.g. "DEV-51").
+	title := req.Title
+	if title == "" {
+		prefix := h.getIssuePrefix(r.Context(), parseUUID(workspaceID))
+		title = prefix + "-" + strconv.Itoa(int(issueNumber))
+	}
+
 	var maxVerificationRounds pgtype.Int4
 	if req.MaxVerificationRounds != nil {
 		maxVerificationRounds = pgtype.Int4{Int32: *req.MaxVerificationRounds, Valid: true}
@@ -359,7 +361,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
 		WorkspaceID:           parseUUID(workspaceID),
-		Title:                 req.Title,
+		Title:                 title,
 		Description:           ptrToText(req.Description),
 		Status:                status,
 		Priority:              priority,

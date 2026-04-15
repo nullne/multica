@@ -23,6 +23,7 @@ export interface Daemon {
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
 }
 
 export type ProviderAuthStatus = "unknown" | "not_installed" | "unauthenticated" | "ready";
@@ -94,6 +95,7 @@ export interface Agent {
   tools: AgentTool[];
   triggers: AgentTrigger[];
   github_code_access: GitHubCodeAccess;
+  default_daemon_id: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -110,6 +112,7 @@ export interface CreateAgentRequest {
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
   github_code_access?: GitHubCodeAccess;
+  default_daemon_id?: string | null;
 }
 
 export interface UpdateAgentRequest {
@@ -123,6 +126,7 @@ export interface UpdateAgentRequest {
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
   github_code_access?: GitHubCodeAccess;
+  default_daemon_id?: string | null;
 }
 
 // Skills

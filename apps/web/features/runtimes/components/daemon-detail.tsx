@@ -1,6 +1,13 @@
-import { useState } from "react";
-import { Monitor } from "lucide-react";
+import { useState, useCallback } from "react";
+import { Monitor, Archive, ArchiveRestore, MoreHorizontal } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Daemon, AgentRuntime } from "@/shared/types";
@@ -94,9 +101,27 @@ export function DaemonDetail({
   runtimes: AgentRuntime[];
 }) {
   const enabledProviders = useRuntimeStore((s) => s.enabledProviders);
+  const patchDaemon = useRuntimeStore((s) => s.patchDaemon);
   const daemonRuntimes = runtimes.filter((r) => r.daemon_ref === daemon.id);
   const providerEntries = buildProviderEntries(daemonRuntimes, enabledProviders);
   const firstRuntimeId = daemonRuntimes[0]?.id;
+  const isArchived = !!daemon.archived_at;
+
+  const handleArchiveToggle = useCallback(async () => {
+    try {
+      if (isArchived) {
+        const updated = await api.restoreDaemon(daemon.id);
+        patchDaemon(daemon.id, { archived_at: updated.archived_at });
+        toast.success("Daemon restored");
+      } else {
+        const updated = await api.archiveDaemon(daemon.id);
+        patchDaemon(daemon.id, { archived_at: updated.archived_at });
+        toast.success("Daemon archived");
+      }
+    } catch {
+      toast.error(isArchived ? "Failed to restore daemon" : "Failed to archive daemon");
+    }
+  }, [daemon.id, isArchived, patchDaemon]);
 
   return (
     <div className="flex h-full flex-col">
@@ -113,12 +138,32 @@ export function DaemonDetail({
             <EditableDeviceName daemon={daemon} />
           </div>
         </div>
-        <StatusBadge status={daemon.status} />
+        <div className="flex items-center gap-2">
+          <StatusBadge status={daemon.status} />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="ghost" size="icon-xs">
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-36">
+              <DropdownMenuItem onClick={handleArchiveToggle}>
+                {isArchived ? (
+                  <><ArchiveRestore className="h-3.5 w-3.5" /> Restore</>
+                ) : (
+                  <><Archive className="h-3.5 w-3.5" /> Archive</>
+                )}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         <div className="grid grid-cols-2 gap-4">
-          <InfoField label="Environment ID" value={daemon.daemon_id} mono />
+          <InfoField label="Daemon ID" value={daemon.daemon_id} mono />
           <InfoField label="Status" value={daemon.status} />
           <InfoField label="CLI Version" value={daemon.cli_version || "unknown"} />
           <InfoField

@@ -24,6 +24,7 @@ type DaemonResponse struct {
 	LastSeenAt  *string  `json:"last_seen_at"`
 	CreatedAt   string   `json:"created_at"`
 	UpdatedAt   string   `json:"updated_at"`
+	ArchivedAt  *string  `json:"archived_at"`
 }
 
 func daemonToResponse(d db.Daemon) DaemonResponse {
@@ -51,6 +52,7 @@ func daemonToResponse(d db.Daemon) DaemonResponse {
 		LastSeenAt:  timestampToPtr(d.LastSeenAt),
 		CreatedAt:   timestampToString(d.CreatedAt),
 		UpdatedAt:   timestampToString(d.UpdatedAt),
+		ArchivedAt:  timestampToPtr(d.ArchivedAt),
 	}
 }
 
@@ -306,6 +308,50 @@ func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
+	daemonID := chi.URLParam(r, "daemonId")
+
+	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return
+	}
+
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+		return
+	}
+
+	updated, err := h.Queries.ArchiveDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to archive daemon")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, daemonToResponse(updated))
+}
+
+func (h *Handler) RestoreDaemon(w http.ResponseWriter, r *http.Request) {
+	daemonID := chi.URLParam(r, "daemonId")
+
+	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return
+	}
+
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+		return
+	}
+
+	updated, err := h.Queries.RestoreDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to restore daemon")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, daemonToResponse(updated))
 }
 
 func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {

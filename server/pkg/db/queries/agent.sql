@@ -19,8 +19,8 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, providers, visibility, owner_id,
-    tools, triggers, instructions, github_code_access
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    tools, triggers, instructions, github_code_access, default_daemon_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(default_daemon_id))
 RETURNING *;
 
 -- name: UpdateAgent :one
@@ -35,6 +35,7 @@ UPDATE agent SET
     triggers = COALESCE(sqlc.narg('triggers'), triggers),
     instructions = COALESCE(sqlc.narg('instructions'), instructions),
     github_code_access = COALESCE(sqlc.narg('github_code_access'), github_code_access),
+    default_daemon_id = sqlc.narg('default_daemon_id'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;

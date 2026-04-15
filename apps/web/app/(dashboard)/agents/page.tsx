@@ -28,6 +28,8 @@ import {
   Lock,
   Settings,
   Camera,
+  Monitor,
+  X,
 } from "lucide-react";
 import type {
   Agent,
@@ -74,6 +76,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useIssueStore } from "@/features/issues";
+import { useRuntimeStore } from "@/features/runtimes";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 
@@ -1148,9 +1151,14 @@ function SettingsTab({
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
   const [codeAccess, setCodeAccess] = useState(agent.github_code_access ?? "read");
   const [providers, setProviders] = useState<string[]>(agent.providers ?? []);
+  const [defaultDaemonId, setDefaultDaemonId] = useState<string | null>(agent.default_daemon_id ?? null);
   const [saving, setSaving] = useState(false);
   const { upload, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
+  useEffect(() => { fetchAllRuntimes(); }, [fetchAllRuntimes]);
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1171,7 +1179,8 @@ function SettingsTab({
     description !== (agent.description ?? "") ||
     visibility !== agent.visibility ||
     codeAccess !== (agent.github_code_access ?? "read") ||
-    JSON.stringify(providers) !== JSON.stringify(agent.providers ?? []);
+    JSON.stringify(providers) !== JSON.stringify(agent.providers ?? []) ||
+    defaultDaemonId !== (agent.default_daemon_id ?? null);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -1180,7 +1189,7 @@ function SettingsTab({
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"] });
+      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_daemon_id: defaultDaemonId });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1338,6 +1347,62 @@ function SettingsTab({
         <p className="mt-1.5 text-xs text-muted-foreground">
           Select one or more. Tasks will be dispatched to any online environment with a matching provider.
         </p>
+      </div>
+
+      <div>
+        <Label className="text-xs text-muted-foreground">Default Environment</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+          Bind this agent to a specific daemon. When assigned to issues, this environment will be used automatically.
+        </p>
+        <div className="mt-1.5">
+          {defaultDaemonId ? (
+            <div className="flex items-center gap-2 rounded-lg border border-primary bg-primary/5 px-3 py-2 text-sm">
+              <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="font-medium">
+                {daemons.find((d) => d.id === defaultDaemonId)?.device_name ?? "Unknown daemon"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDefaultDaemonId(null)}
+                className="ml-auto rounded-sm p-0.5 hover:bg-accent transition-colors"
+              >
+                <X className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </div>
+          ) : (
+            <Popover>
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-muted transition-colors"
+                  >
+                    <Monitor className="h-4 w-4" />
+                    <span>Select environment...</span>
+                  </button>
+                }
+              />
+              <PopoverContent align="start" className="w-52 p-1">
+                {daemons.length === 0 && (
+                  <div className="px-2 py-3 text-center text-sm text-muted-foreground">No daemons registered</div>
+                )}
+                {daemons.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => setDefaultDaemonId(d.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                    />
+                    <span>{d.device_name || d.daemon_id}</span>
+                  </button>
+                ))}
+              </PopoverContent>
+            </Popover>
+          )}
+        </div>
       </div>
 
       <Button onClick={handleSave} disabled={!dirty || saving} size="sm">
@@ -1529,10 +1594,14 @@ export default function AgentsPage() {
   const isMobile = useIsMobile();
   const isLoading = useAuthStore((s) => s.isLoading);
   const workspace = useWorkspaceStore((s) => s.workspace);
-  const agents = useWorkspaceStore((s) => s.agents);
+  const allAgents = useWorkspaceStore((s) => s.agents);
   const refreshAgents = useWorkspaceStore((s) => s.refreshAgents);
   const [selectedId, setSelectedId] = useState<string>("");
   const [showCreate, setShowCreate] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const activeAgents = allAgents.filter((a) => !a.archived_at);
+  const archivedAgents = allAgents.filter((a) => !!a.archived_at);
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_agents_layout",
   });
@@ -1581,7 +1650,7 @@ export default function AgentsPage() {
     }
   };
 
-  const selected = agents.find((a) => a.id === selectedId) ?? null;
+  const selected = allAgents.find((a) => a.id === selectedId) ?? null;
 
   if (isLoading) {
     return (
@@ -1635,7 +1704,7 @@ export default function AgentsPage() {
           <Plus className="h-4 w-4 text-muted-foreground" />
         </Button>
       </div>
-      {agents.length === 0 ? (
+      {activeAgents.length === 0 && archivedAgents.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-4 py-12">
           <Bot className="h-8 w-8 text-muted-foreground/40" />
           <p className="mt-3 text-sm text-muted-foreground">No agents yet</p>
@@ -1649,16 +1718,42 @@ export default function AgentsPage() {
           </Button>
         </div>
       ) : (
-        <div className="divide-y">
-          {agents.map((agent) => (
-            <AgentListItem
-              key={agent.id}
-              agent={agent}
-              isSelected={agent.id === selectedId}
-              onClick={() => setSelectedId(agent.id)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="divide-y">
+            {activeAgents.map((agent) => (
+              <AgentListItem
+                key={agent.id}
+                agent={agent}
+                isSelected={agent.id === selectedId}
+                onClick={() => setSelectedId(agent.id)}
+              />
+            ))}
+          </div>
+          {archivedAgents.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowArchived(!showArchived)}
+                className="flex w-full items-center gap-1.5 px-4 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors border-t"
+              >
+                <ChevronDown className={cn("h-3 w-3 transition-transform", !showArchived && "-rotate-90")} />
+                <span>Archived ({archivedAgents.length})</span>
+              </button>
+              {showArchived && (
+                <div className="divide-y">
+                  {archivedAgents.map((agent) => (
+                    <AgentListItem
+                      key={agent.id}
+                      agent={agent}
+                      isSelected={agent.id === selectedId}
+                      onClick={() => setSelectedId(agent.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );

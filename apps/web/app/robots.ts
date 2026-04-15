@@ -18,7 +18,7 @@ export default function robots(): MetadataRoute.Robots {
           "/agents",
           "/settings",
           "/my-issues",
-          "/runtimes",
+          "/daemons",
           "/skills",
         ],
       },

@@ -3,17 +3,14 @@ import { persist } from "zustand/middleware";
 import type { IssueAssigneeType } from "@/shared/types";
 
 interface AgentDispatchDefaults {
-  provider?: string;
   daemonId?: string;
+  provider?: string;
 }
 
-interface IssueDefaults {
+interface IssueDefaultsStore {
   assigneeType?: IssueAssigneeType;
   assigneeId?: string;
   agentDispatches: Record<string, AgentDispatchDefaults>;
-}
-
-interface IssueDefaultsStore extends IssueDefaults {
   setAssigneeDefaults: (type?: IssueAssigneeType, id?: string) => void;
   setAgentDispatch: (agentId: string, dispatch: AgentDispatchDefaults) => void;
   getAgentDispatch: (agentId: string) => AgentDispatchDefaults | undefined;

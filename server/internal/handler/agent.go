@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -29,6 +30,7 @@ type AgentResponse struct {
 	Tools            any             `json:"tools"`
 	Triggers         any             `json:"triggers"`
 	GitHubCodeAccess string          `json:"github_code_access"`
+	DefaultDaemonID  *string         `json:"default_daemon_id"`
 	CreatedAt        string          `json:"created_at"`
 	UpdatedAt        string          `json:"updated_at"`
 	ArchivedAt       *string         `json:"archived_at"`
@@ -72,6 +74,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Tools:            tools,
 		Triggers:         triggers,
 		GitHubCodeAccess: a.GithubCodeAccess,
+		DefaultDaemonID:  uuidToPtr(a.DefaultDaemonID),
 		CreatedAt:        timestampToString(a.CreatedAt),
 		UpdatedAt:        timestampToString(a.UpdatedAt),
 		ArchivedAt:       timestampToPtr(a.ArchivedAt),
@@ -227,6 +230,7 @@ type CreateAgentRequest struct {
 	Tools            any      `json:"tools"`
 	Triggers         any      `json:"triggers"`
 	GitHubCodeAccess string   `json:"github_code_access"`
+	DefaultDaemonID  *string  `json:"default_daemon_id"`
 }
 
 func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
@@ -290,6 +294,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Tools:            tools,
 		Triggers:         triggers,
 		GithubCodeAccess: req.GitHubCodeAccess,
+		DefaultDaemonID:  parseOptionalUUID(req.DefaultDaemonID),
 	})
 	if err != nil {
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -318,6 +323,7 @@ type UpdateAgentRequest struct {
 	Tools            any      `json:"tools"`
 	Triggers         any      `json:"triggers"`
 	GitHubCodeAccess *string  `json:"github_code_access"`
+	DefaultDaemonID  *string  `json:"default_daemon_id"`
 }
 
 // canManageAgent checks whether the current user can update or archive an agent.
@@ -348,14 +354,24 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
 	var req UpdateAgentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
+	var rawFields map[string]json.RawMessage
+	json.Unmarshal(bodyBytes, &rawFields)
+
 	params := db.UpdateAgentParams{
-		ID: parseUUID(id),
+		ID:              parseUUID(id),
+		DefaultDaemonID: agent.DefaultDaemonID,
 	}
 	if req.Name != nil {
 		params.Name = pgtype.Text{String: *req.Name, Valid: true}
@@ -393,8 +409,15 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		params.GithubCodeAccess = pgtype.Text{String: *req.GitHubCodeAccess, Valid: true}
 	}
+	if _, ok := rawFields["default_daemon_id"]; ok {
+		if req.DefaultDaemonID != nil && *req.DefaultDaemonID != "" {
+			params.DefaultDaemonID = parseUUID(*req.DefaultDaemonID)
+		} else {
+			params.DefaultDaemonID = pgtype.UUID{Valid: false}
+		}
+	}
 
-	agent, err := h.Queries.UpdateAgent(r.Context(), params)
+	agent, err = h.Queries.UpdateAgent(r.Context(), params)
 	if err != nil {
 		slog.Warn("update agent failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
 		writeError(w, http.StatusInternalServerError, "failed to update agent: "+err.Error())
