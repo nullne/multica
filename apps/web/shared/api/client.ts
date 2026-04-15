@@ -347,6 +347,14 @@ export class ApiClient {
     });
   }
 
+  async archiveDaemon(id: string): Promise<Daemon> {
+    return this.fetch(`/api/daemons/${id}/archive`, { method: "POST" });
+  }
+
+  async restoreDaemon(id: string): Promise<Daemon> {
+    return this.fetch(`/api/daemons/${id}/restore`, { method: "POST" });
+  }
+
   async listRuntimes(params?: { workspace_id?: string }): Promise<AgentRuntime[]> {
     const search = new URLSearchParams();
     const wsId = params?.workspace_id ?? this.workspaceId;

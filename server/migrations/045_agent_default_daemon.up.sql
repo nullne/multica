@@ -1,0 +1,1 @@
+ALTER TABLE agent ADD COLUMN default_daemon_id UUID REFERENCES daemon(id) ON DELETE SET NULL;

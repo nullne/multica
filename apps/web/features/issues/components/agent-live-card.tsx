@@ -273,7 +273,7 @@ export function AgentLiveCard({ issueId, agentName }: AgentLiveCardProps) {
             {(activeTask?.agent_id ? getActorName("agent", activeTask.agent_id) : agentName) ?? "Agent"} is working
           </span>
           {runtimeLabel && (
-            <Link href="/runtimes" className="text-muted-foreground font-normal shrink-0 hover:text-foreground hover:underline transition-colors">
+            <Link href="/daemons" className="text-muted-foreground font-normal shrink-0 hover:text-foreground hover:underline transition-colors">
               on {runtimeLabel}
             </Link>
           )}
@@ -435,7 +435,7 @@ function TaskRunEntry({ task }: { task: AgentTask }) {
         </span>
         {duration && <span className="text-muted-foreground">{duration}</span>}
         {runLabel && (
-          <Link href="/runtimes" className="text-muted-foreground hover:text-foreground hover:underline transition-colors" onClick={(e) => e.stopPropagation()}>
+          <Link href="/daemons" className="text-muted-foreground hover:text-foreground hover:underline transition-colors" onClick={(e) => e.stopPropagation()}>
             {runLabel}
           </Link>
         )}

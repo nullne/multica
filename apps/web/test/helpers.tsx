@@ -59,6 +59,7 @@ export const mockAgents: Agent[] = [
     tools: [],
     triggers: [],
     github_code_access: "write",
+    default_daemon_id: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     archived_at: null,

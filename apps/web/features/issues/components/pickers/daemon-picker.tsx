@@ -130,22 +130,14 @@ export function DaemonPicker({
       trigger={
         customTrigger ?? (
           <span className={daemonId ? "" : "text-muted-foreground"}>
-            {selectedName ?? "Auto"}
+            {selectedName ?? "Environment"}
           </span>
         )
       }
     >
-      {/* Auto option */}
-      <PickerItem
-        selected={!daemonId}
-        onClick={() => select(null)}
-      >
-        <span className="text-muted-foreground">Auto</span>
-      </PickerItem>
-
       {/* Compatible daemons */}
       {compatible.length > 0 && (
-        <PickerSection label={provider ? "Compatible" : "Environments"}>
+        <PickerSection label={provider ? "Compatible" : "Daemons"}>
           {compatible.map((d) => renderDaemonItem(d))}
         </PickerSection>
       )}

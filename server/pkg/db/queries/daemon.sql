@@ -21,7 +21,7 @@ SELECT * FROM daemon WHERE id = $1;
 -- name: ListDaemons :many
 SELECT * FROM daemon
 WHERE workspace_id = $1
-ORDER BY created_at ASC;
+ORDER BY archived_at NULLS FIRST, created_at ASC;
 
 -- name: ListOnlineDaemons :many
 SELECT * FROM daemon
@@ -80,3 +80,13 @@ SET status = 'offline', updated_at = now()
 WHERE status IN ('online', 'updating')
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
 RETURNING id, workspace_id;
+
+-- name: ArchiveDaemon :one
+UPDATE daemon SET archived_at = now(), updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: RestoreDaemon :one
+UPDATE daemon SET archived_at = NULL, updated_at = now()
+WHERE id = $1
+RETURNING *;

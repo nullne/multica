@@ -12,7 +12,7 @@ export function ModalRegistry() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "o" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
+      if (e.code === "KeyO" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         const store = useModalStore.getState();
         if (store.modal === "create-issue") {

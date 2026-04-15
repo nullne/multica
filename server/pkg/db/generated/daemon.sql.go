@@ -11,8 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const archiveDaemon = `-- name: ArchiveDaemon :one
+UPDATE daemon SET archived_at = now(), updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+`
+
+func (q *Queries) ArchiveDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error) {
+	row := q.db.QueryRow(ctx, archiveDaemon, id)
+	var i Daemon
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Status,
+		&i.CliVersion,
+		&i.DeviceName,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Labels,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
 const getDaemon = `-- name: GetDaemon :one
-SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels FROM daemon WHERE id = $1
+SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at FROM daemon WHERE id = $1
 `
 
 func (q *Queries) GetDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error) {
@@ -31,14 +58,15 @@ func (q *Queries) GetDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error)
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Labels,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
 const listDaemons = `-- name: ListDaemons :many
-SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels FROM daemon
+SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at FROM daemon
 WHERE workspace_id = $1
-ORDER BY created_at ASC
+ORDER BY archived_at NULLS FIRST, created_at ASC
 `
 
 func (q *Queries) ListDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]Daemon, error) {
@@ -63,6 +91,7 @@ func (q *Queries) ListDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]D
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Labels,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -75,7 +104,7 @@ func (q *Queries) ListDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]D
 }
 
 const listOnlineDaemons = `-- name: ListOnlineDaemons :many
-SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels FROM daemon
+SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at FROM daemon
 WHERE workspace_id = $1 AND status = 'online'
 ORDER BY created_at ASC
 `
@@ -102,6 +131,7 @@ func (q *Queries) ListOnlineDaemons(ctx context.Context, workspaceID pgtype.UUID
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Labels,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -144,6 +174,33 @@ func (q *Queries) MarkStaleDaemonsOffline(ctx context.Context, staleSeconds floa
 		return nil, err
 	}
 	return items, nil
+}
+
+const restoreDaemon = `-- name: RestoreDaemon :one
+UPDATE daemon SET archived_at = NULL, updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+`
+
+func (q *Queries) RestoreDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error) {
+	row := q.db.QueryRow(ctx, restoreDaemon, id)
+	var i Daemon
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.DaemonID,
+		&i.Status,
+		&i.CliVersion,
+		&i.DeviceName,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Labels,
+		&i.ArchivedAt,
+	)
+	return i, err
 }
 
 const setDaemonAndRuntimesOffline = `-- name: SetDaemonAndRuntimesOffline :exec
@@ -219,7 +276,7 @@ UPDATE daemon SET
     labels = COALESCE($3, labels),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels
+RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
 `
 
 type UpdateDaemonFieldsParams struct {
@@ -244,6 +301,7 @@ func (q *Queries) UpdateDaemonFields(ctx context.Context, arg UpdateDaemonFields
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Labels,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -252,7 +310,7 @@ const updateDaemonHeartbeat = `-- name: UpdateDaemonHeartbeat :one
 UPDATE daemon
 SET status = 'online', last_seen_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels
+RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
 `
 
 func (q *Queries) UpdateDaemonHeartbeat(ctx context.Context, id pgtype.UUID) (Daemon, error) {
@@ -271,6 +329,7 @@ func (q *Queries) UpdateDaemonHeartbeat(ctx context.Context, id pgtype.UUID) (Da
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Labels,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -278,7 +337,7 @@ func (q *Queries) UpdateDaemonHeartbeat(ctx context.Context, id pgtype.UUID) (Da
 const updateDaemonLabels = `-- name: UpdateDaemonLabels :one
 UPDATE daemon SET labels = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels
+RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
 `
 
 type UpdateDaemonLabelsParams struct {
@@ -302,6 +361,7 @@ func (q *Queries) UpdateDaemonLabels(ctx context.Context, arg UpdateDaemonLabels
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Labels,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -321,7 +381,7 @@ DO UPDATE SET
     metadata = EXCLUDED.metadata,
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels
+RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
 `
 
 type UpsertDaemonParams struct {
@@ -358,6 +418,7 @@ func (q *Queries) UpsertDaemon(ctx context.Context, arg UpsertDaemonParams) (Dae
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Labels,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
