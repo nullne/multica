@@ -60,7 +60,6 @@ function getRuntimeAuth(
 
 export function DaemonPicker({
   daemonId,
-  daemonLabel,
   provider,
   onUpdate,
   onSelect,
@@ -69,12 +68,11 @@ export function DaemonPicker({
   triggerRender,
 }: {
   daemonId: string | null;
-  daemonLabel: string | null;
   provider: string | null;
   /** Called with UpdateIssueRequest-shaped updates (issue detail page). */
   onUpdate?: (updates: Partial<UpdateIssueRequest>) => void;
   /** Called with raw values (create-issue modal or other contexts). */
-  onSelect?: (daemonId: string | null, daemonLabel: string | null) => void;
+  onSelect?: (daemonId: string | null) => void;
   align?: "start" | "center" | "end";
   trigger?: React.ReactNode;
   triggerRender?: React.ReactElement;
@@ -89,11 +87,6 @@ export function DaemonPicker({
     [daemons, runtimes, provider],
   );
 
-  const allLabels = useMemo(
-    () => [...new Set(daemons.flatMap((d) => d.labels))].sort(),
-    [daemons],
-  );
-
   const selectedName = daemonId
     ? (() => {
         const d = daemons.find((d) => d.id === daemonId);
@@ -101,9 +94,9 @@ export function DaemonPicker({
       })()
     : null;
 
-  const select = (id: string | null, label: string | null) => {
-    onUpdate?.({ dispatch_daemon_id: id, dispatch_daemon_label: label });
-    onSelect?.(id, label);
+  const select = (id: string | null) => {
+    onUpdate?.({ dispatch_daemon_id: id, dispatch_daemon_label: null });
+    onSelect?.(id);
     setOpen(false);
   };
 
@@ -113,7 +106,7 @@ export function DaemonPicker({
       <PickerItem
         key={d.id}
         selected={daemonId === d.id}
-        onClick={() => select(d.id, null)}
+        onClick={() => select(d.id)}
       >
         <span className={dimmed ? "text-muted-foreground" : ""}>
           {d.device_name || d.daemon_id}
@@ -136,40 +129,23 @@ export function DaemonPicker({
       triggerRender={triggerRender}
       trigger={
         customTrigger ?? (
-          <span className={daemonId || daemonLabel ? "" : "text-muted-foreground"}>
-            {daemonLabel
-              ? `label: ${daemonLabel}`
-              : selectedName ?? "Auto"}
+          <span className={daemonId ? "" : "text-muted-foreground"}>
+            {selectedName ?? "Auto"}
           </span>
         )
       }
     >
       {/* Auto option */}
       <PickerItem
-        selected={!daemonId && !daemonLabel}
-        onClick={() => select(null, null)}
+        selected={!daemonId}
+        onClick={() => select(null)}
       >
         <span className="text-muted-foreground">Auto</span>
       </PickerItem>
 
-      {/* By label */}
-      {allLabels.length > 0 && (
-        <PickerSection label="By label">
-          {allLabels.map((label) => (
-            <PickerItem
-              key={label}
-              selected={daemonLabel === label}
-              onClick={() => select(null, label)}
-            >
-              {label}
-            </PickerItem>
-          ))}
-        </PickerSection>
-      )}
-
       {/* Compatible daemons */}
       {compatible.length > 0 && (
-        <PickerSection label={provider ? "Compatible" : "Daemons"}>
+        <PickerSection label={provider ? "Compatible" : "Environments"}>
           {compatible.map((d) => renderDaemonItem(d))}
         </PickerSection>
       )}
