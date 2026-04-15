@@ -163,7 +163,7 @@ export function AppSidebar() {
                 <SquarePen className="size-3.5" />
                 <DraftDot />
               </TooltipTrigger>
-              <TooltipContent side="bottom">New issue</TooltipContent>
+              <TooltipContent side="bottom">New issue (⇧⌘O)</TooltipContent>
             </Tooltip>
           </div>
         </SidebarHeader>

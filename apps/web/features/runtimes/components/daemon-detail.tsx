@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Monitor, Plus, X } from "lucide-react";
+import { Monitor } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Daemon, AgentRuntime } from "@/shared/types";
@@ -12,76 +11,6 @@ import { StatusBadge, AuthStatusBadge, InfoField } from "./shared";
 import { UpdateSection } from "./update-section";
 import { UsageSection } from "./usage-section";
 import { PingSection } from "./ping-section";
-
-function LabelsEditor({ daemon }: { daemon: Daemon }) {
-  const patchDaemon = useRuntimeStore((s) => s.patchDaemon);
-  const [labels, setLabels] = useState<string[]>(daemon.labels ?? []);
-  const [newLabel, setNewLabel] = useState("");
-
-  const save = async (next: string[]) => {
-    setLabels(next);
-    try {
-      await api.updateDaemon(daemon.id, { labels: next });
-      patchDaemon(daemon.id, { labels: next });
-    } catch {
-      toast.error("Failed to update labels");
-      setLabels(daemon.labels ?? []);
-    }
-  };
-
-  const addLabel = () => {
-    const val = newLabel.trim().toLowerCase();
-    if (!val || labels.includes(val)) return;
-    save([...labels, val]);
-    setNewLabel("");
-  };
-
-  const removeLabel = (label: string) => {
-    save(labels.filter((l) => l !== label));
-  };
-
-  return (
-    <div>
-      <div className="flex flex-wrap gap-1.5 mb-2">
-        {labels.map((label) => (
-          <span
-            key={label}
-            className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs font-medium"
-          >
-            {label}
-            <button
-              type="button"
-              onClick={() => removeLabel(label)}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-        {labels.length === 0 && (
-          <span className="text-xs text-muted-foreground">No labels</span>
-        )}
-      </div>
-      <div className="flex gap-1.5">
-        <Input
-          value={newLabel}
-          onChange={(e) => setNewLabel(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addLabel()}
-          placeholder="Add label..."
-          className="h-7 text-xs flex-1"
-        />
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={addLabel}
-          disabled={!newLabel.trim()}
-        >
-          <Plus className="h-3 w-3" />
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 function ProviderTabContent({ runtime }: { runtime: AgentRuntime }) {
   return (
@@ -196,14 +125,6 @@ export function DaemonDetail({
             label="Last Seen"
             value={formatLastSeen(daemon.last_seen_at)}
           />
-        </div>
-
-        {/* Labels */}
-        <div>
-          <h3 className="text-xs font-medium text-muted-foreground mb-3">
-            Labels
-          </h3>
-          <LabelsEditor daemon={daemon} />
         </div>
 
         {/* CLI Update */}

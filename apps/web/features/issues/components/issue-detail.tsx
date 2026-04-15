@@ -419,7 +419,6 @@ function DispatchHints({ issue, onUpdate }: { issue: Issue; onUpdate: (updates: 
       <PropRow label="Environment">
         <DaemonPicker
           daemonId={issue.dispatch_daemon_id}
-          daemonLabel={issue.dispatch_daemon_label}
           provider={issue.dispatch_provider}
           onUpdate={onUpdate}
           align="start"
