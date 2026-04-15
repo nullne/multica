@@ -8,17 +8,11 @@ import (
 	"time"
 )
 
-// ossAlertAdapter handles the internal OSS alert format (Prometheus AlertManager style).
+// ossAlertAdapter handles Prometheus AlertManager style payloads.
 //
-// Schema:
-//
-//	{
-//	  "labels":       { "alertname": "...", "app": "..." },
-//	  "annotations":  { "value": "...", "labels": "..." },
-//	  "startsAt":     "2026-04-13T07:39:46.089Z",
-//	  "endsAt":       "2026-04-13T07:43:46.089Z",
-//	  "generatorURL": "https://..."
-//	}
+// Supports two formats:
+//   - Single alert object (original format)
+//   - Alertmanager batch format: {"alerts": [...], "status": "firing", ...}
 type ossAlertAdapter struct{}
 
 type ossAlertPayload struct {
@@ -29,10 +23,35 @@ type ossAlertPayload struct {
 	GeneratorURL string            `json:"generatorURL"`
 }
 
+type ossAlertBatchPayload struct {
+	Alerts []json.RawMessage `json:"alerts"`
+}
+
 func (a *ossAlertAdapter) Parse(payload json.RawMessage, _ http.Header) ([]Event, error) {
+	var batch ossAlertBatchPayload
+	if err := json.Unmarshal(payload, &batch); err == nil && len(batch.Alerts) > 0 {
+		var events []Event
+		for _, raw := range batch.Alerts {
+			ev, err := a.parseSingle(raw)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, ev)
+		}
+		return events, nil
+	}
+
+	ev, err := a.parseSingle(payload)
+	if err != nil {
+		return nil, err
+	}
+	return []Event{ev}, nil
+}
+
+func (a *ossAlertAdapter) parseSingle(payload json.RawMessage) (Event, error) {
 	var p ossAlertPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return nil, fmt.Errorf("parse oss-alert payload: %w", err)
+		return Event{}, fmt.Errorf("parse oss-alert payload: %w", err)
 	}
 
 	alertName := p.Labels["alertname"]
@@ -79,7 +98,6 @@ func (a *ossAlertAdapter) Parse(payload json.RawMessage, _ http.Header) ([]Event
 		dedupKey = alertName + ":" + app
 	}
 
-	// Build Data map: deterministic bare keys + prefixed external data
 	data := map[string]string{
 		"title":     title,
 		"body":      body.String(),
@@ -99,12 +117,12 @@ func (a *ossAlertAdapter) Parse(payload json.RawMessage, _ http.Header) ([]Event
 		data["annotations."+k] = v
 	}
 
-	return []Event{{
+	return Event{
 		Type:       "alert.firing",
 		DedupKey:   dedupKey,
 		Data:       data,
 		RawPayload: payload,
-	}}, nil
+	}, nil
 }
 
 func (a *ossAlertAdapter) Keys() []AdapterKey {
@@ -121,16 +139,21 @@ func (a *ossAlertAdapter) Keys() []AdapterKey {
 
 func (a *ossAlertAdapter) Example() string {
 	return `{
-  "labels": {
-    "alertname": "ServicePanic",
-    "app": "my-service"
-  },
-  "annotations": {
-    "value": "1.2",
-    "labels": "map[app:my-service]"
-  },
-  "startsAt": "2026-04-13T07:39:46.089Z",
-  "endsAt": "2026-04-13T07:43:46.089Z",
-  "generatorURL": "https://prometheus.example.com/graph?..."
+  "alerts": [
+    {
+      "labels": {
+        "alertname": "ServicePanic",
+        "app": "my-service"
+      },
+      "annotations": {
+        "value": "1.2",
+        "labels": "map[app:my-service]"
+      },
+      "startsAt": "2026-04-13T07:39:46.089Z",
+      "endsAt": "2026-04-13T07:43:46.089Z",
+      "generatorURL": "https://prometheus.example.com/graph?..."
+    }
+  ],
+  "status": "firing"
 }`
 }
