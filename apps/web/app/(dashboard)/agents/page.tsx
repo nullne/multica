@@ -79,6 +79,7 @@ import { useIssueStore } from "@/features/issues";
 import { useRuntimeStore } from "@/features/runtimes";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
+import { cn } from "@/lib/utils";
 
 
 // ---------------------------------------------------------------------------
@@ -1608,10 +1609,10 @@ export default function AgentsPage() {
 
   // Select first agent on initial load
   useEffect(() => {
-    if (agents.length > 0 && !selectedId) {
-      setSelectedId(agents[0]!.id);
+    if (activeAgents.length > 0 && !selectedId) {
+      setSelectedId(activeAgents[0]!.id);
     }
-  }, [agents, selectedId]);
+  }, [activeAgents, selectedId]);
 
   const handleCreate = async (data: CreateAgentRequest) => {
     const agent = await api.createAgent(data);
