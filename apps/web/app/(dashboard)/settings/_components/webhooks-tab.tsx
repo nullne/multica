@@ -395,6 +395,10 @@ function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onR
                   <span>{agentName(primaryConfig.agent_id)}</span>
                 </div>
                 <div className="flex gap-2">
+                  <span className="font-medium w-28 shrink-0">Provider:</span>
+                  <span className="capitalize">{primaryConfig.dispatch_provider || "Auto"}</span>
+                </div>
+                <div className="flex gap-2">
                   <span className="font-medium w-28 shrink-0">Environment:</span>
                   <span>{primaryConfig.dispatch_daemon_id ? envName(primaryConfig.dispatch_daemon_id) : "Any"}</span>
                 </div>
@@ -431,6 +435,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
   const [sourceType, setSourceType] = useState("standard");
   const [actionType, setActionType] = useState("create_issue");
   const [agentId, setAgentId] = useState("");
+  const [dispatchProvider, setDispatchProvider] = useState("");
   const [dispatchDaemonId, setDispatchDaemonId] = useState("");
   const [titleTemplate, setTitleTemplate] = useState("");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
@@ -439,6 +444,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
   const [showSchema, setShowSchema] = useState(false);
 
   const activeAgents = agents.filter((a: Agent) => !a.archived_at);
+  const selectedAgent = activeAgents.find((a) => a.id === agentId);
 
   useEffect(() => {
     if (open) {
@@ -463,6 +469,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
         agent_id: agentId,
         title_template: titleTemplate || undefined,
         description_template: descriptionTemplate || undefined,
+        dispatch_provider: dispatchProvider || undefined,
         dispatch_daemon_id: dispatchDaemonId || undefined,
       });
       onCreated({ token: result.token, webhookId: result.webhook.id, url: `${apiBaseUrl}/api/webhooks/${result.webhook.id}` });
@@ -471,6 +478,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
       setSourceType("standard");
       setActionType("create_issue");
       setAgentId("");
+      setDispatchProvider("");
       setDispatchDaemonId("");
       setTitleTemplate("");
       setDescriptionTemplate("");
@@ -583,6 +591,26 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
                     </SelectContent>
                   </Select>
                 </div>
+                {selectedAgent && selectedAgent.providers.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <Label className="w-24 shrink-0 text-right">Provider</Label>
+                    <Select value={dispatchProvider} onValueChange={(v) => setDispatchProvider(v ?? "")}>
+                      <SelectTrigger size="sm" className="w-auto">
+                        <SelectValue placeholder="Auto">
+                          {dispatchProvider ? <span className="capitalize">{dispatchProvider}</span> : "Auto"}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Auto</SelectItem>
+                        {selectedAgent.providers.map((p) => (
+                          <SelectItem key={p} value={p}>
+                            <span className="capitalize">{p}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <div className="flex items-center gap-3">
                   <Label className="w-24 shrink-0 text-right">Environment</Label>
                   <Select value={dispatchDaemonId} onValueChange={(v) => setDispatchDaemonId(v ?? "")}>
@@ -640,6 +668,7 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
   const [sourceType, setSourceType] = useState("standard");
   const [actionType, setActionType] = useState("create_issue");
   const [agentId, setAgentId] = useState("");
+  const [dispatchProvider, setDispatchProvider] = useState("");
   const [dispatchDaemonId, setDispatchDaemonId] = useState("");
   const [titleTemplate, setTitleTemplate] = useState("");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
@@ -648,6 +677,7 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
   const [showSchema, setShowSchema] = useState(false);
 
   const activeAgents = agents.filter((a: Agent) => !a.archived_at);
+  const selectedAgent = activeAgents.find((a) => a.id === agentId);
 
   useEffect(() => {
     if (webhook) {
@@ -658,6 +688,7 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
         setActionType(action.action_type);
         const cfg = action.config as CreateIssueActionConfig;
         setAgentId(cfg.agent_id || "");
+        setDispatchProvider(cfg.dispatch_provider || "");
         setDispatchDaemonId(cfg.dispatch_daemon_id || "");
         setTitleTemplate(cfg.title_template || "");
         setDescriptionTemplate(cfg.description_template || "");
@@ -684,6 +715,7 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
           title_template: titleTemplate,
           description_template: descriptionTemplate,
           labels: (action.config as CreateIssueActionConfig).labels || [],
+          dispatch_provider: dispatchProvider || undefined,
           dispatch_daemon_id: dispatchDaemonId || undefined,
           dispatch_daemon_label: undefined,
         };
@@ -801,6 +833,26 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
                     </SelectContent>
                   </Select>
                 </div>
+                {selectedAgent && selectedAgent.providers.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <Label className="w-24 shrink-0 text-right">Provider</Label>
+                    <Select value={dispatchProvider} onValueChange={(v) => setDispatchProvider(v ?? "")}>
+                      <SelectTrigger size="sm" className="w-auto">
+                        <SelectValue placeholder="Auto">
+                          {dispatchProvider ? <span className="capitalize">{dispatchProvider}</span> : "Auto"}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Auto</SelectItem>
+                        {selectedAgent.providers.map((p) => (
+                          <SelectItem key={p} value={p}>
+                            <span className="capitalize">{p}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <div className="flex items-center gap-3">
                   <Label className="w-24 shrink-0 text-right">Environment</Label>
                   <Select value={dispatchDaemonId} onValueChange={(v) => setDispatchDaemonId(v ?? "")}>

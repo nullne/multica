@@ -69,6 +69,7 @@ Defines what to do when an event is received. Each webhook can have one or more 
   "title_template": "{{.title}}",
   "description_template": "{{.body}}",
   "labels": ["incident"],
+  "dispatch_provider": "string (optional, e.g. codex, claude)",
   "dispatch_daemon_id": "uuid (optional)",
   "dispatch_daemon_label": "string (optional)"
 }
