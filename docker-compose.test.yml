@@ -168,10 +168,10 @@ services:
       dockerfile: Dockerfile.agent-compat
     working_dir: /app/server
     command: ["go", "test", "-v", "-tags", "agentcompat", "-timeout", "10m", "-count=1", "./pkg/agent/"]
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - ANTHROPIC_API_KEY
-      - OPENAI_API_KEY
-      - CURSOR_API_KEY
       - CGO_ENABLED=0
     volumes:
       - ./server:/app/server
