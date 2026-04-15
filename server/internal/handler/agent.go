@@ -106,9 +106,10 @@ type AgentTaskResponse struct {
 	PriorSessionID   string         `json:"prior_session_id,omitempty"`   // session ID from a previous task on same issue
 	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`     // work_dir from a previous task on same issue
 	TriggerCommentID *string        `json:"trigger_comment_id,omitempty"` // comment that triggered this task
-	GitHubToken      string         `json:"github_token,omitempty"`
-	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
-	ProviderAPIKey   string         `json:"provider_api_key,omitempty"` // workspace-level API key for the provider
+	GitHubToken      string            `json:"github_token,omitempty"`
+	GitHubCodeAccess string            `json:"github_code_access,omitempty"`
+	ProviderAPIKey   string            `json:"provider_api_key,omitempty"` // workspace-level API key for the provider
+	Env              map[string]string `json:"env,omitempty"`              // user-supplied env vars from issue dispatch_env
 }
 
 // TaskAgentData holds agent info included in claim responses so the daemon

@@ -162,6 +162,25 @@ services:
         condition: service_healthy
     profiles: [test]
 
+  agent-compat:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-compat
+    working_dir: /app/server
+    command: ["go", "test", "-v", "-tags", "agentcompat", "-timeout", "10m", "-count=1", "./pkg/agent/"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - CGO_ENABLED=0
+    volumes:
+      - ./server:/app/server
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    tmpfs:
+      - /tmp:exec
+    profiles: [test]
+
 volumes:
   pgdata:
   go-mod-cache:

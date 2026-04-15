@@ -42,6 +42,7 @@ type IssueResponse struct {
 	DispatchProvider      *string                 `json:"dispatch_provider"`
 	DispatchDaemonID      *string                 `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
+	DispatchEnv           map[string]string       `json:"dispatch_env,omitempty"`
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
 	Labels                []LabelResponse         `json:"labels"`
@@ -103,6 +104,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DispatchProvider:      textToPtr(i.DispatchProvider),
 		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
 		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
+		DispatchEnv:           bytesToStringMap(i.DispatchEnv),
 		Labels:                []LabelResponse{},
 		CreatedAt:             timestampToString(i.CreatedAt),
 		UpdatedAt:             timestampToString(i.UpdatedAt),
@@ -235,19 +237,20 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateIssueRequest struct {
-	Title                 string  `json:"title"`
-	Description           *string `json:"description"`
-	Status                string  `json:"status"`
-	Priority              string  `json:"priority"`
-	AssigneeType          *string `json:"assignee_type"`
-	AssigneeID            *string `json:"assignee_id"`
-	VerifierAgentID       *string `json:"verifier_agent_id"`
-	MaxVerificationRounds *int32  `json:"max_verification_rounds"`
-	ParentIssueID         *string `json:"parent_issue_id"`
-	DueDate               *string `json:"due_date"`
-	DispatchProvider      *string `json:"dispatch_provider"`
-	DispatchDaemonID      *string `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel   *string `json:"dispatch_daemon_label"`
+	Title                 string            `json:"title"`
+	Description           *string           `json:"description"`
+	Status                string            `json:"status"`
+	Priority              string            `json:"priority"`
+	AssigneeType          *string           `json:"assignee_type"`
+	AssigneeID            *string           `json:"assignee_id"`
+	VerifierAgentID       *string           `json:"verifier_agent_id"`
+	MaxVerificationRounds *int32            `json:"max_verification_rounds"`
+	ParentIssueID         *string           `json:"parent_issue_id"`
+	DueDate               *string           `json:"due_date"`
+	DispatchProvider      *string           `json:"dispatch_provider"`
+	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
+	DispatchEnv           map[string]string `json:"dispatch_env,omitempty"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +376,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DispatchProvider:      ptrToText(req.DispatchProvider),
 		DispatchDaemonID:      parseOptionalUUID(req.DispatchDaemonID),
 		DispatchDaemonLabel:   ptrToText(req.DispatchDaemonLabel),
+		DispatchEnv:           stringMapToBytes(req.DispatchEnv),
 	})
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -411,9 +415,10 @@ type UpdateIssueRequest struct {
 	MaxVerificationRounds *int32   `json:"max_verification_rounds"`
 	Position              *float64 `json:"position"`
 	DueDate               *string  `json:"due_date"`
-	DispatchProvider      *string  `json:"dispatch_provider"`
-	DispatchDaemonID      *string  `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel   *string  `json:"dispatch_daemon_label"`
+	DispatchProvider      *string           `json:"dispatch_provider"`
+	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
+	DispatchEnv           map[string]string `json:"dispatch_env,omitempty"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -453,6 +458,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		DispatchProvider:      prevIssue.DispatchProvider,
 		DispatchDaemonID:      prevIssue.DispatchDaemonID,
 		DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
+		DispatchEnv:           prevIssue.DispatchEnv,
 	}
 
 	// COALESCE fields — only set when explicitly provided
@@ -520,6 +526,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := rawFields["dispatch_daemon_label"]; ok {
 		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
+	}
+	if _, ok := rawFields["dispatch_env"]; ok {
+		params.DispatchEnv = stringMapToBytes(req.DispatchEnv)
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.

@@ -1274,6 +1274,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		"MULTICA_TASK_ID":      task.ID,
 	}
 
+	// User-supplied env from issue dispatch_env (cannot override system vars).
+	for k, v := range task.Env {
+		if _, exists := agentEnv[k]; !exists {
+			agentEnv[k] = v
+		}
+	}
+
 	// Inject workspace-level provider API key if available.
 	// This allows running without per-user CLI auth (e.g. `claude login`).
 	if apiKey := d.resolveProviderAPIKey(provider, task.ProviderAPIKey); apiKey != "" {
