@@ -118,6 +118,7 @@ type CreateWebhookRequest struct {
 	TitleTemplate       string   `json:"title_template"`
 	DescriptionTemplate string   `json:"description_template"`
 	Labels              []string `json:"labels"`
+	DispatchProvider    string   `json:"dispatch_provider"`
 	DispatchDaemonID    string   `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel string   `json:"dispatch_daemon_label"`
 }
@@ -199,6 +200,7 @@ func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
 		TitleTemplate:       req.TitleTemplate,
 		DescriptionTemplate: req.DescriptionTemplate,
 		Labels:              req.Labels,
+		DispatchProvider:    req.DispatchProvider,
 		DispatchDaemonID:    req.DispatchDaemonID,
 		DispatchDaemonLabel: req.DispatchDaemonLabel,
 	}
@@ -601,6 +603,7 @@ type CreateIssueActionConfig struct {
 	TitleTemplate       string   `json:"title_template"`
 	DescriptionTemplate string   `json:"description_template"`
 	Labels              []string `json:"labels"`
+	DispatchProvider    string   `json:"dispatch_provider,omitempty"`
 	DispatchDaemonID    string   `json:"dispatch_daemon_id,omitempty"`
 	DispatchDaemonLabel string   `json:"dispatch_daemon_label,omitempty"`
 }
@@ -756,6 +759,7 @@ func (h *Handler) executeCreateIssueAction(r *http.Request, webhook db.Webhook, 
 		CreatorType:         "webhook",
 		CreatorID:           webhook.ID,
 		Number:              issueNumber,
+		DispatchProvider:    strToText(cfg.DispatchProvider),
 		DispatchDaemonID:    parseOptionalUUID(&cfg.DispatchDaemonID),
 		DispatchDaemonLabel: ptrToText(&cfg.DispatchDaemonLabel),
 	})

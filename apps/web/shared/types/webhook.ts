@@ -30,6 +30,7 @@ export interface CreateIssueActionConfig {
   title_template: string;
   description_template: string;
   labels: string[];
+  dispatch_provider?: string;
   dispatch_daemon_id?: string;
   dispatch_daemon_label?: string;
 }
@@ -48,6 +49,7 @@ export interface CreateWebhookRequest {
   title_template?: string;
   description_template?: string;
   labels?: string[];
+  dispatch_provider?: string;
   dispatch_daemon_id?: string;
   dispatch_daemon_label?: string;
 }
