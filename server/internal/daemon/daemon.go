@@ -363,8 +363,38 @@ func (d *Daemon) doRegister(ctx context.Context, workspaceID string, runtimes []
 		"device_name":  d.cfg.DeviceName,
 		"cli_version":  d.cfg.CLIVersion,
 		"runtimes":     runtimes,
+		"env_vars":     collectSanitizedEnv(),
 	}
 	return d.client.Register(ctx, req)
+}
+
+// collectSanitizedEnv returns the current process environment as a key-value
+// map with sensitive values masked (keys containing KEY, SECRET, TOKEN, etc.).
+func collectSanitizedEnv() map[string]string {
+	sensitiveSubstrings := []string{
+		"KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD",
+		"CREDENTIAL", "AUTH", "PRIVATE",
+	}
+	env := make(map[string]string)
+	for _, e := range os.Environ() {
+		k, v, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		upper := strings.ToUpper(k)
+		masked := false
+		for _, sub := range sensitiveSubstrings {
+			if strings.Contains(upper, sub) {
+				env[k] = "********"
+				masked = true
+				break
+			}
+		}
+		if !masked {
+			env[k] = v
+		}
+	}
+	return env
 }
 
 // reconcileProviders checks heartbeat provider config against locally installed

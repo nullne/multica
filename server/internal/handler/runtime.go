@@ -293,6 +293,41 @@ func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// GetDaemonEnv returns the environment variables reported by a daemon during registration.
+func (h *Handler) GetDaemonEnv(w http.ResponseWriter, r *http.Request) {
+	daemonID := chi.URLParam(r, "daemonId")
+
+	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return
+	}
+
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+		return
+	}
+
+	var metadata map[string]any
+	if d.Metadata != nil {
+		json.Unmarshal(d.Metadata, &metadata)
+	}
+
+	envVars := map[string]string{}
+	if metadata != nil {
+		if raw, ok := metadata["env_vars"]; ok {
+			if m, ok := raw.(map[string]any); ok {
+				for k, v := range m {
+					if s, ok := v.(string); ok {
+						envVars[k] = s
+					}
+				}
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, envVars)
+}
+
 func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)
 

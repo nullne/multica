@@ -1,7 +1,13 @@
 import { useState, useCallback } from "react";
-import { Monitor, Archive, ArchiveRestore, MoreHorizontal } from "lucide-react";
+import { Monitor, Archive, ArchiveRestore, MoreHorizontal, Terminal, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,6 +77,94 @@ function EditableDeviceName({ daemon }: { daemon: Daemon }) {
   );
 }
 
+function EnvDialog({ daemonId, open, onOpenChange }: { daemonId: string; open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [envVars, setEnvVars] = useState<Record<string, string> | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.getDaemonEnv(daemonId);
+      setEnvVars(data);
+    } catch {
+      toast.error("Failed to load environment variables");
+    } finally {
+      setLoading(false);
+    }
+  }, [daemonId]);
+
+  const handleOpenChange = useCallback((v: boolean) => {
+    onOpenChange(v);
+    if (v) {
+      setFilter("");
+      load();
+    }
+  }, [onOpenChange, load]);
+
+  const entries = envVars
+    ? Object.entries(envVars)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .filter(([k, v]) => {
+          if (!filter) return true;
+          const lower = filter.toLowerCase();
+          return k.toLowerCase().includes(lower) || v.toLowerCase().includes(lower);
+        })
+    : [];
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Environment Variables</DialogTitle>
+        </DialogHeader>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Filter variables..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="pl-8 h-8 text-sm"
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto min-h-0 border rounded-md">
+          {loading ? (
+            <div className="p-4 text-sm text-muted-foreground text-center">Loading...</div>
+          ) : entries.length === 0 ? (
+            <div className="p-4 text-sm text-muted-foreground text-center">
+              {envVars && Object.keys(envVars).length === 0
+                ? "No environment variables reported. Re-register the daemon to populate."
+                : "No matches"}
+            </div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                <tr>
+                  <th className="text-left font-medium px-3 py-1.5 text-muted-foreground">Name</th>
+                  <th className="text-left font-medium px-3 py-1.5 text-muted-foreground">Value</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {entries.map(([key, value]) => (
+                  <tr key={key} className="hover:bg-muted/40">
+                    <td className="px-3 py-1.5 font-mono whitespace-nowrap font-medium">{key}</td>
+                    <td className="px-3 py-1.5 font-mono break-all text-muted-foreground">{value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {envVars && Object.keys(envVars).length > 0 && (
+          <div className="text-xs text-muted-foreground">
+            {entries.length} of {Object.keys(envVars).length} variables
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 interface ProviderEntry {
   provider: string;
   runtime: AgentRuntime | null;
@@ -106,6 +200,7 @@ export function DaemonDetail({
   const providerEntries = buildProviderEntries(daemonRuntimes, enabledProviders);
   const firstRuntimeId = daemonRuntimes[0]?.id;
   const isArchived = !!daemon.archived_at;
+  const [envOpen, setEnvOpen] = useState(false);
 
   const handleArchiveToggle = useCallback(async () => {
     try {
@@ -195,6 +290,18 @@ export function DaemonDetail({
             <PingSection runtimeId={firstRuntimeId} />
           </div>
         )}
+
+        {/* Environment Variables */}
+        <div>
+          <h3 className="text-xs font-medium text-muted-foreground mb-3">
+            Environment
+          </h3>
+          <Button variant="outline" size="sm" onClick={() => setEnvOpen(true)}>
+            <Terminal className="h-3.5 w-3.5" />
+            View Environment Variables
+          </Button>
+          <EnvDialog daemonId={daemon.id} open={envOpen} onOpenChange={setEnvOpen} />
+        </div>
 
         {/* Providers with tabs */}
         {providerEntries.length > 0 && (

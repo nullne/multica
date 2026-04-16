@@ -355,6 +355,10 @@ export class ApiClient {
     return this.fetch(`/api/daemons/${id}/restore`, { method: "POST" });
   }
 
+  async getDaemonEnv(id: string): Promise<Record<string, string>> {
+    return this.fetch(`/api/daemons/${id}/env`);
+  }
+
   async listRuntimes(params?: { workspace_id?: string }): Promise<AgentRuntime[]> {
     const search = new URLSearchParams();
     const wsId = params?.workspace_id ?? this.workspaceId;
