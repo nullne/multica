@@ -60,6 +60,11 @@ type Overrides struct {
 // LoadConfig builds the daemon configuration from environment variables
 // and optional CLI flag overrides.
 func LoadConfig(overrides Overrides) (Config, error) {
+	// Inherit PATH from the user's login shell so that CLIs installed via
+	// bash_profile/zprofile (e.g. multica, ops-cli) are discoverable both
+	// during agent probing below and inside spawned agent subprocesses.
+	inheritLoginEnv()
+
 	// Server URL: override > env > default
 	rawServerURL := envOrDefault("MULTICA_SERVER_URL", DefaultServerURL)
 	if overrides.ServerURL != "" {
