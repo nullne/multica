@@ -795,7 +795,7 @@ func (h *Handler) executeCreateIssueAction(r *http.Request, webhook db.Webhook, 
 		Number:              issueNumber,
 		DispatchProvider:    strToText(cfg.DispatchProvider),
 		DispatchDaemonID:    parseOptionalUUID(&cfg.DispatchDaemonID),
-		DispatchDaemonLabel: ptrToText(&cfg.DispatchDaemonLabel),
+		DispatchDaemonLabel: strToText(cfg.DispatchDaemonLabel),
 	})
 	if err != nil {
 		return pgtype.UUID{}, err
