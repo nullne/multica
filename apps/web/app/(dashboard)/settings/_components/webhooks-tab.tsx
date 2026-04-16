@@ -47,7 +47,7 @@ export function WebhooksTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<WebhookWithActions | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [newTokenData, setNewTokenData] = useState<{ token: string; webhookId: string; url: string } | null>(null);
+  const [newTokenData, setNewTokenData] = useState<{ token: string; webhookId: string; url: string; sourceType: string } | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
   const agents = useWorkspaceStore((s) => s.agents);
@@ -94,7 +94,8 @@ export function WebhooksTab() {
     try {
       const result = await api.regenerateWebhookToken(id);
       const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
-      setNewTokenData({ token: result.token, webhookId: id, url: `${baseUrl}/api/webhooks/${id}` });
+      const wh = webhooks.find((w) => w.webhook.id === id);
+      setNewTokenData({ token: result.token, webhookId: id, url: `${baseUrl}/api/webhooks/${id}`, sourceType: wh?.webhook.source_type ?? "standard" });
       await loadWebhooks();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to regenerate token");
@@ -277,7 +278,7 @@ export function WebhooksTab() {
 {`curl -X POST ${newTokenData?.url} \\
   -H "Authorization: Bearer ${newTokenData?.token}" \\
   -H "Content-Type: application/json" \\
-  -d '{"title": "Test alert", "body": "..."}'`}
+  -d '${usageExamplePayload(newTokenData?.sourceType)}'`}
               </code>
             </div>
           </div>
@@ -292,6 +293,23 @@ export function WebhooksTab() {
 
 function getActionConfig(action: WebhookAction): CreateIssueActionConfig {
   return action.config as CreateIssueActionConfig;
+}
+
+function usageExamplePayload(sourceType?: string): string {
+  switch (sourceType) {
+    case "oss-alert":
+      return `{
+  "alerts": [
+    {
+      "labels": {"alertname": "HighLatency", "app": "api"},
+      "annotations": {"value": "500ms"},
+      "startsAt": "2026-01-01T00:00:00Z"
+    }
+  ]
+}`;
+    default:
+      return `{"title": "Test alert", "body": "Something happened"}`;
+  }
 }
 
 function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onRegenerate, onDelete }: {
@@ -429,7 +447,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
   agents: Agent[];
   daemons: Daemon[];
   apiBaseUrl: string;
-  onCreated: (data: { token: string; webhookId: string; url: string }) => void;
+  onCreated: (data: { token: string; webhookId: string; url: string; sourceType: string }) => void;
 }) {
   const [name, setName] = useState("");
   const [sourceType, setSourceType] = useState("standard");
@@ -472,7 +490,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
         dispatch_provider: dispatchProvider || undefined,
         dispatch_daemon_id: dispatchDaemonId || undefined,
       });
-      onCreated({ token: result.token, webhookId: result.webhook.id, url: `${apiBaseUrl}/api/webhooks/${result.webhook.id}` });
+      onCreated({ token: result.token, webhookId: result.webhook.id, url: `${apiBaseUrl}/api/webhooks/${result.webhook.id}`, sourceType });
       onOpenChange(false);
       setName("");
       setSourceType("standard");
