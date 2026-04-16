@@ -180,7 +180,12 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 
 	runtime, err := s.Queries.FindAvailableRuntimeConstrained(ctx, params)
 	if err != nil {
-		return db.AgentTaskQueue{}, fmt.Errorf("no online runtime for providers %v (dispatch hints: provider=%s, daemon_label=%s)", agent.Providers, issue.DispatchProvider.String, issue.DispatchDaemonLabel.String)
+		return db.AgentTaskQueue{}, fmt.Errorf("no online runtime for providers %v (dispatch hints: provider=%q valid=%v, daemon_id=%s valid=%v, daemon_label=%q valid=%v)",
+			agent.Providers,
+			issue.DispatchProvider.String, issue.DispatchProvider.Valid,
+			util.UUIDToString(issue.DispatchDaemonID), issue.DispatchDaemonID.Valid,
+			issue.DispatchDaemonLabel.String, issue.DispatchDaemonLabel.Valid,
+		)
 	}
 
 	runtimeID := runtime.ID
