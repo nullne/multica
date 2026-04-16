@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="nullne/multica"
 BINARY="multica"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${MULTICA_INSTALL_DIR:-${HOME}/.local/bin}"
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 error() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -93,6 +93,8 @@ main() {
 
   [ -f "${tmpdir}/${BINARY}" ] || error "Binary not found in archive"
 
+  mkdir -p "$INSTALL_DIR"
+
   info "Installing to ${INSTALL_DIR}/${BINARY}..."
   if [ -w "$INSTALL_DIR" ]; then
     mv "${tmpdir}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
@@ -102,6 +104,26 @@ main() {
   chmod +x "${INSTALL_DIR}/${BINARY}"
 
   info "Installed ${BINARY} ${version} to ${INSTALL_DIR}/${BINARY}"
+
+  if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+    local shell_rc
+    case "$(basename "$SHELL")" in
+      zsh)  shell_rc="$HOME/.zshrc" ;;
+      bash) shell_rc="$HOME/.bashrc" ;;
+      fish) shell_rc="$HOME/.config/fish/config.fish" ;;
+      *)    shell_rc="$HOME/.profile" ;;
+    esac
+
+    if [ "$(basename "$SHELL")" = "fish" ]; then
+      echo "set -gx PATH \"$INSTALL_DIR\" \$PATH" >> "$shell_rc"
+    else
+      echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$shell_rc"
+    fi
+
+    export PATH="$INSTALL_DIR:$PATH"
+    info "Added ${INSTALL_DIR} to PATH in ${shell_rc}"
+  fi
+
   "${INSTALL_DIR}/${BINARY}" version 2>/dev/null || true
 }
 
