@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -541,12 +542,12 @@ func (h *Handler) UpdateWebhookAction(w http.ResponseWriter, r *http.Request) {
 		params.ActionType = pgtype.Text{String: *req.ActionType, Valid: true}
 	}
 	if req.Config != nil {
-		configJSON, err := json.Marshal(req.Config)
+		merged, err := mergeActionConfig(action, req.Config)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid config")
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		params.Config = configJSON
+		params.Config = merged
 	}
 	if req.Enabled != nil {
 		params.Enabled = pgtype.Bool{Bool: *req.Enabled, Valid: true}
@@ -563,6 +564,36 @@ func (h *Handler) UpdateWebhookAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, webhookActionToResponse(updated))
+}
+
+// mergeActionConfig merges incoming config fields into the existing action
+// config. For create_issue actions, this prevents partial updates from
+// clobbering required fields like agent_id.
+func mergeActionConfig(action db.WebhookAction, incoming any) ([]byte, error) {
+	actionType := action.ActionType
+	if actionType != "create_issue" {
+		return json.Marshal(incoming)
+	}
+
+	var base CreateIssueActionConfig
+	if action.Config != nil {
+		json.Unmarshal(action.Config, &base)
+	}
+
+	incomingJSON, err := json.Marshal(incoming)
+	if err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
+	if err := json.Unmarshal(incomingJSON, &base); err != nil {
+		return nil, fmt.Errorf("invalid create_issue config: %w", err)
+	}
+
+	if base.AgentID == "" {
+		return nil, fmt.Errorf("agent_id is required in create_issue config")
+	}
+
+	return json.Marshal(base)
 }
 
 func (h *Handler) DeleteWebhookAction(w http.ResponseWriter, r *http.Request) {
@@ -715,7 +746,10 @@ func (h *Handler) IngestWebhook(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) executeCreateIssueAction(r *http.Request, webhook db.Webhook, action db.WebhookAction, evt wh.Event) (pgtype.UUID, error) {
 	var cfg CreateIssueActionConfig
 	if err := json.Unmarshal(action.Config, &cfg); err != nil {
-		return pgtype.UUID{}, err
+		return pgtype.UUID{}, fmt.Errorf("invalid action config: %w", err)
+	}
+	if cfg.AgentID == "" {
+		return pgtype.UUID{}, fmt.Errorf("action config missing agent_id")
 	}
 
 	title := renderTemplate(cfg.TitleTemplate, evt.Data)
