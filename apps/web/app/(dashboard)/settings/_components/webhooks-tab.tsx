@@ -50,6 +50,7 @@ export function WebhooksTab() {
   const [newTokenData, setNewTokenData] = useState<{ token: string; webhookId: string; url: string; sourceType: string } | null>(null);
   const [tokenCopied, setTokenCopied] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
+  const [exampleCopied, setExampleCopied] = useState(false);
   const agents = useWorkspaceStore((s) => s.agents);
 
   const loadWebhooks = useCallback(async () => {
@@ -102,15 +103,11 @@ export function WebhooksTab() {
     }
   };
 
-  const handleCopy = async (text: string, type: "token" | "url") => {
+  const handleCopy = async (text: string, type: "token" | "url" | "example") => {
     await navigator.clipboard.writeText(text);
-    if (type === "token") {
-      setTokenCopied(true);
-      setTimeout(() => setTokenCopied(false), 2000);
-    } else {
-      setUrlCopied(true);
-      setTimeout(() => setUrlCopied(false), 2000);
-    }
+    const setters = { token: setTokenCopied, url: setUrlCopied, example: setExampleCopied };
+    setters[type](true);
+    setTimeout(() => setters[type](false), 2000);
   };
 
   const agentName = (agentId: string) => {
@@ -227,15 +224,15 @@ export function WebhooksTab() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={!!newTokenData} onOpenChange={(v) => { if (!v) { setNewTokenData(null); setTokenCopied(false); setUrlCopied(false); } }}>
-        <DialogContent>
+      <Dialog open={!!newTokenData} onOpenChange={(v) => { if (!v) { setNewTokenData(null); setTokenCopied(false); setUrlCopied(false); setExampleCopied(false); } }}>
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Webhook created</DialogTitle>
             <DialogDescription>
               Copy the URL and token below. The token will not be shown again.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-3 min-w-0">
             <div>
               <Label className="text-xs text-muted-foreground mb-1">Webhook URL</Label>
               <div className="flex items-center gap-2">
@@ -272,14 +269,30 @@ export function WebhooksTab() {
                 </Tooltip>
               </div>
             </div>
-            <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">
-              <p className="font-medium mb-1">Usage example:</p>
-              <code className="block whitespace-pre-wrap">
+            <div>
+              <Label className="text-xs text-muted-foreground mb-1">Usage Example</Label>
+              <div className="flex items-start gap-2 min-w-0">
+                <code className="flex-1 min-w-0 rounded-md border bg-muted/50 px-3 py-2 text-xs whitespace-pre overflow-x-auto select-all">
 {`curl -X POST ${newTokenData?.url} \\
   -H "Authorization: Bearer ${newTokenData?.token}" \\
   -H "Content-Type: application/json" \\
   -d '${usageExamplePayload(newTokenData?.sourceType)}'`}
-              </code>
+                </code>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button variant="outline" size="icon" className="shrink-0 mt-0.5" onClick={() => {
+                        if (!newTokenData) return;
+                        const cmd = `curl -X POST ${newTokenData.url} \\\n  -H "Authorization: Bearer ${newTokenData.token}" \\\n  -H "Content-Type: application/json" \\\n  -d '${usageExamplePayload(newTokenData.sourceType)}'`;
+                        handleCopy(cmd, "example");
+                      }}>
+                        {exampleCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      </Button>
+                    }
+                  />
+                  <TooltipContent>Copy command</TooltipContent>
+                </Tooltip>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -298,15 +311,13 @@ function getActionConfig(action: WebhookAction): CreateIssueActionConfig {
 function usageExamplePayload(sourceType?: string): string {
   switch (sourceType) {
     case "oss-alert":
-      return `{
-  "alerts": [
-    {
-      "labels": {"alertname": "HighLatency", "app": "api"},
-      "annotations": {"value": "500ms"},
-      "startsAt": "2026-01-01T00:00:00Z"
-    }
-  ]
-}`;
+      return JSON.stringify({
+        alerts: [{
+          labels: { alertname: "HighLatency", app: "api" },
+          annotations: { value: "500ms" },
+          startsAt: "2026-01-01T00:00:00Z",
+        }],
+      }, null, 2);
     default:
       return `{"title": "Test alert", "body": "Something happened"}`;
   }
