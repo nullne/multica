@@ -20,10 +20,11 @@ import (
 // ---------------------------------------------------------------------------
 
 type DaemonRegisterRequest struct {
-	WorkspaceID string `json:"workspace_id"`
-	DaemonID    string `json:"daemon_id"`
-	DeviceName  string `json:"device_name"`
-	CLIVersion  string `json:"cli_version"` // multica CLI version
+	WorkspaceID string            `json:"workspace_id"`
+	DaemonID    string            `json:"daemon_id"`
+	DeviceName  string            `json:"device_name"`
+	CLIVersion  string            `json:"cli_version"` // multica CLI version
+	EnvVars     map[string]string `json:"env_vars,omitempty"`
 	Runtimes    []struct {
 		Name       string `json:"name"`
 		Type       string `json:"type"`
@@ -63,7 +64,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Upsert the daemon entity first.
-	daemonMeta, _ := json.Marshal(map[string]any{"cli_version": req.CLIVersion})
+	meta := map[string]any{"cli_version": req.CLIVersion}
+	if len(req.EnvVars) > 0 {
+		meta["env_vars"] = req.EnvVars
+	}
+	daemonMeta, _ := json.Marshal(meta)
 	daemon, err := h.Queries.UpsertDaemon(r.Context(), db.UpsertDaemonParams{
 		WorkspaceID: parseUUID(req.WorkspaceID),
 		DaemonID:    req.DaemonID,

@@ -188,18 +188,11 @@ export function ProvidersTab() {
                     <div className="space-y-1.5">
                       <Label className="text-xs">Target Version</Label>
                       <Input
-                        placeholder="latest"
-                        value={config.target_version}
-                        onChange={(e) =>
-                          updateProvider(key, {
-                            target_version: e.target.value,
-                          })
-                        }
+                        value="latest"
+                        readOnly
+                        disabled
                         className="text-xs"
                       />
-                      <p className="text-xs text-muted-foreground">
-                        Version to install/update to. Leave empty for latest.
-                      </p>
                     </div>
                   </div>
                 )}

@@ -157,8 +157,20 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [labelOpen, setLabelOpen] = useState(false);
   const [labelFilter, setLabelFilter] = useState("");
 
-  const [dispatchProvider, setDispatchProvider] = useState<string | undefined>();
-  const [dispatchDaemonId, setDispatchDaemonId] = useState<string | undefined>();
+  const initDispatch = (() => {
+    if (initAssigneeType !== "agent" || !initAssigneeId) return {};
+    const agent = agents.find((a) => a.id === initAssigneeId);
+    if (!agent) return {};
+    const saved = defaults.getAgentDispatch(initAssigneeId);
+    const currentRuntimes = useRuntimeStore.getState().runtimes;
+    const daemonId = agent.default_daemon_id ?? saved?.daemonId ?? undefined;
+    return {
+      daemonId,
+      provider: saved?.provider ?? pickBestProvider(agent.providers ?? [], currentRuntimes, daemonId),
+    };
+  })();
+  const [dispatchProvider, setDispatchProvider] = useState<string | undefined>(initDispatch.provider);
+  const [dispatchDaemonId, setDispatchDaemonId] = useState<string | undefined>(initDispatch.daemonId);
   const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
   const runtimes = useRuntimeStore((s) => s.runtimes);
 
@@ -170,6 +182,11 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   useEffect(() => {
     if (selectedAgent) fetchAllRuntimes();
   }, [selectedAgent, fetchAllRuntimes]);
+
+  useEffect(() => {
+    const t = setTimeout(() => descEditorRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, []);
 
   // Assignee popover
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -192,7 +209,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
 
   const assigneeQuery = assigneeFilter.toLowerCase();
   const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(assigneeQuery));
-  const filteredAgents = agents.filter((a) => a.name.toLowerCase().includes(assigneeQuery));
+  const filteredAgents = agents.filter((a) => !a.archived_at && a.name.toLowerCase().includes(assigneeQuery));
 
   const verifierQuery = verifierFilter.toLowerCase();
   const filteredVerifierAgents = agents.filter(
@@ -362,7 +379,6 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         {/* Title */}
         <div className="px-5 pb-2 shrink-0">
           <TitleEditor
-            autoFocus
             defaultValue={draft.title}
             placeholder="Issue title"
             className="text-lg font-semibold"

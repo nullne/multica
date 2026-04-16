@@ -249,6 +249,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		// Daemons
 		r.Get("/api/daemons", h.ListDaemons)
 		r.Patch("/api/daemons/{daemonId}", h.UpdateDaemon)
+		r.Get("/api/daemons/{daemonId}/env", h.GetDaemonEnv)
 		r.Post("/api/daemons/{daemonId}/archive", h.ArchiveDaemon)
 		r.Post("/api/daemons/{daemonId}/restore", h.RestoreDaemon)
 
