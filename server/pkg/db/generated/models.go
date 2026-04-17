@@ -155,6 +155,21 @@ type DaemonToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type GithubEventRule struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	EventType           string             `json:"event_type"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	Enabled             bool               `json:"enabled"`
+	TitleTemplate       string             `json:"title_template"`
+	DescriptionTemplate string             `json:"description_template"`
+	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
+	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
 type InboxItem struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
@@ -200,7 +215,6 @@ type Issue struct {
 	DispatchProvider      pgtype.Text        `json:"dispatch_provider"`
 	DispatchDaemonID      pgtype.UUID        `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   pgtype.Text        `json:"dispatch_daemon_label"`
-	DispatchEnv           []byte             `json:"dispatch_env"`
 }
 
 type IssueDependency struct {

@@ -42,6 +42,7 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { useWorkspaceStore } from "@/features/workspace";
 import { useLabelStore } from "@/features/labels";
 import type { Label as IssueLabel } from "@/shared/types";
+import { GitHubEventsSection } from "./github-events-section";
 
 export function WebhooksTab() {
   const [webhooks, setWebhooks] = useState<WebhookWithActions[]>([]);
@@ -129,6 +130,8 @@ export function WebhooksTab() {
 
   return (
     <div className="space-y-8">
+      <GitHubEventsSection />
+
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">

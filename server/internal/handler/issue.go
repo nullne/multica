@@ -42,7 +42,6 @@ type IssueResponse struct {
 	DispatchProvider      *string                 `json:"dispatch_provider"`
 	DispatchDaemonID      *string                 `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
-	DispatchEnv           map[string]string       `json:"dispatch_env,omitempty"`
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
 	Labels                []LabelResponse         `json:"labels"`
@@ -104,7 +103,6 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DispatchProvider:      textToPtr(i.DispatchProvider),
 		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
 		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
-		DispatchEnv:           bytesToStringMap(i.DispatchEnv),
 		Labels:                []LabelResponse{},
 		CreatedAt:             timestampToString(i.CreatedAt),
 		UpdatedAt:             timestampToString(i.UpdatedAt),
@@ -250,7 +248,6 @@ type CreateIssueRequest struct {
 	DispatchProvider      *string           `json:"dispatch_provider"`
 	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
-	DispatchEnv           map[string]string `json:"dispatch_env,omitempty"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -378,7 +375,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DispatchProvider:      ptrToText(req.DispatchProvider),
 		DispatchDaemonID:      parseOptionalUUID(req.DispatchDaemonID),
 		DispatchDaemonLabel:   ptrToText(req.DispatchDaemonLabel),
-		DispatchEnv:           stringMapToBytes(req.DispatchEnv),
 	})
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -420,7 +416,6 @@ type UpdateIssueRequest struct {
 	DispatchProvider      *string           `json:"dispatch_provider"`
 	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
-	DispatchEnv           map[string]string `json:"dispatch_env,omitempty"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -460,7 +455,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		DispatchProvider:      prevIssue.DispatchProvider,
 		DispatchDaemonID:      prevIssue.DispatchDaemonID,
 		DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
-		DispatchEnv:           prevIssue.DispatchEnv,
 	}
 
 	// COALESCE fields — only set when explicitly provided
@@ -528,9 +522,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := rawFields["dispatch_daemon_label"]; ok {
 		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
-	}
-	if _, ok := rawFields["dispatch_env"]; ok {
-		params.DispatchEnv = stringMapToBytes(req.DispatchEnv)
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.

@@ -3,8 +3,11 @@ package github
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -21,10 +24,11 @@ import (
 // App holds the configuration for a GitHub App and can generate
 // installation access tokens with scoped permissions.
 type App struct {
-	appID      int64
-	privateKey *rsa.PrivateKey
-	httpClient *http.Client
-	baseURL    string
+	appID         int64
+	privateKey    *rsa.PrivateKey
+	webhookSecret []byte
+	httpClient    *http.Client
+	baseURL       string
 }
 
 // NewApp creates a GitHub App client from the given app ID and PEM-encoded
@@ -59,6 +63,34 @@ func NewApp(appID int64, privateKeyPEM []byte) (*App, error) {
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		baseURL:    "https://api.github.com",
 	}, nil
+}
+
+// SetWebhookSecret sets the webhook secret used to verify incoming
+// GitHub webhook signatures. Called by NewAppFromEnv when the env var
+// is present.
+func (a *App) SetWebhookSecret(secret []byte) {
+	a.webhookSecret = secret
+}
+
+// VerifySignature checks the X-Hub-Signature-256 header against the
+// request body using the configured webhook secret. Returns false if
+// the secret is not configured or the signature doesn't match.
+func (a *App) VerifySignature(payload []byte, signatureHeader string) bool {
+	if len(a.webhookSecret) == 0 || signatureHeader == "" {
+		return false
+	}
+	sig := strings.TrimPrefix(signatureHeader, "sha256=")
+	if sig == signatureHeader {
+		return false
+	}
+	decoded, err := hex.DecodeString(sig)
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, a.webhookSecret)
+	mac.Write(payload)
+	expected := mac.Sum(nil)
+	return hmac.Equal(decoded, expected)
 }
 
 // NewAppFromEnv creates a GitHub App from environment variables.
@@ -98,7 +130,13 @@ func NewAppFromEnv() *App {
 		slog.Warn("failed to initialize GitHub App", "error", err)
 		return nil
 	}
-	slog.Info("GitHub App initialized", "app_id", appID)
+
+	if secret := os.Getenv("MULTICA_GITHUB_APP_WEBHOOK_SECRET"); secret != "" {
+		app.SetWebhookSecret([]byte(secret))
+		slog.Info("GitHub App initialized with webhook secret", "app_id", appID)
+	} else {
+		slog.Info("GitHub App initialized (no webhook secret)", "app_id", appID)
+	}
 	return app
 }
 

@@ -52,3 +52,8 @@ export type {
   AdapterKey,
   AdapterInfo,
 } from "./webhook";
+export type {
+  GitHubEventType,
+  GitHubEventRule,
+  UpsertGitHubEventRuleRequest,
+} from "./github-event";
