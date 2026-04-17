@@ -80,7 +80,7 @@ export default async function RootLayout({
       suppressHydrationWarning
       className={cn("antialiased font-sans h-full", geist.variable, geistMono.variable)}
     >
-      <body className="min-h-dvh overflow-hidden">
+      <body className="min-h-dvh overflow-x-hidden">
         <ThemeProvider>
           <AuthInitializer>
             <WSProvider>{children}</WSProvider>
