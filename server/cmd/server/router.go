@@ -88,6 +88,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	// Webhook ingest (public — authenticated by webhook token, not JWT)
 	r.Post("/api/webhooks/{id}", h.IngestWebhook)
 
+	// GitHub App webhook receiver (public — authenticated by HMAC signature)
+	r.Post("/api/github/events", h.ReceiveGitHubEvent)
+
 	// Daemon API routes (all require a valid token)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.Auth(queries))
@@ -145,6 +148,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Get("/github/status", h.GitHubStatus)
 				r.Post("/github/connect", h.GitHubConnect)
 				r.Delete("/github", h.GitHubDisconnect)
+				r.Get("/github/event-rules", h.ListGitHubEventRules)
+				r.Put("/github/event-rules", h.UpsertGitHubEventRule)
+				r.Delete("/github/event-rules/{ruleId}", h.DeleteGitHubEventRule)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
 						r.Delete("/", h.DeleteMember)

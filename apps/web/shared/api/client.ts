@@ -46,6 +46,8 @@ import type {
   UpdateWebhookActionRequest,
   WebhookEvent,
   AdapterInfo,
+  GitHubEventRule,
+  UpsertGitHubEventRuleRequest,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
 
@@ -566,6 +568,24 @@ export class ApiClient {
 
   async disconnectGitHub(workspaceId: string): Promise<Workspace> {
     return this.fetch(`/api/workspaces/${workspaceId}/github`, {
+      method: "DELETE",
+    });
+  }
+
+  // GitHub Event Rules
+  async listGitHubEventRules(workspaceId: string): Promise<GitHubEventRule[]> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/event-rules`);
+  }
+
+  async upsertGitHubEventRule(workspaceId: string, data: UpsertGitHubEventRuleRequest): Promise<GitHubEventRule> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/event-rules`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteGitHubEventRule(workspaceId: string, ruleId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/github/event-rules/${ruleId}`, {
       method: "DELETE",
     });
   }

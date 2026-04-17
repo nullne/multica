@@ -10,7 +10,7 @@ export type IssueStatus =
 export type IssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 
 export type IssueAssigneeType = "member" | "agent";
-export type IssueCreatorType = "member" | "agent" | "webhook";
+export type IssueCreatorType = "member" | "agent" | "webhook" | "github";
 
 export interface IssueReaction {
   id: string;
