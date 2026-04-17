@@ -53,6 +53,9 @@ func (h *Handler) ReceiveGitHubEvent(w http.ResponseWriter, r *http.Request) {
 		Installation struct {
 			ID int64 `json:"id"`
 		} `json:"installation"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON payload")
@@ -75,9 +78,14 @@ func (h *Handler) ReceiveGitHubEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve the most-specific rule for this (workspace, event_type, repo).
+	// Returns the per-repo rule if one exists, otherwise the workspace-default
+	// rule (repo_full_name = ''). If neither exists or the matched rule is
+	// disabled, the event is silently dropped.
 	rule, err := h.Queries.GetGitHubEventRule(r.Context(), db.GetGitHubEventRuleParams{
-		WorkspaceID: ws.ID,
-		EventType:   eventType,
+		WorkspaceID:  ws.ID,
+		EventType:    eventType,
+		RepoFullName: envelope.Repository.FullName,
 	})
 	if err != nil || !rule.Enabled {
 		w.WriteHeader(http.StatusOK)
@@ -421,6 +429,7 @@ type GitHubEventRuleResponse struct {
 	ID                  string  `json:"id"`
 	WorkspaceID         string  `json:"workspace_id"`
 	EventType           string  `json:"event_type"`
+	RepoFullName        string  `json:"repo_full_name"`
 	AgentID             string  `json:"agent_id"`
 	Enabled             bool    `json:"enabled"`
 	TitleTemplate       string  `json:"title_template"`
@@ -437,6 +446,7 @@ func githubEventRuleToResponse(r db.GithubEventRule) GitHubEventRuleResponse {
 		ID:                  uuidToString(r.ID),
 		WorkspaceID:         uuidToString(r.WorkspaceID),
 		EventType:           r.EventType,
+		RepoFullName:        r.RepoFullName,
 		AgentID:             uuidToString(r.AgentID),
 		Enabled:             r.Enabled,
 		TitleTemplate:       r.TitleTemplate,
@@ -466,6 +476,7 @@ func (h *Handler) ListGitHubEventRules(w http.ResponseWriter, r *http.Request) {
 
 type UpsertGitHubEventRuleRequest struct {
 	EventType           string  `json:"event_type"`
+	RepoFullName        string  `json:"repo_full_name"`
 	AgentID             string  `json:"agent_id"`
 	Enabled             *bool   `json:"enabled"`
 	TitleTemplate       string  `json:"title_template"`
@@ -480,6 +491,32 @@ var validGitHubEventTypes = map[string]bool{
 	"pull_request":  true,
 	"issues":        true,
 	"issue_comment": true,
+}
+
+// isValidRepoFullName checks the GitHub "owner/repo" format. Both segments
+// must be non-empty and contain only characters GitHub allows in a name
+// (alphanumerics, hyphen, underscore, and dot).
+func isValidRepoFullName(s string) bool {
+	parts := strings.Split(s, "/")
+	if len(parts) != 2 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+		for _, r := range p {
+			switch {
+			case r >= 'a' && r <= 'z':
+			case r >= 'A' && r <= 'Z':
+			case r >= '0' && r <= '9':
+			case r == '-' || r == '_' || r == '.':
+			default:
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (h *Handler) UpsertGitHubEventRule(w http.ResponseWriter, r *http.Request) {
@@ -499,6 +536,12 @@ func (h *Handler) UpsertGitHubEventRule(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	repoFullName := strings.TrimSpace(req.RepoFullName)
+	if repoFullName != "" && !isValidRepoFullName(repoFullName) {
+		writeError(w, http.StatusBadRequest, "repo_full_name must be in 'owner/repo' format")
+		return
+	}
+
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -507,6 +550,7 @@ func (h *Handler) UpsertGitHubEventRule(w http.ResponseWriter, r *http.Request) 
 	params := db.UpsertGitHubEventRuleParams{
 		WorkspaceID:         parseUUID(workspaceID),
 		EventType:           req.EventType,
+		RepoFullName:        repoFullName,
 		AgentID:             parseUUID(req.AgentID),
 		Enabled:             enabled,
 		TitleTemplate:       req.TitleTemplate,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { GitBranch, ChevronDown, ChevronRight } from "lucide-react";
+import { GitBranch, ChevronDown, ChevronRight, Plus } from "lucide-react";
 import type { GitHubEventRule, GitHubEventType, Agent, Daemon } from "@/shared/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -56,6 +56,8 @@ const EVENT_TYPES: EventTypeConfig[] = [
   },
 ];
 
+const REPO_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
 export function GitHubEventsSection() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const agents = useWorkspaceStore((s) => s.agents);
@@ -88,8 +90,7 @@ export function GitHubEventsSection() {
 
   if (!isConnected || !workspace) return null;
 
-  const ruleByType = (type: GitHubEventType) =>
-    rules.find((r) => r.event_type === type) ?? null;
+  const rulesByType = (type: GitHubEventType) => rules.filter((r) => r.event_type === type);
 
   return (
     <section className="space-y-4">
@@ -100,7 +101,9 @@ export function GitHubEventsSection() {
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Configure which GitHub events automatically create issues for your agents. Events are received through the GitHub App installed on your organization.
+        Configure which GitHub events automatically create issues for your agents. Each event type
+        has a workspace-wide default plus optional per-repository overrides; the most-specific
+        matching rule wins.
       </p>
 
       {loading ? (
@@ -123,7 +126,7 @@ export function GitHubEventsSection() {
             <EventTypeCard
               key={et.type}
               config={et}
-              rule={ruleByType(et.type)}
+              rules={rulesByType(et.type)}
               agents={agents}
               daemons={daemons}
               workspaceId={workspace.id}
@@ -138,52 +141,63 @@ export function GitHubEventsSection() {
 
 function EventTypeCard({
   config,
-  rule,
+  rules,
   agents,
   daemons,
   workspaceId,
   onUpdated,
 }: {
   config: EventTypeConfig;
-  rule: GitHubEventRule | null;
+  rules: GitHubEventRule[];
   agents: Agent[];
   daemons: Daemon[];
   workspaceId: string;
   onUpdated: () => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Drafts for repo-override rules that exist locally but aren't yet saved.
+  // Keyed by a stable client-side id.
+  const [drafts, setDrafts] = useState<{ id: string }[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const [agentId, setAgentId] = useState(rule?.agent_id ?? "");
-  const [enabled, setEnabled] = useState(rule?.enabled ?? false);
-  const [titleTemplate, setTitleTemplate] = useState(rule?.title_template ?? "");
-  const [descriptionTemplate, setDescriptionTemplate] = useState(rule?.description_template ?? "");
-  const [dispatchProvider, setDispatchProvider] = useState(rule?.dispatch_provider ?? "");
-  const [dispatchDaemonId, setDispatchDaemonId] = useState(rule?.dispatch_daemon_id ?? "");
-
-  useEffect(() => {
-    setAgentId(rule?.agent_id ?? "");
-    setEnabled(rule?.enabled ?? false);
-    setTitleTemplate(rule?.title_template ?? "");
-    setDescriptionTemplate(rule?.description_template ?? "");
-    setDispatchProvider(rule?.dispatch_provider ?? "");
-    setDispatchDaemonId(rule?.dispatch_daemon_id ?? "");
-  }, [rule]);
-
+  const defaultRule = rules.find((r) => r.repo_full_name === "") ?? null;
+  const overrideRules = rules.filter((r) => r.repo_full_name !== "");
   const activeAgents = agents.filter((a) => !a.archived_at);
 
-  const handleToggle = async (checked: boolean) => {
-    if (!rule && !checked) return;
+  const enabledCount = rules.filter((r) => r.enabled).length;
+  const summaryLabel = (() => {
+    if (defaultRule?.enabled && overrideRules.length === 0) {
+      return agentName(agents, defaultRule.agent_id);
+    }
+    if (enabledCount === 0) return null;
+    return `${enabledCount} rule${enabledCount === 1 ? "" : "s"}`;
+  })();
 
-    if (!rule && checked) {
+  const handleToggleDefault = async (checked: boolean) => {
+    if (!defaultRule && !checked) return;
+
+    if (!defaultRule && checked) {
       const firstAgent = activeAgents[0];
       if (!firstAgent) {
         toast.error("No agents available. Create an agent first.");
         return;
       }
-      setEnabled(true);
-      setAgentId(firstAgent.id);
-      setExpanded(true);
+      setSaving(true);
+      try {
+        await api.upsertGitHubEventRule(workspaceId, {
+          event_type: config.type,
+          repo_full_name: "",
+          agent_id: firstAgent.id,
+          enabled: true,
+        });
+        await onUpdated();
+        setExpanded(true);
+        toast.success(`${config.label} default enabled`);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to enable");
+      } finally {
+        setSaving(false);
+      }
       return;
     }
 
@@ -191,11 +205,12 @@ function EventTypeCard({
     try {
       await api.upsertGitHubEventRule(workspaceId, {
         event_type: config.type,
-        agent_id: rule!.agent_id,
+        repo_full_name: "",
+        agent_id: defaultRule!.agent_id,
         enabled: checked,
       });
       await onUpdated();
-      toast.success(checked ? `${config.label} events enabled` : `${config.label} events disabled`);
+      toast.success(checked ? `${config.label} default enabled` : `${config.label} default disabled`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update");
     } finally {
@@ -203,53 +218,13 @@ function EventTypeCard({
     }
   };
 
-  const handleSave = async () => {
-    if (!agentId) {
-      toast.error("Please select an agent");
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.upsertGitHubEventRule(workspaceId, {
-        event_type: config.type,
-        agent_id: agentId,
-        enabled,
-        title_template: titleTemplate,
-        description_template: descriptionTemplate,
-        dispatch_provider: dispatchProvider || undefined,
-        dispatch_daemon_id: dispatchDaemonId || undefined,
-      });
-      await onUpdated();
-      toast.success(`${config.label} rule saved`);
-      setExpanded(false);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save");
-    } finally {
-      setSaving(false);
-    }
+  const addDraft = () => {
+    setDrafts((d) => [...d, { id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` }]);
+    setExpanded(true);
   };
 
-  const handleDelete = async () => {
-    if (!rule) return;
-    setSaving(true);
-    try {
-      await api.deleteGitHubEventRule(workspaceId, rule.id);
-      await onUpdated();
-      setExpanded(false);
-      setEnabled(false);
-      setAgentId("");
-      toast.success(`${config.label} rule removed`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to delete");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? "Unknown";
-  const daemonName = (id: string) => {
-    const d = daemons.find((dm) => dm.id === id);
-    return d?.device_name || d?.daemon_id || "Unknown";
+  const removeDraft = (id: string) => {
+    setDrafts((d) => d.filter((x) => x.id !== id));
   };
 
   return (
@@ -266,9 +241,12 @@ function EventTypeCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium">{config.label}</span>
-              {rule?.enabled && (
-                <Badge variant="outline" className="text-xs">
-                  {agentName(rule.agent_id)}
+              {summaryLabel && (
+                <Badge variant="outline" className="text-xs">{summaryLabel}</Badge>
+              )}
+              {overrideRules.length > 0 && (
+                <Badge variant="secondary" className="text-xs">
+                  {overrideRules.length} repo override{overrideRules.length === 1 ? "" : "s"}
                 </Badge>
               )}
             </div>
@@ -276,86 +254,59 @@ function EventTypeCard({
           </div>
 
           <Switch
-            checked={rule ? enabled : enabled}
-            onCheckedChange={handleToggle}
+            checked={defaultRule?.enabled ?? false}
+            onCheckedChange={handleToggleDefault}
             disabled={saving}
           />
         </div>
 
         {expanded && (
-          <div className="border-t px-4 py-3 space-y-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Agent</Label>
-              <Select value={agentId} onValueChange={(v) => { if (v) setAgentId(v); }}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Select agent..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {activeAgents.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+          <div className="border-t px-4 py-3 space-y-4">
+            <RuleEditor
+              key={defaultRule?.id ?? "default-new"}
+              variant="default"
+              eventConfig={config}
+              rule={defaultRule}
+              agents={agents}
+              daemons={daemons}
+              workspaceId={workspaceId}
+              onUpdated={onUpdated}
+            />
 
-            <div className="space-y-1.5">
-              <Label className="text-xs">Environment</Label>
-              <Select
-                value={dispatchDaemonId || "__auto__"}
-                onValueChange={(v) => setDispatchDaemonId(v === "__auto__" ? "" : v ?? "")}
-              >
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue placeholder="Auto (agent default)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__auto__">Auto (agent default)</SelectItem>
-                  {daemons.filter((d) => !d.archived_at).map((d) => (
-                    <SelectItem key={d.id} value={d.id}>
-                      {daemonName(d.id)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label className="text-xs">
-                Issue Title Template
-                <span className="text-muted-foreground ml-1">(leave empty for default)</span>
-              </Label>
-              <Input
-                className="h-8 text-xs"
-                placeholder={config.defaultTitle}
-                value={titleTemplate}
-                onChange={(e) => setTitleTemplate(e.target.value)}
+            {overrideRules.map((rule) => (
+              <RuleEditor
+                key={rule.id}
+                variant="override"
+                eventConfig={config}
+                rule={rule}
+                agents={agents}
+                daemons={daemons}
+                workspaceId={workspaceId}
+                onUpdated={onUpdated}
               />
-            </div>
+            ))}
 
-            <div className="space-y-1.5">
-              <Label className="text-xs">
-                Issue Description Template
-                <span className="text-muted-foreground ml-1">(leave empty for auto-generated)</span>
-              </Label>
-              <Textarea
-                className="text-xs min-h-[60px]"
-                placeholder="{{.body}}"
-                value={descriptionTemplate}
-                onChange={(e) => setDescriptionTemplate(e.target.value)}
+            {drafts.map((draft) => (
+              <RuleEditor
+                key={draft.id}
+                variant="override"
+                eventConfig={config}
+                rule={null}
+                agents={agents}
+                daemons={daemons}
+                workspaceId={workspaceId}
+                onUpdated={async () => {
+                  removeDraft(draft.id);
+                  await onUpdated();
+                }}
+                onCancel={() => removeDraft(draft.id)}
               />
-            </div>
+            ))}
 
-            <div className="flex items-center justify-between pt-1">
-              <div>
-                {rule && (
-                  <Button variant="ghost" size="sm" className="text-destructive text-xs" onClick={handleDelete} disabled={saving}>
-                    Remove
-                  </Button>
-                )}
-              </div>
-              <Button size="sm" className="text-xs" onClick={handleSave} disabled={saving || !agentId}>
-                {saving ? "Saving..." : "Save"}
+            <div>
+              <Button variant="outline" size="sm" className="text-xs" onClick={addDraft}>
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                Add per-repo override
               </Button>
             </div>
           </div>
@@ -363,4 +314,239 @@ function EventTypeCard({
       </CardContent>
     </Card>
   );
+}
+
+function RuleEditor({
+  variant,
+  eventConfig,
+  rule,
+  agents,
+  daemons,
+  workspaceId,
+  onUpdated,
+  onCancel,
+}: {
+  variant: "default" | "override";
+  eventConfig: EventTypeConfig;
+  rule: GitHubEventRule | null;
+  agents: Agent[];
+  daemons: Daemon[];
+  workspaceId: string;
+  onUpdated: () => Promise<void>;
+  onCancel?: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [repoFullName, setRepoFullName] = useState(rule?.repo_full_name ?? "");
+  const [agentId, setAgentId] = useState(rule?.agent_id ?? "");
+  const [enabled, setEnabled] = useState(rule?.enabled ?? true);
+  const [titleTemplate, setTitleTemplate] = useState(rule?.title_template ?? "");
+  const [descriptionTemplate, setDescriptionTemplate] = useState(rule?.description_template ?? "");
+  const [dispatchDaemonId, setDispatchDaemonId] = useState(rule?.dispatch_daemon_id ?? "");
+  const [dispatchProvider, setDispatchProvider] = useState(rule?.dispatch_provider ?? "");
+
+  useEffect(() => {
+    setRepoFullName(rule?.repo_full_name ?? "");
+    setAgentId(rule?.agent_id ?? "");
+    setEnabled(rule?.enabled ?? true);
+    setTitleTemplate(rule?.title_template ?? "");
+    setDescriptionTemplate(rule?.description_template ?? "");
+    setDispatchDaemonId(rule?.dispatch_daemon_id ?? "");
+    setDispatchProvider(rule?.dispatch_provider ?? "");
+  }, [rule]);
+
+  const activeAgents = agents.filter((a) => !a.archived_at);
+  const isOverride = variant === "override";
+  const isExisting = rule !== null;
+
+  const handleSave = async () => {
+    if (!agentId) {
+      toast.error("Please select an agent");
+      return;
+    }
+    if (isOverride) {
+      const trimmed = repoFullName.trim();
+      if (!trimmed) {
+        toast.error("Repository is required for per-repo overrides");
+        return;
+      }
+      if (!REPO_PATTERN.test(trimmed)) {
+        toast.error("Repository must be in 'owner/repo' format");
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      await api.upsertGitHubEventRule(workspaceId, {
+        event_type: eventConfig.type,
+        repo_full_name: isOverride ? repoFullName.trim() : "",
+        agent_id: agentId,
+        enabled,
+        title_template: titleTemplate,
+        description_template: descriptionTemplate,
+        dispatch_provider: dispatchProvider || undefined,
+        dispatch_daemon_id: dispatchDaemonId || undefined,
+      });
+      await onUpdated();
+      toast.success(
+        isOverride
+          ? `Override for ${repoFullName.trim()} saved`
+          : `${eventConfig.label} default saved`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!rule) {
+      onCancel?.();
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.deleteGitHubEventRule(workspaceId, rule.id);
+      await onUpdated();
+      toast.success(
+        isOverride
+          ? `Override for ${rule.repo_full_name} removed`
+          : `${eventConfig.label} default removed`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const daemonName = (id: string) => {
+    const d = daemons.find((dm) => dm.id === id);
+    return d?.device_name || d?.daemon_id || "Unknown";
+  };
+
+  return (
+    <div className="rounded-md border bg-muted/30 p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Badge variant={isOverride ? "secondary" : "outline"} className="text-xs">
+            {isOverride ? (rule?.repo_full_name || "New override") : "Workspace default"}
+          </Badge>
+          {!isOverride && !isExisting && (
+            <span className="text-xs text-muted-foreground">Not configured yet</span>
+          )}
+        </div>
+        {isOverride && (
+          <div className="flex items-center gap-2">
+            <Label className="text-xs text-muted-foreground">Enabled</Label>
+            <Switch checked={enabled} onCheckedChange={setEnabled} disabled={saving} />
+          </div>
+        )}
+      </div>
+
+      {isOverride && (
+        <div className="space-y-1.5">
+          <Label className="text-xs">Repository</Label>
+          <Input
+            className="h-8 text-xs font-mono"
+            placeholder="owner/repo"
+            value={repoFullName}
+            onChange={(e) => setRepoFullName(e.target.value)}
+            disabled={saving || isExisting}
+          />
+          {isExisting && (
+            <p className="text-[11px] text-muted-foreground">
+              Repository name cannot be changed. Remove this override and add a new one to retarget.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        <Label className="text-xs">Agent</Label>
+        <Select value={agentId} onValueChange={(v) => { if (v) setAgentId(v); }}>
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue placeholder="Select agent..." />
+          </SelectTrigger>
+          <SelectContent>
+            {activeAgents.map((a) => (
+              <SelectItem key={a.id} value={a.id}>
+                {a.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label className="text-xs">Environment</Label>
+        <Select
+          value={dispatchDaemonId || "__auto__"}
+          onValueChange={(v) => setDispatchDaemonId(v === "__auto__" ? "" : v ?? "")}
+        >
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue placeholder="Auto (agent default)" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__auto__">Auto (agent default)</SelectItem>
+            {daemons.filter((d) => !d.archived_at).map((d) => (
+              <SelectItem key={d.id} value={d.id}>
+                {daemonName(d.id)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label className="text-xs">
+          Issue Title Template
+          <span className="text-muted-foreground ml-1">(leave empty for default)</span>
+        </Label>
+        <Input
+          className="h-8 text-xs"
+          placeholder={eventConfig.defaultTitle}
+          value={titleTemplate}
+          onChange={(e) => setTitleTemplate(e.target.value)}
+        />
+      </div>
+
+      <div className="space-y-1.5">
+        <Label className="text-xs">
+          Issue Description Template
+          <span className="text-muted-foreground ml-1">(leave empty for auto-generated)</span>
+        </Label>
+        <Textarea
+          className="text-xs min-h-[60px]"
+          placeholder="{{.body}}"
+          value={descriptionTemplate}
+          onChange={(e) => setDescriptionTemplate(e.target.value)}
+        />
+      </div>
+
+      <div className="flex items-center justify-between pt-1">
+        <div>
+          {(isExisting || onCancel) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive text-xs"
+              onClick={handleDelete}
+              disabled={saving}
+            >
+              {isExisting ? "Remove" : "Cancel"}
+            </Button>
+          )}
+        </div>
+        <Button size="sm" className="text-xs" onClick={handleSave} disabled={saving || !agentId}>
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function agentName(agents: Agent[], id: string) {
+  return agents.find((a) => a.id === id)?.name ?? "Unknown";
 }

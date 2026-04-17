@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 func TestIsRelevantAction(t *testing.T) {
@@ -236,5 +239,165 @@ func assertField(t *testing.T, data map[string]string, key, want string) {
 	}
 	if got != want {
 		t.Errorf("data[%q] = %q, want %q", key, got, want)
+	}
+}
+
+func TestIsValidRepoFullName(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"owner/repo", true},
+		{"my-org/my-repo", true},
+		{"foo.bar/baz_qux-1", true},
+		{"a/b", true},
+		{"", false},
+		{"owner", false},
+		{"owner/", false},
+		{"/repo", false},
+		{"owner/repo/extra", false},
+		{"owner/re po", false},
+		{"owner repo", false},
+		{"owner/re$po", false},
+	}
+	for _, tc := range cases {
+		if got := isValidRepoFullName(tc.in); got != tc.want {
+			t.Errorf("isValidRepoFullName(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestGitHubEventRulePerRepoLookup verifies that GetGitHubEventRule prefers
+// an exact repo match and falls back to the workspace-default rule
+// (repo_full_name = '') when no per-repo rule exists. Requires the test
+// database fixture from TestMain.
+func TestGitHubEventRulePerRepoLookup(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	q := testHandler.Queries
+
+	var agentIDStr string
+	err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentIDStr)
+	if err != nil {
+		t.Fatalf("failed to find test agent: %v", err)
+	}
+	agentID := parseUUID(agentIDStr)
+	wsID := parseUUID(testWorkspaceID)
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM github_event_rule WHERE workspace_id = $1`, testWorkspaceID)
+	})
+
+	defaultRule, err := q.UpsertGitHubEventRule(ctx, db.UpsertGitHubEventRuleParams{
+		WorkspaceID:   wsID,
+		EventType:     "pull_request",
+		RepoFullName:  "",
+		AgentID:       agentID,
+		Enabled:       true,
+		TitleTemplate: "default-title",
+	})
+	if err != nil {
+		t.Fatalf("upsert default rule: %v", err)
+	}
+
+	overrideRule, err := q.UpsertGitHubEventRule(ctx, db.UpsertGitHubEventRuleParams{
+		WorkspaceID:   wsID,
+		EventType:     "pull_request",
+		RepoFullName:  "acme/widgets",
+		AgentID:       agentID,
+		Enabled:       true,
+		TitleTemplate: "override-title",
+	})
+	if err != nil {
+		t.Fatalf("upsert override rule: %v", err)
+	}
+
+	matched, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
+		WorkspaceID:  wsID,
+		EventType:    "pull_request",
+		RepoFullName: "acme/widgets",
+	})
+	if err != nil {
+		t.Fatalf("lookup matching repo: %v", err)
+	}
+	if matched.ID != overrideRule.ID {
+		t.Fatalf("expected override rule for matching repo")
+	}
+	if matched.TitleTemplate != "override-title" {
+		t.Fatalf("expected override title, got %q", matched.TitleTemplate)
+	}
+
+	fallback, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
+		WorkspaceID:  wsID,
+		EventType:    "pull_request",
+		RepoFullName: "other/repo",
+	})
+	if err != nil {
+		t.Fatalf("lookup unmatched repo: %v", err)
+	}
+	if fallback.ID != defaultRule.ID {
+		t.Fatalf("expected default rule for unmatched repo")
+	}
+	if fallback.TitleTemplate != "default-title" {
+		t.Fatalf("expected default title, got %q", fallback.TitleTemplate)
+	}
+
+	if err := q.DeleteGitHubEventRule(ctx, defaultRule.ID); err != nil {
+		t.Fatalf("delete default rule: %v", err)
+	}
+
+	matched2, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
+		WorkspaceID:  wsID,
+		EventType:    "pull_request",
+		RepoFullName: "acme/widgets",
+	})
+	if err != nil {
+		t.Fatalf("lookup matching repo after default removed: %v", err)
+	}
+	if matched2.ID != overrideRule.ID {
+		t.Fatalf("expected override rule still matches its repo")
+	}
+
+	if _, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
+		WorkspaceID:  wsID,
+		EventType:    "pull_request",
+		RepoFullName: "other/repo",
+	}); err == nil {
+		t.Fatalf("expected no-rows error for unmatched repo with no default")
+	}
+
+	rules, err := q.ListGitHubEventRules(ctx, wsID)
+	if err != nil {
+		t.Fatalf("list rules: %v", err)
+	}
+	if len(rules) != 1 || rules[0].ID != overrideRule.ID {
+		t.Fatalf("unexpected list result after delete: %+v", rules)
+	}
+
+	if _, err := q.UpsertGitHubEventRule(ctx, db.UpsertGitHubEventRuleParams{
+		WorkspaceID:   wsID,
+		EventType:     "pull_request",
+		RepoFullName:  "",
+		AgentID:       agentID,
+		Enabled:       true,
+		TitleTemplate: "default-title",
+	}); err != nil {
+		t.Fatalf("re-insert default: %v", err)
+	}
+	rules, err = q.ListGitHubEventRules(ctx, wsID)
+	if err != nil {
+		t.Fatalf("list rules: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+	if rules[0].RepoFullName != "" || rules[1].RepoFullName != "acme/widgets" {
+		t.Fatalf("unexpected list ordering: %q then %q", rules[0].RepoFullName, rules[1].RepoFullName)
 	}
 }
