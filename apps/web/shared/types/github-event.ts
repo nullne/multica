@@ -4,6 +4,12 @@ export interface GitHubEventRule {
   id: string;
   workspace_id: string;
   event_type: GitHubEventType;
+  /**
+   * Repository this rule applies to in "owner/repo" form. Empty string means
+   * the rule is the workspace-wide default for the event type and is used as
+   * a fallback when no per-repo rule matches.
+   */
+  repo_full_name: string;
   agent_id: string;
   enabled: boolean;
   title_template: string;
@@ -17,6 +23,8 @@ export interface GitHubEventRule {
 
 export interface UpsertGitHubEventRuleRequest {
   event_type: GitHubEventType;
+  /** Empty / omitted = workspace-default rule for the event type. */
+  repo_full_name?: string;
   agent_id: string;
   enabled?: boolean;
   title_template?: string;

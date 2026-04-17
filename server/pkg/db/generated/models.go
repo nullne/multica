@@ -168,6 +168,7 @@ type GithubEventRule struct {
 	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	RepoFullName        string             `json:"repo_full_name"`
 }
 
 type InboxItem struct {

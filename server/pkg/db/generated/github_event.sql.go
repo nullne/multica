@@ -21,16 +21,25 @@ func (q *Queries) DeleteGitHubEventRule(ctx context.Context, id pgtype.UUID) err
 }
 
 const getGitHubEventRule = `-- name: GetGitHubEventRule :one
-SELECT id, workspace_id, event_type, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, created_at, updated_at FROM github_event_rule WHERE workspace_id = $1 AND event_type = $2
+SELECT id, workspace_id, event_type, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, created_at, updated_at, repo_full_name FROM github_event_rule
+WHERE workspace_id = $1
+  AND event_type = $2
+  AND repo_full_name IN ($3, '')
+ORDER BY (repo_full_name = '') ASC
+LIMIT 1
 `
 
 type GetGitHubEventRuleParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	EventType   string      `json:"event_type"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	EventType    string      `json:"event_type"`
+	RepoFullName string      `json:"repo_full_name"`
 }
 
+// Returns the most-specific enabled rule for the given event:
+//  1. Exact match on (workspace_id, event_type, repo_full_name).
+//  2. Falls back to the workspace-default rule (repo_full_name = ”).
 func (q *Queries) GetGitHubEventRule(ctx context.Context, arg GetGitHubEventRuleParams) (GithubEventRule, error) {
-	row := q.db.QueryRow(ctx, getGitHubEventRule, arg.WorkspaceID, arg.EventType)
+	row := q.db.QueryRow(ctx, getGitHubEventRule, arg.WorkspaceID, arg.EventType, arg.RepoFullName)
 	var i GithubEventRule
 	err := row.Scan(
 		&i.ID,
@@ -45,6 +54,7 @@ func (q *Queries) GetGitHubEventRule(ctx context.Context, arg GetGitHubEventRule
 		&i.DispatchDaemonLabel,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RepoFullName,
 	)
 	return i, err
 }
@@ -74,7 +84,9 @@ func (q *Queries) GetWorkspaceByInstallationID(ctx context.Context, githubInstal
 }
 
 const listGitHubEventRules = `-- name: ListGitHubEventRules :many
-SELECT id, workspace_id, event_type, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, created_at, updated_at FROM github_event_rule WHERE workspace_id = $1 ORDER BY event_type ASC
+SELECT id, workspace_id, event_type, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, created_at, updated_at, repo_full_name FROM github_event_rule
+WHERE workspace_id = $1
+ORDER BY event_type ASC, repo_full_name ASC
 `
 
 func (q *Queries) ListGitHubEventRules(ctx context.Context, workspaceID pgtype.UUID) ([]GithubEventRule, error) {
@@ -99,6 +111,7 @@ func (q *Queries) ListGitHubEventRules(ctx context.Context, workspaceID pgtype.U
 			&i.DispatchDaemonLabel,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.RepoFullName,
 		); err != nil {
 			return nil, err
 		}
@@ -111,9 +124,9 @@ func (q *Queries) ListGitHubEventRules(ctx context.Context, workspaceID pgtype.U
 }
 
 const upsertGitHubEventRule = `-- name: UpsertGitHubEventRule :one
-INSERT INTO github_event_rule (workspace_id, event_type, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-ON CONFLICT (workspace_id, event_type) DO UPDATE SET
+INSERT INTO github_event_rule (workspace_id, event_type, repo_full_name, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+ON CONFLICT (workspace_id, event_type, repo_full_name) DO UPDATE SET
     agent_id = EXCLUDED.agent_id,
     enabled = EXCLUDED.enabled,
     title_template = EXCLUDED.title_template,
@@ -122,12 +135,13 @@ ON CONFLICT (workspace_id, event_type) DO UPDATE SET
     dispatch_daemon_id = EXCLUDED.dispatch_daemon_id,
     dispatch_daemon_label = EXCLUDED.dispatch_daemon_label,
     updated_at = now()
-RETURNING id, workspace_id, event_type, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, created_at, updated_at
+RETURNING id, workspace_id, event_type, agent_id, enabled, title_template, description_template, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, created_at, updated_at, repo_full_name
 `
 
 type UpsertGitHubEventRuleParams struct {
 	WorkspaceID         pgtype.UUID `json:"workspace_id"`
 	EventType           string      `json:"event_type"`
+	RepoFullName        string      `json:"repo_full_name"`
 	AgentID             pgtype.UUID `json:"agent_id"`
 	Enabled             bool        `json:"enabled"`
 	TitleTemplate       string      `json:"title_template"`
@@ -141,6 +155,7 @@ func (q *Queries) UpsertGitHubEventRule(ctx context.Context, arg UpsertGitHubEve
 	row := q.db.QueryRow(ctx, upsertGitHubEventRule,
 		arg.WorkspaceID,
 		arg.EventType,
+		arg.RepoFullName,
 		arg.AgentID,
 		arg.Enabled,
 		arg.TitleTemplate,
@@ -163,6 +178,7 @@ func (q *Queries) UpsertGitHubEventRule(ctx context.Context, arg UpsertGitHubEve
 		&i.DispatchDaemonLabel,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.RepoFullName,
 	)
 	return i, err
 }
