@@ -60,6 +60,7 @@ import {
 import { filterIssues } from "@/features/issues/utils/filter";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import type { Issue } from "@/shared/types";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 // ---------------------------------------------------------------------------
 // HoverCheck — shadcn official pattern (PR #6862)
@@ -277,6 +278,7 @@ function ActorSubContent({
 // ---------------------------------------------------------------------------
 
 export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
+  const isMobile = useIsMobile();
   const scope = useIssuesScopeStore((s) => s.scope);
   const setScope = useIssuesScopeStore((s) => s.setScope);
 
@@ -607,41 +609,43 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
         </Popover>
 
         {/* View toggle */}
-        <DropdownMenu>
-          <Tooltip>
-            <DropdownMenuTrigger
-              render={
-                <TooltipTrigger
-                  render={
-                    <Button variant="outline" size="icon-sm" className="text-muted-foreground">
-                      {viewMode === "board" ? (
-                        <Columns3 className="size-4" />
-                      ) : (
-                        <List className="size-4" />
-                      )}
-                    </Button>
-                  }
-                />
-              }
-            />
-            <TooltipContent side="bottom">
-              {viewMode === "board" ? "Board view" : "List view"}
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="w-auto">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>View</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => act.setViewMode("board")}>
-                <Columns3 />
-                Board
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => act.setViewMode("list")}>
-                <List />
-                List
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {!isMobile && (
+          <DropdownMenu>
+            <Tooltip>
+              <DropdownMenuTrigger
+                render={
+                  <TooltipTrigger
+                    render={
+                      <Button variant="outline" size="icon-sm" className="text-muted-foreground">
+                        {viewMode === "board" ? (
+                          <Columns3 className="size-4" />
+                        ) : (
+                          <List className="size-4" />
+                        )}
+                      </Button>
+                    }
+                  />
+                }
+              />
+              <TooltipContent side="bottom">
+                {viewMode === "board" ? "Board view" : "List view"}
+              </TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="w-auto">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>View</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => act.setViewMode("board")}>
+                  <Columns3 />
+                  Board
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => act.setViewMode("list")}>
+                  <List />
+                  List
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
   );

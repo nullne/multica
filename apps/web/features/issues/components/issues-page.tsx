@@ -16,12 +16,14 @@ import { WorkspaceAvatar } from "@/features/workspace";
 import { useRuntimeStore } from "@/features/runtimes";
 import { api } from "@/shared/api";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { IssuesHeader } from "./issues-header";
 import { BoardView } from "./board-view";
 import { ListView } from "./list-view";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 
 export function IssuesPage() {
+  const isMobile = useIsMobile();
   const allIssues = useIssueStore((s) => s.issues);
   const loading = useIssueStore((s) => s.loading);
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -46,6 +48,12 @@ export function IssuesPage() {
   useEffect(() => {
     useIssueSelectionStore.getState().clear();
   }, [viewMode, scope]);
+
+  useEffect(() => {
+    if (isMobile && useIssueViewStore.getState().viewMode === "board") {
+      useIssueViewStore.getState().setViewMode("list");
+    }
+  }, [isMobile]);
 
   // Scope pre-filter: narrow by assignee type
   const scopedIssues = useMemo(() => {
