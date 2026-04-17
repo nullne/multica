@@ -12,6 +12,17 @@ on:
         required: false
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to deploy (e.g. v0.2.2)."
+        required: true
+        type: string
+      clean:
+        description: "Clean deploy: remove existing database and start fresh"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-production

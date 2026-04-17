@@ -193,15 +193,21 @@ CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL serv
   - `test(scope): ...`
   - `chore(scope): ...`
 
-## CLI Release
+## Release & Production Deploy
 
-**Prerequisite:** A CLI release must accompany every Production deployment. When deploying to Production, always release a new CLI version as part of the process.
+Pushing a `v*` tag on `main` is the single action that ships a release **and** deploys it to production. There is no separate manual deploy step.
 
 1. Create a tag on the `main` branch: `git tag v0.x.x`
 2. Push the tag: `git push origin v0.x.x`
-3. GitHub Actions automatically triggers `release.yml`: runs Go tests → GoReleaser builds multi-platform binaries → publishes to GitHub Releases + Homebrew tap
+3. GitHub Actions runs `release.yml`, which:
+   - Runs Go tests
+   - GoReleaser builds multi-platform binaries → publishes to GitHub Releases + Homebrew tap
+   - Builds and pushes backend + frontend Docker images to ghcr.io
+   - Calls `deploy.yml` to deploy that exact tag to the `prod` environment
 
 By default, bump the patch version each release (e.g. `v0.1.12` → `v0.1.13`), unless the user specifies a specific version.
+
+`deploy.yml` is still runnable manually via "Run workflow" for one-off needs (rollback to an older tag, redeploy without rebuilding, or `clean: true` to wipe the database and start fresh).
 
 ## Minimum Pre-Push Checks
 

@@ -101,3 +101,10 @@ jobs:
           build-args: |
             VERSION=${{ steps.version.outputs.value }}
             COMMIT=${{ github.sha }}
+
+  deploy:
+    needs: [cli, images]
+    uses: ./.github/workflows/deploy.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit
