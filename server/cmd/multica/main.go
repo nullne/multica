@@ -32,6 +32,7 @@ func init() {
 	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(issueCmd)
+	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(updateCmd)
