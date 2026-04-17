@@ -215,7 +215,6 @@ type Issue struct {
 	DispatchProvider      pgtype.Text        `json:"dispatch_provider"`
 	DispatchDaemonID      pgtype.UUID        `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   pgtype.Text        `json:"dispatch_daemon_label"`
-	DispatchEnv           []byte             `json:"dispatch_env"`
 }
 
 type IssueDependency struct {
