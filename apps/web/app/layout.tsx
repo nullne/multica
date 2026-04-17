@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { AuthInitializer } from "@/features/auth";
 import { WSProvider } from "@/features/realtime";
 import { ModalRegistry } from "@/features/modals";
+import { ServiceWorkerRegistration } from "@/components/pwa/service-worker-registration";
 import "./globals.css";
 
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
@@ -23,15 +24,26 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://www.multica.ai"),
+  manifest: "/manifest.webmanifest",
   title: {
     default: "Multica — AI-Native Task Management",
     template: "%s | Multica",
   },
   description:
     "Open-source platform that turns coding agents into real teammates. Assign tasks, track progress, compound skills.",
+  applicationName: "Multica",
   icons: {
     icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
     shortcut: ["/favicon.svg"],
+    apple: [{ url: "/apple-icon", sizes: "180x180", type: "image/png" }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Multica",
+    statusBarStyle: "default",
+  },
+  formatDetection: {
+    telephone: false,
   },
   openGraph: {
     type: "website",
@@ -47,6 +59,9 @@ export const metadata: Metadata = {
   robots: {
     index: true,
     follow: true,
+  },
+  other: {
+    "mobile-web-app-capable": "yes",
   },
 };
 
@@ -65,13 +80,14 @@ export default async function RootLayout({
       suppressHydrationWarning
       className={cn("antialiased font-sans h-full", geist.variable, geistMono.variable)}
     >
-      <body className="h-full overflow-hidden">
+      <body className="min-h-dvh overflow-hidden">
         <ThemeProvider>
           <AuthInitializer>
             <WSProvider>{children}</WSProvider>
           </AuthInitializer>
           <ModalRegistry />
           <Toaster />
+          <ServiceWorkerRegistration />
         </ThemeProvider>
       </body>
     </html>
