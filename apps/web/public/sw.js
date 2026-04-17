@@ -1,7 +1,5 @@
-const CACHE_NAME = "multica-shell-v1";
+const CACHE_NAME = "multica-shell-v2";
 const APP_SHELL_ASSETS = [
-  "/",
-  "/issues",
   "/offline",
   "/manifest.webmanifest",
   "/favicon.svg",
@@ -9,6 +7,45 @@ const APP_SHELL_ASSETS = [
   "/pwa-icons/192",
   "/pwa-icons/512",
 ];
+const STATIC_DESTINATIONS = new Set(["style", "script", "image", "font"]);
+
+function isCacheableStaticAsset(request, url) {
+  if (request.method !== "GET") {
+    return false;
+  }
+
+  if (url.origin !== self.location.origin) {
+    return false;
+  }
+
+  if (request.mode === "navigate") {
+    return false;
+  }
+
+  if (url.pathname.startsWith("/api/")) {
+    return false;
+  }
+
+  if (url.pathname.startsWith("/auth/")) {
+    return false;
+  }
+
+  if (url.pathname.startsWith("/_next/data/")) {
+    return false;
+  }
+
+  if (STATIC_DESTINATIONS.has(request.destination)) {
+    return true;
+  }
+
+  return (
+    url.pathname.startsWith("/_next/static/") ||
+    url.pathname.startsWith("/pwa-icons/") ||
+    url.pathname === "/manifest.webmanifest" ||
+    url.pathname === "/favicon.svg" ||
+    url.pathname === "/apple-icon"
+  );
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -41,17 +78,12 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(async () => {
-        return (
-          (await caches.match(request)) ||
-          (await caches.match("/offline"))
-        );
-      }),
+      fetch(request).catch(async () => caches.match("/offline")),
     );
     return;
   }
 
-  if (url.origin !== self.location.origin) {
+  if (!isCacheableStaticAsset(request, url)) {
     return;
   }
 
