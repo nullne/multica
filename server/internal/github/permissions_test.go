@@ -2,39 +2,61 @@ package github
 
 import "testing"
 
-func TestPermissionsForCodeAccess_Read(t *testing.T) {
-	perms := PermissionsForCodeAccess(CodeAccessRead)
+// TestPermissionsForCodeAccess_Matrix asserts the full permission matrix
+// for every supported code access level. See PermissionsForCodeAccess for
+// the rationale; pull_requests=write is intentionally admin-only.
+func TestPermissionsForCodeAccess_Matrix(t *testing.T) {
+	cases := []struct {
+		level string
+		want  map[string]string
+	}{
+		{
+			level: CodeAccessRead,
+			want: map[string]string{
+				"contents":      PermRead,
+				"pull_requests": PermRead,
+				"issues":        PermWrite,
+				"checks":        PermRead,
+				"statuses":      PermRead,
+				"metadata":      PermRead,
+			},
+		},
+		{
+			level: CodeAccessWrite,
+			want: map[string]string{
+				"contents":      PermWrite,
+				"pull_requests": PermRead,
+				"issues":        PermWrite,
+				"checks":        PermRead,
+				"statuses":      PermRead,
+				"metadata":      PermRead,
+			},
+		},
+		{
+			level: CodeAccessAdmin,
+			want: map[string]string{
+				"contents":      PermWrite,
+				"pull_requests": PermWrite,
+				"issues":        PermWrite,
+				"checks":        PermRead,
+				"statuses":      PermRead,
+				"metadata":      PermRead,
+			},
+		},
+	}
 
-	if perms["contents"] != PermRead {
-		t.Errorf("expected contents=read, got %q", perms["contents"])
-	}
-	if perms["issues"] != PermWrite {
-		t.Errorf("expected issues=write, got %q", perms["issues"])
-	}
-	if perms["pull_requests"] != PermWrite {
-		t.Errorf("expected pull_requests=write, got %q", perms["pull_requests"])
-	}
-	if perms["checks"] != PermRead {
-		t.Errorf("expected checks=read, got %q", perms["checks"])
-	}
-}
-
-func TestPermissionsForCodeAccess_Write(t *testing.T) {
-	perms := PermissionsForCodeAccess(CodeAccessWrite)
-
-	if perms["contents"] != PermWrite {
-		t.Errorf("expected contents=write, got %q", perms["contents"])
-	}
-	if perms["issues"] != PermWrite {
-		t.Errorf("base permission issues should be write, got %q", perms["issues"])
-	}
-}
-
-func TestPermissionsForCodeAccess_Admin(t *testing.T) {
-	perms := PermissionsForCodeAccess(CodeAccessAdmin)
-
-	if perms["contents"] != PermWrite {
-		t.Errorf("expected contents=write for admin, got %q", perms["contents"])
+	for _, tc := range cases {
+		t.Run(tc.level, func(t *testing.T) {
+			got := PermissionsForCodeAccess(tc.level)
+			for key, want := range tc.want {
+				if got[key] != want {
+					t.Errorf("level=%s: %s = %q, want %q", tc.level, key, got[key], want)
+				}
+			}
+			if len(got) != len(tc.want) {
+				t.Errorf("level=%s: got %d perms, want %d (got=%v)", tc.level, len(got), len(tc.want), got)
+			}
+		})
 	}
 }
 
@@ -43,6 +65,9 @@ func TestPermissionsForCodeAccess_Unknown(t *testing.T) {
 
 	if perms["contents"] != PermRead {
 		t.Errorf("unknown level should default to contents=read, got %q", perms["contents"])
+	}
+	if perms["pull_requests"] != PermRead {
+		t.Errorf("unknown level should leave pull_requests=read, got %q", perms["pull_requests"])
 	}
 }
 
