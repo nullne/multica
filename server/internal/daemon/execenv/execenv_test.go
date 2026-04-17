@@ -895,12 +895,24 @@ func TestInjectRuntimeConfig_GitHubCodeAccess(t *testing.T) {
 
 	tests := []struct {
 		level    string
-		contains string
-		absent   string
+		contains []string
+		absent   []string
 	}{
-		{"read", "read-only", "MUST NOT"},
-		{"write", "MUST NOT", "full access"},
-		{"admin", "full access", "MUST NOT"},
+		{
+			level:    "read",
+			contains: []string{"read-only"},
+			absent:   []string{"push branches", "full access"},
+		},
+		{
+			level:    "write",
+			contains: []string{"push branches", "cannot"},
+			absent:   []string{"full access"},
+		},
+		{
+			level:    "admin",
+			contains: []string{"full access", "merge"},
+			absent:   []string{"read-only", "cannot"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -923,11 +935,15 @@ func TestInjectRuntimeConfig_GitHubCodeAccess(t *testing.T) {
 			if !strings.Contains(s, "## GitHub Access") {
 				t.Error("should contain GitHub Access section")
 			}
-			if !strings.Contains(s, tt.contains) {
-				t.Errorf("should contain %q for level=%s", tt.contains, tt.level)
+			for _, want := range tt.contains {
+				if !strings.Contains(s, want) {
+					t.Errorf("should contain %q for level=%s", want, tt.level)
+				}
 			}
-			if tt.absent != "" && tt.level != "write" && strings.Contains(s, tt.absent) {
-				t.Errorf("should not contain %q for level=%s", tt.absent, tt.level)
+			for _, unwanted := range tt.absent {
+				if strings.Contains(s, unwanted) {
+					t.Errorf("should not contain %q for level=%s", unwanted, tt.level)
+				}
 			}
 		})
 	}

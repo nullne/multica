@@ -1296,8 +1296,8 @@ function SettingsTab({
         <div className="mt-1.5 flex gap-2">
           {([
             { value: "read", label: "Read", desc: "Read-only code access" },
-            { value: "write", label: "Write", desc: "Push code, create PRs" },
-            { value: "admin", label: "Admin", desc: "Push, create & merge PRs" },
+            { value: "write", label: "Write", desc: "Push branches (PRs opened by reviewer)" },
+            { value: "admin", label: "Admin", desc: "Push, open & merge PRs" },
           ] as const).map((opt) => (
             <button
               key={opt.value}
