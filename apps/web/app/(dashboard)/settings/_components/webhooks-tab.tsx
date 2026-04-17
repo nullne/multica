@@ -38,7 +38,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { api } from "@/shared/api";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useWorkspaceStore } from "@/features/workspace";
+import { useLabelStore } from "@/features/labels";
+import type { Label as IssueLabel } from "@/shared/types";
 
 export function WebhooksTab() {
   const [webhooks, setWebhooks] = useState<WebhookWithActions[]>([]);
@@ -443,6 +446,12 @@ function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onR
                     <code className="break-all">{primaryConfig.description_template}</code>
                   </div>
                 )}
+                {primaryConfig.labels && primaryConfig.labels.length > 0 && (
+                  <div className="flex gap-2">
+                    <span className="font-medium w-28 shrink-0">Labels:</span>
+                    <WebhookLabelDisplay labelIds={primaryConfig.labels} />
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -468,9 +477,11 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
   const [dispatchDaemonId, setDispatchDaemonId] = useState("");
   const [titleTemplate, setTitleTemplate] = useState("");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
+  const [selectedLabels, setSelectedLabels] = useState<IssueLabel[]>([]);
   const [creating, setCreating] = useState(false);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [showSchema, setShowSchema] = useState(false);
+  const allLabels = useLabelStore((s) => s.labels);
 
   const activeAgents = agents.filter((a: Agent) => !a.archived_at);
   const selectedAgent = activeAgents.find((a) => a.id === agentId);
@@ -498,6 +509,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
         agent_id: agentId,
         title_template: titleTemplate || undefined,
         description_template: descriptionTemplate || undefined,
+        labels: selectedLabels.length > 0 ? selectedLabels.map((l) => l.id) : undefined,
         dispatch_provider: dispatchProvider || undefined,
         dispatch_daemon_id: dispatchDaemonId || undefined,
       });
@@ -511,6 +523,7 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
       setDispatchDaemonId("");
       setTitleTemplate("");
       setDescriptionTemplate("");
+      setSelectedLabels([]);
       setShowSchema(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create webhook");
@@ -671,6 +684,10 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
                   <Label htmlFor="wh-desc-tmpl">Issue Description Template <span className="text-muted-foreground">(optional, defaults to event body)</span></Label>
                   <Textarea id="wh-desc-tmpl" value={descriptionTemplate} onChange={(e) => setDescriptionTemplate(e.target.value)} placeholder="e.g. {{.body}}" rows={2} />
                 </div>
+                <div className="space-y-1.5">
+                  <Label>Labels <span className="text-muted-foreground">(optional)</span></Label>
+                  <WebhookLabelPicker labels={allLabels} selected={selectedLabels} onChange={setSelectedLabels} />
+                </div>
               </>
             )}
           </div>
@@ -701,9 +718,11 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
   const [dispatchDaemonId, setDispatchDaemonId] = useState("");
   const [titleTemplate, setTitleTemplate] = useState("");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
+  const [selectedLabels, setSelectedLabels] = useState<IssueLabel[]>([]);
   const [saving, setSaving] = useState(false);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [showSchema, setShowSchema] = useState(false);
+  const allLabels = useLabelStore((s) => s.labels);
 
   const activeAgents = agents.filter((a: Agent) => !a.archived_at);
   const selectedAgent = activeAgents.find((a) => a.id === agentId);
@@ -721,6 +740,9 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
         setDispatchDaemonId(cfg.dispatch_daemon_id || "");
         setTitleTemplate(cfg.title_template || "");
         setDescriptionTemplate(cfg.description_template || "");
+        const labelIds = cfg.labels || [];
+        const resolved = useLabelStore.getState().labels.filter((l) => labelIds.includes(l.id));
+        setSelectedLabels(resolved);
       }
       api.listWebhookAdapters().then(setAdapters).catch(() => {});
     }
@@ -743,7 +765,7 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
           agent_id: agentId,
           title_template: titleTemplate,
           description_template: descriptionTemplate,
-          labels: (action.config as CreateIssueActionConfig).labels || [],
+          labels: selectedLabels.map((l) => l.id),
           dispatch_provider: dispatchProvider || undefined,
           dispatch_daemon_id: dispatchDaemonId || undefined,
           dispatch_daemon_label: undefined,
@@ -913,6 +935,10 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
                   <Label htmlFor="edit-wh-desc-tmpl">Issue Description Template <span className="text-muted-foreground">(optional, defaults to event body)</span></Label>
                   <Textarea id="edit-wh-desc-tmpl" value={descriptionTemplate} onChange={(e) => setDescriptionTemplate(e.target.value)} placeholder="e.g. {{.body}}" rows={2} />
                 </div>
+                <div className="space-y-1.5">
+                  <Label>Labels <span className="text-muted-foreground">(optional)</span></Label>
+                  <WebhookLabelPicker labels={allLabels} selected={selectedLabels} onChange={setSelectedLabels} />
+                </div>
               </>
             )}
           </div>
@@ -925,5 +951,102 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function WebhookLabelPicker({ labels, selected, onChange }: {
+  labels: IssueLabel[];
+  selected: IssueLabel[];
+  onChange: (labels: IssueLabel[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const toggle = (label: IssueLabel) => {
+    onChange(
+      selected.some((l) => l.id === label.id)
+        ? selected.filter((l) => l.id !== label.id)
+        : [...selected, label],
+    );
+  };
+
+  const filtered = labels.filter((l) => l.name.toLowerCase().includes(filter.toLowerCase()));
+
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setFilter(""); }}>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className="flex flex-wrap items-center gap-1 rounded-md border bg-transparent px-3 py-2 text-sm min-h-9 w-full text-left hover:bg-accent/50 transition-colors"
+          >
+            {selected.length > 0 ? (
+              selected.map((l) => (
+                <span
+                  key={l.id}
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+                  style={{ backgroundColor: l.color + "20" }}
+                >
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
+                  {l.name}
+                </span>
+              ))
+            ) : (
+              <span className="text-muted-foreground">Select labels...</span>
+            )}
+          </button>
+        }
+      />
+      <PopoverContent align="start" className="w-52 p-0">
+        <div className="px-2 py-1.5 border-b">
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter labels..."
+            className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
+          />
+        </div>
+        <div className="p-1 max-h-60 overflow-y-auto">
+          {filtered.map((label) => (
+            <button
+              key={label.id}
+              type="button"
+              onClick={() => toggle(label)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+            >
+              <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: label.color }} />
+              <span className="flex-1 text-left truncate">{label.name}</span>
+              {selected.some((l) => l.id === label.id) && (
+                <Check className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              )}
+            </button>
+          ))}
+          {labels.length === 0 && (
+            <div className="px-2 py-3 text-center text-sm text-muted-foreground">No labels yet</div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function WebhookLabelDisplay({ labelIds }: { labelIds: string[] }) {
+  const allLabels = useLabelStore((s) => s.labels);
+  const resolved = labelIds.map((id) => allLabels.find((l) => l.id === id)).filter((l): l is IssueLabel => !!l);
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {resolved.map((l) => (
+        <span
+          key={l.id}
+          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
+          style={{ backgroundColor: l.color + "20" }}
+        >
+          <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
+          {l.name}
+        </span>
+      ))}
+    </div>
   );
 }

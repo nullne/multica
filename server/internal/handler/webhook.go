@@ -801,6 +801,16 @@ func (h *Handler) executeCreateIssueAction(r *http.Request, webhook db.Webhook, 
 		return pgtype.UUID{}, err
 	}
 
+	for _, labelID := range cfg.Labels {
+		lid := parseUUID(labelID)
+		if lid.Valid {
+			_ = qtx.AddLabelToIssue(r.Context(), db.AddLabelToIssueParams{
+				IssueID: issue.ID,
+				LabelID: lid,
+			})
+		}
+	}
+
 	if err := tx.Commit(r.Context()); err != nil {
 		return pgtype.UUID{}, err
 	}
