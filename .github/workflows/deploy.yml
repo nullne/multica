@@ -116,6 +116,7 @@ jobs:
           CLOUDFRONT_PRIVATE_KEY=${{ secrets.CLOUDFRONT_PRIVATE_KEY }}
           MULTICA_GITHUB_APP_ID=${{ vars.MULTICA_GITHUB_APP_ID }}
           MULTICA_GITHUB_APP_SLUG=${{ vars.MULTICA_GITHUB_APP_SLUG }}
+          MULTICA_GITHUB_APP_WEBHOOK_SECRET=${{ secrets.MULTICA_GITHUB_APP_WEBHOOK_SECRET }}
           LISTEN_PORT=${{ vars.LISTEN_PORT || '80' }}
           PGDATA_DIR=${{ vars.PGDATA_DIR || './data/postgres' }}
           IMAGE_TAG=${{ needs.verify.outputs.version }}

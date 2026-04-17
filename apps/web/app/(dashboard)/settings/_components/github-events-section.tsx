@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { GitBranch, ChevronDown, ChevronRight, Plus } from "lucide-react";
-import type { GitHubEventRule, GitHubEventType, Agent, Daemon } from "@/shared/types";
+import type { GitHubEventRule, GitHubEventType, Agent, Daemon, WorkspaceRepo } from "@/shared/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -57,6 +57,20 @@ const EVENT_TYPES: EventTypeConfig[] = [
 ];
 
 const REPO_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+function extractRepoFullName(url: string): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.replace(/^\//, "").replace(/\.git$/, "").split("/");
+    if (parts.length >= 2 && parts[0] && parts[1]) {
+      return `${parts[0]}/${parts[1]}`;
+    }
+  } catch {
+    // not a valid URL
+  }
+  return null;
+}
 
 export function GitHubEventsSection() {
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -129,6 +143,7 @@ export function GitHubEventsSection() {
               rules={rulesByType(et.type)}
               agents={agents}
               daemons={daemons}
+              repos={workspace.repos ?? []}
               workspaceId={workspace.id}
               onUpdated={loadRules}
             />
@@ -144,6 +159,7 @@ function EventTypeCard({
   rules,
   agents,
   daemons,
+  repos,
   workspaceId,
   onUpdated,
 }: {
@@ -151,6 +167,7 @@ function EventTypeCard({
   rules: GitHubEventRule[];
   agents: Agent[];
   daemons: Daemon[];
+  repos: WorkspaceRepo[];
   workspaceId: string;
   onUpdated: () => Promise<void>;
 }) {
@@ -269,6 +286,8 @@ function EventTypeCard({
               rule={defaultRule}
               agents={agents}
               daemons={daemons}
+              repos={repos}
+              existingOverrideRepos={overrideRules.map((r) => r.repo_full_name)}
               workspaceId={workspaceId}
               onUpdated={onUpdated}
             />
@@ -281,6 +300,8 @@ function EventTypeCard({
                 rule={rule}
                 agents={agents}
                 daemons={daemons}
+                repos={repos}
+                existingOverrideRepos={overrideRules.map((r) => r.repo_full_name)}
                 workspaceId={workspaceId}
                 onUpdated={onUpdated}
               />
@@ -294,6 +315,8 @@ function EventTypeCard({
                 rule={null}
                 agents={agents}
                 daemons={daemons}
+                repos={repos}
+                existingOverrideRepos={overrideRules.map((r) => r.repo_full_name)}
                 workspaceId={workspaceId}
                 onUpdated={async () => {
                   removeDraft(draft.id);
@@ -322,6 +345,8 @@ function RuleEditor({
   rule,
   agents,
   daemons,
+  repos,
+  existingOverrideRepos,
   workspaceId,
   onUpdated,
   onCancel,
@@ -331,6 +356,8 @@ function RuleEditor({
   rule: GitHubEventRule | null;
   agents: Agent[];
   daemons: Daemon[];
+  repos: WorkspaceRepo[];
+  existingOverrideRepos: string[];
   workspaceId: string;
   onUpdated: () => Promise<void>;
   onCancel?: () => void;
@@ -355,8 +382,26 @@ function RuleEditor({
   }, [rule]);
 
   const activeAgents = agents.filter((a) => !a.archived_at);
+  const activeDaemons = daemons.filter((d) => !d.archived_at);
   const isOverride = variant === "override";
   const isExisting = rule !== null;
+
+  const repoOptions = (() => {
+    const seen = new Set<string>();
+    const options: string[] = [];
+    for (const r of repos) {
+      const full = extractRepoFullName(r.url);
+      if (full && !seen.has(full)) {
+        seen.add(full);
+        options.push(full);
+      }
+    }
+    return options;
+  })();
+  const takenRepos = new Set(existingOverrideRepos);
+  const availableRepoOptions = repoOptions.filter(
+    (r) => !takenRepos.has(r) || r === rule?.repo_full_name,
+  );
 
   const handleSave = async () => {
     if (!agentId) {
@@ -448,17 +493,52 @@ function RuleEditor({
       {isOverride && (
         <div className="space-y-1.5">
           <Label className="text-xs">Repository</Label>
-          <Input
-            className="h-8 text-xs font-mono"
-            placeholder="owner/repo"
-            value={repoFullName}
-            onChange={(e) => setRepoFullName(e.target.value)}
-            disabled={saving || isExisting}
-          />
-          {isExisting && (
-            <p className="text-[11px] text-muted-foreground">
-              Repository name cannot be changed. Remove this override and add a new one to retarget.
-            </p>
+          {isExisting ? (
+            <>
+              <Input
+                className="h-8 text-xs font-mono"
+                value={repoFullName}
+                disabled
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Repository name cannot be changed. Remove this override and add a new one to retarget.
+              </p>
+            </>
+          ) : repoOptions.length === 0 ? (
+            <>
+              <Input
+                className="h-8 text-xs font-mono"
+                placeholder="owner/repo"
+                value={repoFullName}
+                onChange={(e) => setRepoFullName(e.target.value)}
+                disabled={saving}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                No repositories configured. Add them in the Repositories tab to pick from a list.
+              </p>
+            </>
+          ) : (
+            <>
+              <Select value={repoFullName} onValueChange={(v) => { if (v) setRepoFullName(v); }}>
+                <SelectTrigger className="h-8 text-xs font-mono w-full">
+                  <SelectValue placeholder="Select repository...">
+                    {repoFullName || "Select repository..."}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {availableRepoOptions.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      <span className="font-mono">{r}</span>
+                    </SelectItem>
+                  ))}
+                  {availableRepoOptions.length === 0 && (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      All configured repos already have an override.
+                    </div>
+                  )}
+                </SelectContent>
+              </Select>
+            </>
           )}
         </div>
       )}
@@ -466,8 +546,10 @@ function RuleEditor({
       <div className="space-y-1.5">
         <Label className="text-xs">Agent</Label>
         <Select value={agentId} onValueChange={(v) => { if (v) setAgentId(v); }}>
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue placeholder="Select agent..." />
+          <SelectTrigger className="h-8 text-xs w-full">
+            <SelectValue placeholder="Select agent...">
+              {agentId ? agentName(agents, agentId) : "Select agent..."}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {activeAgents.map((a) => (
@@ -485,12 +567,14 @@ function RuleEditor({
           value={dispatchDaemonId || "__auto__"}
           onValueChange={(v) => setDispatchDaemonId(v === "__auto__" ? "" : v ?? "")}
         >
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue placeholder="Auto (agent default)" />
+          <SelectTrigger className="h-8 text-xs w-full">
+            <SelectValue placeholder="Auto (agent default)">
+              {dispatchDaemonId ? daemonName(dispatchDaemonId) : "Auto (agent default)"}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__auto__">Auto (agent default)</SelectItem>
-            {daemons.filter((d) => !d.archived_at).map((d) => (
+            {activeDaemons.map((d) => (
               <SelectItem key={d.id} value={d.id}>
                 {daemonName(d.id)}
               </SelectItem>
