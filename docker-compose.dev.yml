@@ -40,6 +40,8 @@ services:
       FRONTEND_ORIGIN: http://localhost:${FRONTEND_PORT:-3000}
       CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_PORT:-3000}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
+      # Enables the /auth/dev bypass used by seed-dev.sh and E2E tests.
+      DEV_AUTH_BYPASS: "1"
     ports:
       - "${PORT:-8080}:8080"
     volumes:

@@ -42,6 +42,7 @@ services:
       JWT_SECRET: test-secret
       FRONTEND_ORIGIN: http://frontend:3000
       LOG_LEVEL: warn
+      DEV_AUTH_BYPASS: "1"
       <<: *no-proxy
     volumes:
       - ./server:/app/server
