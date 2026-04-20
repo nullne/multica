@@ -8,8 +8,9 @@ import pg from "pg";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.PORT ?? "8080"}`;
 const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://multica:multica@localhost:5432/multica?sslmode=disable";
+const TEST_FIREBASE_ID_TOKEN = process.env.TEST_FIREBASE_ID_TOKEN ?? "";
 
-// Cache tokens by email to avoid rate-limit issues when multiple tests login with the same email.
+// Cache tokens by email to avoid repeated Firebase logins across tests.
 const tokenCache = new Map<string, { token: string; workspaceId: string }>();
 
 interface TestWorkspace {
@@ -27,7 +28,7 @@ export class TestApiClient {
   async login(email: string, name: string) {
     this.email = email;
 
-    // Reuse cached token to avoid send-code rate limits across tests.
+    // Reuse cached token to avoid repeated auth round-trips across tests.
     const cached = tokenCache.get(email);
     if (cached) {
       this.token = cached.token;
@@ -35,59 +36,35 @@ export class TestApiClient {
       return { token: cached.token };
     }
 
-    // Step 1: Send verification code (retry on 429 rate limit)
-    let sendOk = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const sendRes = await fetch(`${API_BASE}/auth/send-code`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      if (sendRes.ok) { sendOk = true; break; }
-      if (sendRes.status === 429) {
-        await new Promise((r) => setTimeout(r, 10_500));
-        continue;
-      }
-      throw new Error(`send-code failed: ${sendRes.status}`);
-    }
-    if (!sendOk) {
-      throw new Error(`send-code rate limited after 3 retries for ${email}`);
+    if (!TEST_FIREBASE_ID_TOKEN) {
+      throw new Error("TEST_FIREBASE_ID_TOKEN is required for E2E login");
     }
 
-    // Step 2: Read code from database
+    const loginRes = await fetch(`${API_BASE}/auth/firebase`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id_token: TEST_FIREBASE_ID_TOKEN }),
+    });
+    const data = await loginRes.json();
+    if (!loginRes.ok || !data.token) {
+      throw new Error(`firebase login failed: ${loginRes.status}`);
+    }
+    this.token = data.token;
+
     const client = new pg.Client(DATABASE_URL);
     await client.connect();
     try {
-      const result = await client.query(
-        "SELECT code FROM verification_code WHERE email = $1 AND used = FALSE AND expires_at > now() ORDER BY created_at DESC LIMIT 1",
-        [email]
-      );
-      if (result.rows.length === 0) {
-        throw new Error(`No verification code found for ${email}`);
-      }
-      const code = result.rows[0].code;
-
-      // Step 3: Verify code to get JWT
-      const verifyRes = await fetch(`${API_BASE}/auth/verify-code`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code }),
-      });
-      const data = await verifyRes.json();
-      this.token = data.token;
-
-      // Update user name if needed
       if (name && data.user?.name !== name) {
         await this.authedFetch("/api/me", {
           method: "PATCH",
           body: JSON.stringify({ name }),
         });
       }
-
-      return data;
     } finally {
       await client.end();
     }
+
+    return data;
   }
 
   async getWorkspaces(): Promise<TestWorkspace[]> {

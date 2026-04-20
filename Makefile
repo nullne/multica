@@ -28,7 +28,6 @@ MULTICA_APP_URL   ?= $(FRONTEND_ORIGIN)
 DATABASE_URL      ?= postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@localhost:$(POSTGRES_PORT)/$(POSTGRES_DB)?sslmode=disable
 NEXT_PUBLIC_API_URL ?= http://localhost:$(PORT)
 NEXT_PUBLIC_WS_URL  ?= ws://localhost:$(PORT)/ws
-GOOGLE_REDIRECT_URI ?= $(FRONTEND_ORIGIN)/auth/callback
 MULTICA_SERVER_URL  ?= ws://localhost:$(PORT)
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -186,4 +185,3 @@ migrate-down: ## Rollback database migrations
 
 sqlc: ## Regenerate sqlc Go code from SQL queries
 	@cd server && sqlc generate
-

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nullne/multica/server/internal/auth"
 	"github.com/nullne/multica/server/internal/events"
 	"github.com/nullne/multica/server/internal/realtime"
-	"github.com/nullne/multica/server/internal/service"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
+
+type stubFirebaseVerifier struct {
+	identity *auth.FirebaseIdentity
+	err      error
+}
+
+func (s stubFirebaseVerifier) VerifyIDToken(context.Context, string) (*auth.FirebaseIdentity, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.identity, nil
+}
 
 var testHandler *Handler
 var testPool *pgxpool.Pool
@@ -52,8 +65,7 @@ func TestMain(m *testing.M) {
 	hub := realtime.NewHub()
 	go hub.Run()
 	bus := events.New()
-	emailSvc := service.NewEmailService()
-	testHandler = New(queries, pool, hub, bus, emailSvc, nil, nil, nil)
+	testHandler = New(queries, pool, hub, bus, nil, nil, nil)
 	testPool = pool
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
@@ -453,65 +465,19 @@ func TestWorkspaceCRUD(t *testing.T) {
 	}
 }
 
-func TestSendCode(t *testing.T) {
-	w := httptest.NewRecorder()
-	body := map[string]string{"email": "sendcode-test@multica.ai"}
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("SendCode: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["message"] == "" {
-		t.Fatal("SendCode: expected non-empty message")
-	}
-
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM verification_code WHERE email = $1`, "sendcode-test@multica.ai")
-	})
-}
-
-func TestSendCodeRateLimit(t *testing.T) {
-	const email = "ratelimit-test@multica.ai"
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM verification_code WHERE email = $1`, email)
-	})
-
-	// First request should succeed
-	w := httptest.NewRecorder()
-	body := map[string]string{"email": email}
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(body)
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("SendCode (first): expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Second request within 60s should be rate limited
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(body)
-	req = httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("SendCode (second): expected 429, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestVerifyCode(t *testing.T) {
-	const email = "verify-test@multica.ai"
+func TestLoginWithFirebase(t *testing.T) {
+	const email = "firebase-login-test@multica.ai"
 	ctx := context.Background()
+	originalVerifier := testHandler.FirebaseVerifier
+	testHandler.FirebaseVerifier = stubFirebaseVerifier{
+		identity: &auth.FirebaseIdentity{
+			Email: email,
+			Name:  "Firebase Login Test",
+		},
+	}
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
+		testHandler.FirebaseVerifier = originalVerifier
 		user, err := testHandler.Queries.GetUserByEmail(ctx, email)
 		if err == nil {
 			workspaces, listErr := testHandler.Queries.ListWorkspaces(ctx, user.ID)
@@ -524,128 +490,57 @@ func TestVerifyCode(t *testing.T) {
 		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
 	})
 
-	// Send code first
 	w := httptest.NewRecorder()
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
+	json.NewEncoder(&buf).Encode(map[string]string{"id_token": "firebase-token"})
+	req := httptest.NewRequest("POST", "/auth/firebase", &buf)
 	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
+	testHandler.LoginWithFirebase(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("SendCode: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Read code from DB
-	dbCode, err := testHandler.Queries.GetLatestVerificationCode(ctx, email)
-	if err != nil {
-		t.Fatalf("GetLatestVerificationCode: %v", err)
-	}
-
-	// Verify with correct code
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": dbCode.Code})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("VerifyCode: expected 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("LoginWithFirebase: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var resp LoginResponse
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Token == "" {
-		t.Fatal("VerifyCode: expected non-empty token")
+		t.Fatal("LoginWithFirebase: expected non-empty token")
 	}
 	if resp.User.Email != email {
-		t.Fatalf("VerifyCode: expected email '%s', got '%s'", email, resp.User.Email)
+		t.Fatalf("LoginWithFirebase: expected email '%s', got '%s'", email, resp.User.Email)
 	}
 }
 
-func TestVerifyCodeWrongCode(t *testing.T) {
-	const email = "wrong-code-test@multica.ai"
-	ctx := context.Background()
-
+func TestLoginWithFirebaseRejectsInvalidToken(t *testing.T) {
+	originalVerifier := testHandler.FirebaseVerifier
+	testHandler.FirebaseVerifier = stubFirebaseVerifier{err: errors.New("invalid token")}
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
+		testHandler.FirebaseVerifier = originalVerifier
 	})
 
-	// Send code
 	w := httptest.NewRecorder()
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
+	json.NewEncoder(&buf).Encode(map[string]string{"id_token": "bad-token"})
+	req := httptest.NewRequest("POST", "/auth/firebase", &buf)
 	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-
-	// Verify with wrong code
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "000000"})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("VerifyCode (wrong code): expected 400, got %d: %s", w.Code, w.Body.String())
+	testHandler.LoginWithFirebase(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("LoginWithFirebase: expected 401, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestVerifyCodeBruteForceProtection(t *testing.T) {
-	const email = "bruteforce-test@multica.ai"
+func TestLoginWithFirebaseCreatesWorkspace(t *testing.T) {
+	const email = "firebase-workspace-test@multica.ai"
 	ctx := context.Background()
+	originalVerifier := testHandler.FirebaseVerifier
+	testHandler.FirebaseVerifier = stubFirebaseVerifier{
+		identity: &auth.FirebaseIdentity{
+			Email: email,
+			Name:  "Workspace Provision Test",
+		},
+	}
 
 	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
-	})
-
-	// Send code
-	w := httptest.NewRecorder()
-	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("SendCode: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	// Read actual code so we can try it after lockout
-	dbCode, err := testHandler.Queries.GetLatestVerificationCode(ctx, email)
-	if err != nil {
-		t.Fatalf("GetLatestVerificationCode: %v", err)
-	}
-
-	// Exhaust all 5 attempts with wrong codes
-	for i := 0; i < 5; i++ {
-		w = httptest.NewRecorder()
-		buf.Reset()
-		json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "000000"})
-		req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-		req.Header.Set("Content-Type", "application/json")
-		testHandler.VerifyCode(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Fatalf("attempt %d: expected 400, got %d", i+1, w.Code)
-		}
-	}
-
-	// Now even the correct code should be rejected (code is locked out)
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": dbCode.Code})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("after lockout: expected 400, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-func TestVerifyCodeCreatesWorkspace(t *testing.T) {
-	const email = "workspace-verify-test@multica.ai"
-	ctx := context.Background()
-
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
+		testHandler.FirebaseVerifier = originalVerifier
 		user, err := testHandler.Queries.GetUserByEmail(ctx, email)
 		if err == nil {
 			workspaces, listErr := testHandler.Queries.ListWorkspaces(ctx, user.ID)
@@ -658,29 +553,14 @@ func TestVerifyCodeCreatesWorkspace(t *testing.T) {
 		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
 	})
 
-	// Send code
 	w := httptest.NewRecorder()
 	var buf bytes.Buffer
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email})
-	req := httptest.NewRequest("POST", "/auth/send-code", &buf)
+	json.NewEncoder(&buf).Encode(map[string]string{"id_token": "firebase-token"})
+	req := httptest.NewRequest("POST", "/auth/firebase", &buf)
 	req.Header.Set("Content-Type", "application/json")
-	testHandler.SendCode(w, req)
-
-	// Read code from DB
-	dbCode, err := testHandler.Queries.GetLatestVerificationCode(ctx, email)
-	if err != nil {
-		t.Fatalf("GetLatestVerificationCode: %v", err)
-	}
-
-	// Verify
-	w = httptest.NewRecorder()
-	buf.Reset()
-	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": dbCode.Code})
-	req = httptest.NewRequest("POST", "/auth/verify-code", &buf)
-	req.Header.Set("Content-Type", "application/json")
-	testHandler.VerifyCode(w, req)
+	testHandler.LoginWithFirebase(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("VerifyCode: expected 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("LoginWithFirebase: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	user, err := testHandler.Queries.GetUserByEmail(ctx, email)
@@ -747,11 +627,11 @@ func TestResolveActor(t *testing.T) {
 	})
 
 	tests := []struct {
-		name            string
-		agentIDHeader   string
-		taskIDHeader    string
-		wantActorType   string
-		wantIsAgent     bool
+		name          string
+		agentIDHeader string
+		taskIDHeader  string
+		wantActorType string
+		wantIsAgent   bool
 	}{
 		{
 			name:          "no headers returns member",
@@ -837,7 +717,7 @@ func TestDaemonRegisterMissingWorkspaceReturns404(t *testing.T) {
 
 // daemonRegisterResponse is the shape returned by DaemonRegister.
 type daemonRegisterResponse struct {
-	Daemon   DaemonResponse       `json:"daemon"`
+	Daemon   DaemonResponse         `json:"daemon"`
 	Runtimes []AgentRuntimeResponse `json:"runtimes"`
 }
 

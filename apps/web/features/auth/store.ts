@@ -4,14 +4,15 @@ import { create } from "zustand";
 import type { User } from "@/shared/types";
 import { api } from "@/shared/api";
 import { setLoggedInCookie, clearLoggedInCookie } from "./auth-cookie";
+import { signInWithFirebaseGoogle } from "./firebase";
+import type { LoginResponse } from "@/shared/api/client";
 
 interface AuthState {
   user: User | null;
   isLoading: boolean;
 
   initialize: () => Promise<void>;
-  sendCode: (email: string) => Promise<void>;
-  verifyCode: (email: string, code: string) => Promise<User>;
+  signInWithGoogle: () => Promise<LoginResponse>;
   logout: () => void;
   setUser: (user: User) => void;
 }
@@ -41,17 +42,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  sendCode: async (email: string) => {
-    await api.sendCode(email);
-  },
-
-  verifyCode: async (email: string, code: string) => {
-    const { token, user } = await api.verifyCode(email, code);
+  signInWithGoogle: async () => {
+    const firebaseToken = await signInWithFirebaseGoogle();
+    const { token, user } = await api.loginWithFirebase(firebaseToken);
     localStorage.setItem("multica_token", token);
     api.setToken(token);
     setLoggedInCookie();
     set({ user });
-    return user;
+    return { token, user };
   },
 
   logout: () => {
