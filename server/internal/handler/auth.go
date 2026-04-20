@@ -258,6 +258,7 @@ func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
 
 	identity, err := h.FirebaseVerifier.VerifyIDToken(r.Context(), idToken)
 	if err != nil {
+		slog.Warn("firebase login rejected", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusUnauthorized, "invalid firebase token")
 		return
 	}
