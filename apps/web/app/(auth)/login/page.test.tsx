@@ -11,12 +11,14 @@ vi.mock("next/navigation", () => ({
 
 // Mock auth store
 const mockSignInWithGoogle = vi.fn();
+const mockSignInAsDev = vi.fn();
 vi.mock("@/features/auth", () => ({
   useAuthStore: (selector: (s: any) => any) =>
     selector({
       user: null,
       isLoading: false,
       signInWithGoogle: mockSignInWithGoogle,
+      signInAsDev: mockSignInAsDev,
     }),
 }));
 

@@ -149,6 +149,16 @@ export class ApiClient {
     });
   }
 
+  // Dev-only login bypass. Backend gates this behind DEV_AUTH_BYPASS=1, so it
+  // is a 404 in production. Used by the make dev login flow when
+  // NEXT_PUBLIC_DEV_EMAIL is set.
+  async loginAsDev(email: string, name?: string): Promise<LoginResponse> {
+    return this.fetch("/auth/dev", {
+      method: "POST",
+      body: JSON.stringify({ email, name: name ?? "" }),
+    });
+  }
+
   async getMe(): Promise<User> {
     return this.fetch("/api/me");
   }
