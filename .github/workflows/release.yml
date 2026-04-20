@@ -52,6 +52,7 @@ jobs:
   images:
     needs: test-backend
     runs-on: ubuntu-latest
+    environment: prod
     strategy:
       matrix:
         include:
