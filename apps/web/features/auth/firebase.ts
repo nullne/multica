@@ -3,11 +3,13 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
   isSignInWithEmailLink,
   sendSignInLinkToEmail,
   signInWithEmailLink,
   signInWithPopup,
+  signInWithRedirect,
 } from "firebase/auth";
 
 type FirebaseConfig = {
@@ -22,6 +24,15 @@ type FirebaseConfig = {
 // recommend persisting it so we can complete sign-in on the same device
 // without prompting again.
 const EMAIL_LINK_STORAGE_KEY = "multica_email_link_email";
+const GOOGLE_REDIRECT_PENDING_KEY = "multica_google_redirect_pending";
+
+export function hasPendingFirebaseGoogleRedirectSignIn(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return localStorage.getItem(GOOGLE_REDIRECT_PENDING_KEY) === "1";
+}
 
 function firebaseConfig(): FirebaseConfig {
   const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
@@ -48,11 +59,30 @@ function firebaseApp() {
   return initializeApp(firebaseConfig());
 }
 
-export async function signInWithFirebaseGoogle(): Promise<string> {
+function isStandalonePwa(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    ("standalone" in navigator &&
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone))
+  );
+}
+
+export async function signInWithFirebaseGoogle(): Promise<string | null> {
   const auth = getAuth(firebaseApp());
   const provider = new GoogleAuthProvider();
 
   provider.setCustomParameters({ prompt: "select_account" });
+
+  if (isStandalonePwa()) {
+    localStorage.setItem(GOOGLE_REDIRECT_PENDING_KEY, "1");
+    await signInWithRedirect(auth, provider);
+    return null;
+  }
 
   const result = await signInWithPopup(auth, provider);
   const idToken = await result.user.getIdToken();
@@ -65,7 +95,7 @@ export async function signInWithFirebaseGoogle(): Promise<string> {
 // Sends a passwordless sign-in link to the given email. The link points at
 // `returnUrl`, which must be on a domain authorized in the Firebase Console.
 // Email/Password sign-in method with "Email link (passwordless sign-in)" must
-// be enabled in Firebase Console → Authentication → Sign-in method.
+// be enabled in Firebase Console -> Authentication -> Sign-in method.
 export async function sendFirebaseEmailLink(
   email: string,
   returnUrl: string
@@ -101,7 +131,7 @@ export function clearStoredEmailLinkEmail(): void {
 
 // Completes a passwordless sign-in started via sendFirebaseEmailLink. The
 // returned ID token is verified by the backend the same way Google ID tokens
-// are — both share the standard Firebase issuer/audience.
+// are - both share the standard Firebase issuer/audience.
 export async function completeFirebaseEmailLinkSignIn(
   email: string,
   url: string
@@ -112,4 +142,24 @@ export async function completeFirebaseEmailLinkSignIn(
   await auth.signOut();
   clearStoredEmailLinkEmail();
   return idToken;
+}
+
+export async function completeFirebaseGoogleRedirectSignIn(): Promise<string | null> {
+  if (!hasPendingFirebaseGoogleRedirectSignIn()) {
+    return null;
+  }
+
+  const auth = getAuth(firebaseApp());
+  try {
+    const result = await getRedirectResult(auth);
+    if (!result) {
+      return null;
+    }
+
+    const idToken = await result.user.getIdToken();
+    await auth.signOut();
+    return idToken;
+  } finally {
+    localStorage.removeItem(GOOGLE_REDIRECT_PENDING_KEY);
+  }
 }

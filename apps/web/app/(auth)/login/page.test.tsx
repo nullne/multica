@@ -2,15 +2,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+const mockRouterPush = vi.fn();
+const mockRouterReplace = vi.fn();
+
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ push: mockRouterPush, replace: mockRouterReplace }),
   usePathname: () => "/login",
   useSearchParams: () => new URLSearchParams(),
 }));
 
 // Mock auth store
 const mockSignInWithGoogle = vi.fn();
+const mockCompleteGoogleRedirectSignIn = vi.fn();
 const mockSignInAsDev = vi.fn();
 const mockSendEmailSignInLink = vi.fn();
 const mockSignInWithEmailLink = vi.fn();
@@ -20,6 +24,7 @@ vi.mock("@/features/auth", () => ({
       user: null,
       isLoading: false,
       signInWithGoogle: mockSignInWithGoogle,
+      completeGoogleRedirectSignIn: mockCompleteGoogleRedirectSignIn,
       signInAsDev: mockSignInAsDev,
       sendEmailSignInLink: mockSendEmailSignInLink,
       signInWithEmailLink: mockSignInWithEmailLink,
@@ -29,6 +34,9 @@ vi.mock("@/features/auth", () => ({
 // Mock firebase helpers used by the login page directly. The tests do not
 // exercise the actual email-link callback flow.
 vi.mock("@/features/auth/firebase", () => ({
+  hasPendingFirebaseGoogleRedirectSignIn: vi.fn(
+    () => localStorage.getItem("multica_google_redirect_pending") === "1"
+  ),
   isFirebaseEmailLink: vi.fn().mockReturnValue(false),
   getStoredEmailLinkEmail: vi.fn().mockReturnValue(null),
 }));
@@ -56,6 +64,8 @@ import LoginPage from "./page";
 describe("LoginPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.removeItem("multica_google_redirect_pending");
+    mockCompleteGoogleRedirectSignIn.mockResolvedValue(null);
   });
 
   it("renders login form with email input and continue button", () => {
@@ -80,6 +90,20 @@ describe("LoginPage", () => {
 
     await waitFor(() => {
       expect(mockSignInWithGoogle).toHaveBeenCalled();
+    });
+  });
+
+  it("completes redirect sign-in when a pending redirect is present", async () => {
+    localStorage.setItem("multica_google_redirect_pending", "1");
+    mockCompleteGoogleRedirectSignIn.mockResolvedValueOnce({
+      token: "token",
+      user: { id: "u1", email: "test@multica.ai" },
+    });
+
+    render(<LoginPage />);
+
+    await waitFor(() => {
+      expect(mockCompleteGoogleRedirectSignIn).toHaveBeenCalled();
     });
   });
 
