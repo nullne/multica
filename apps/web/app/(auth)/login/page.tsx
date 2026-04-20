@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/features/auth";
+import { hasPendingFirebaseGoogleRedirectSignIn } from "@/features/auth/firebase";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
 import {
@@ -42,21 +43,84 @@ function LoginPageContent() {
   const user = useAuthStore((s) => s.user);
   const isLoading = useAuthStore((s) => s.isLoading);
   const signInWithGoogle = useAuthStore((s) => s.signInWithGoogle);
+  const completeGoogleRedirectSignIn = useAuthStore(
+    (s) => s.completeGoogleRedirectSignIn
+  );
   const hydrateWorkspace = useWorkspaceStore((s) => s.hydrateWorkspace);
   const searchParams = useSearchParams();
+  const cliCallback = searchParams.get("cli_callback");
+  const cliState = searchParams.get("cli_state") || "";
+  const nextPath = searchParams.get("next") || "/issues";
 
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [existingUser, setExistingUser] = useState<User | null>(null);
 
   useEffect(() => {
-    if (!isLoading && user && !searchParams.get("cli_callback")) {
-      router.replace(searchParams.get("next") || "/issues");
+    if (!isLoading && user && !cliCallback) {
+      router.replace(nextPath);
     }
-  }, [isLoading, user, router, searchParams]);
+  }, [cliCallback, isLoading, nextPath, router, user]);
 
   useEffect(() => {
-    const cliCallback = searchParams.get("cli_callback");
+    let cancelled = false;
+
+    const finishRedirectSignIn = async () => {
+      if (!hasPendingFirebaseGoogleRedirectSignIn()) {
+        return;
+      }
+
+      setSubmitting(true);
+
+      try {
+        const login = await completeGoogleRedirectSignIn();
+        if (!login || cancelled) {
+          return;
+        }
+
+        if (cliCallback) {
+          if (!validateCliCallback(cliCallback)) {
+            setError("Invalid callback URL");
+            return;
+          }
+          redirectToCliCallback(cliCallback, login.token, cliState);
+          return;
+        }
+
+        const wsList = await api.listWorkspaces();
+        if (cancelled) {
+          return;
+        }
+        await hydrateWorkspace(wsList);
+        router.push(nextPath);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to sign in with Google"
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setSubmitting(false);
+        }
+      }
+    };
+
+    void finishRedirectSignIn();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    cliCallback,
+    cliState,
+    completeGoogleRedirectSignIn,
+    hydrateWorkspace,
+    nextPath,
+    router,
+  ]);
+
+  useEffect(() => {
     if (!cliCallback) return;
 
     const token = localStorage.getItem("multica_token");
@@ -72,14 +136,12 @@ function LoginPageContent() {
         api.setToken(null);
         localStorage.removeItem("multica_token");
       });
-  }, [searchParams]);
+  }, [cliCallback]);
 
   const handleCliAuthorize = async () => {
-    const cliCallback = searchParams.get("cli_callback");
     const token = localStorage.getItem("multica_token");
     if (!cliCallback || !token) return;
 
-    const cliState = searchParams.get("cli_state") || "";
     setSubmitting(true);
     redirectToCliCallback(cliCallback, token, cliState);
   };
@@ -89,21 +151,23 @@ function LoginPageContent() {
     setSubmitting(true);
 
     try {
-      const { token } = await signInWithGoogle();
-      const cliCallback = searchParams.get("cli_callback");
+      const login = await signInWithGoogle();
+      if (!login) {
+        return;
+      }
 
       if (cliCallback) {
         if (!validateCliCallback(cliCallback)) {
           setError("Invalid callback URL");
           return;
         }
-        redirectToCliCallback(cliCallback, token, searchParams.get("cli_state") || "");
+        redirectToCliCallback(cliCallback, login.token, cliState);
         return;
       }
 
       const wsList = await api.listWorkspaces();
       await hydrateWorkspace(wsList);
-      router.push(searchParams.get("next") || "/issues");
+      router.push(nextPath);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to sign in with Google"

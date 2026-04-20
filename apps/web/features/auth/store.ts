@@ -4,7 +4,10 @@ import { create } from "zustand";
 import type { User } from "@/shared/types";
 import { api } from "@/shared/api";
 import { setLoggedInCookie, clearLoggedInCookie } from "./auth-cookie";
-import { signInWithFirebaseGoogle } from "./firebase";
+import {
+  completeFirebaseGoogleRedirectSignIn,
+  signInWithFirebaseGoogle,
+} from "./firebase";
 import type { LoginResponse } from "@/shared/api/client";
 
 interface AuthState {
@@ -12,7 +15,8 @@ interface AuthState {
   isLoading: boolean;
 
   initialize: () => Promise<void>;
-  signInWithGoogle: () => Promise<LoginResponse>;
+  signInWithGoogle: () => Promise<LoginResponse | null>;
+  completeGoogleRedirectSignIn: () => Promise<LoginResponse | null>;
   logout: () => void;
   setUser: (user: User) => void;
 }
@@ -44,6 +48,22 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   signInWithGoogle: async () => {
     const firebaseToken = await signInWithFirebaseGoogle();
+    if (!firebaseToken) {
+      return null;
+    }
+    const { token, user } = await api.loginWithFirebase(firebaseToken);
+    localStorage.setItem("multica_token", token);
+    api.setToken(token);
+    setLoggedInCookie();
+    set({ user });
+    return { token, user };
+  },
+
+  completeGoogleRedirectSignIn: async () => {
+    const firebaseToken = await completeFirebaseGoogleRedirectSignIn();
+    if (!firebaseToken) {
+      return null;
+    }
     const { token, user } = await api.loginWithFirebase(firebaseToken);
     localStorage.setItem("multica_token", token);
     api.setToken(token);
