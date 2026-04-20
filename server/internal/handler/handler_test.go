@@ -510,6 +510,85 @@ func TestLoginWithFirebase(t *testing.T) {
 	}
 }
 
+func TestLoginDevDisabledByDefault(t *testing.T) {
+	t.Setenv("DEV_AUTH_BYPASS", "")
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{"email": "dev-disabled@multica.ai"})
+	req := httptest.NewRequest("POST", "/auth/dev", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.LoginDev(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("LoginDev (disabled): expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestLoginDevIssuesToken(t *testing.T) {
+	const email = "dev-bypass-test@multica.ai"
+	ctx := context.Background()
+	t.Setenv("DEV_AUTH_BYPASS", "1")
+
+	t.Cleanup(func() {
+		user, err := testHandler.Queries.GetUserByEmail(ctx, email)
+		if err == nil {
+			workspaces, listErr := testHandler.Queries.ListWorkspaces(ctx, user.ID)
+			if listErr == nil {
+				for _, workspace := range workspaces {
+					_ = testHandler.Queries.DeleteWorkspace(ctx, workspace.ID)
+				}
+			}
+		}
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+	})
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "name": "Dev Bypass"})
+	req := httptest.NewRequest("POST", "/auth/dev", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.LoginDev(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("LoginDev: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp LoginResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Token == "" {
+		t.Fatal("LoginDev: expected non-empty token")
+	}
+	if resp.User.Email != email {
+		t.Fatalf("LoginDev: expected email '%s', got '%s'", email, resp.User.Email)
+	}
+
+	// A workspace should have been provisioned for the new user.
+	user, err := testHandler.Queries.GetUserByEmail(ctx, email)
+	if err != nil {
+		t.Fatalf("GetUserByEmail: %v", err)
+	}
+	workspaces, err := testHandler.Queries.ListWorkspaces(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(workspaces) != 1 {
+		t.Fatalf("ListWorkspaces: expected 1 workspace, got %d", len(workspaces))
+	}
+}
+
+func TestLoginDevRejectsMissingEmail(t *testing.T) {
+	t.Setenv("DEV_AUTH_BYPASS", "1")
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{})
+	req := httptest.NewRequest("POST", "/auth/dev", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.LoginDev(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("LoginDev: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestLoginWithFirebaseRejectsInvalidToken(t *testing.T) {
 	originalVerifier := testHandler.FirebaseVerifier
 	testHandler.FirebaseVerifier = stubFirebaseVerifier{err: errors.New("invalid token")}

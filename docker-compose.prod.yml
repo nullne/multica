@@ -70,15 +70,13 @@ services:
       retries: 5
 
   frontend:
+    # NEXT_PUBLIC_FIREBASE_* are baked into the client bundle at image build
+    # time (see apps/web/Dockerfile + .github/workflows/release.yml); they
+    # cannot be injected here at runtime.
     image: ghcr.io/${GHCR_REPO:-nullne/multica}/frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       REMOTE_API_URL: http://backend:8080
-      NEXT_PUBLIC_FIREBASE_API_KEY: ${NEXT_PUBLIC_FIREBASE_API_KEY:-}
-      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-}
-      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}
-      NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:-}
-      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:-}
     depends_on:
       backend:
         condition: service_healthy

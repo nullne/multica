@@ -13,6 +13,7 @@ interface AuthState {
 
   initialize: () => Promise<void>;
   signInWithGoogle: () => Promise<LoginResponse>;
+  signInAsDev: (email: string, name?: string) => Promise<LoginResponse>;
   logout: () => void;
   setUser: (user: User) => void;
 }
@@ -45,6 +46,15 @@ export const useAuthStore = create<AuthState>((set) => ({
   signInWithGoogle: async () => {
     const firebaseToken = await signInWithFirebaseGoogle();
     const { token, user } = await api.loginWithFirebase(firebaseToken);
+    localStorage.setItem("multica_token", token);
+    api.setToken(token);
+    setLoggedInCookie();
+    set({ user });
+    return { token, user };
+  },
+
+  signInAsDev: async (email, name) => {
+    const { token, user } = await api.loginAsDev(email, name);
     localStorage.setItem("multica_token", token);
     api.setToken(token);
     setLoggedInCookie();

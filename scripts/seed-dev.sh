@@ -7,7 +7,7 @@ set -eu
 
 API_URL="${API_URL:-http://backend:8080}"
 SEED_EMAIL="${SEED_EMAIL:-dev@multica.local}"
-SEED_FIREBASE_ID_TOKEN="${SEED_FIREBASE_ID_TOKEN:-}"
+SEED_NAME="${SEED_NAME:-Dev User}"
 CONFIG_DIR="${CONFIG_DIR:-/root/.multica}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 
@@ -47,16 +47,13 @@ create_agent() {
 
 echo "==> Seeding dev environment..."
 
-# 1. Authenticate with a Firebase Google ID token.
+# 1. Authenticate via the dev auth bypass endpoint (requires DEV_AUTH_BYPASS=1
+#    on the backend). The endpoint creates the user on demand and issues a JWT.
 echo "  Authenticating as ${SEED_EMAIL}..."
-if [ -z "$SEED_FIREBASE_ID_TOKEN" ]; then
-  echo "  ERROR: SEED_FIREBASE_ID_TOKEN is required"
-  exit 1
-fi
-LOGIN=$(api POST /auth/firebase -d "{\"id_token\":\"${SEED_FIREBASE_ID_TOKEN}\"}")
+LOGIN=$(api POST /auth/dev -d "{\"email\":\"${SEED_EMAIL}\",\"name\":\"${SEED_NAME}\"}")
 TOKEN=$(echo "$LOGIN" | jq -r '.token // empty')
 if [ -z "$TOKEN" ]; then
-  echo "  ERROR: authentication failed"
+  echo "  ERROR: dev authentication failed (is DEV_AUTH_BYPASS=1 set on the backend?)"
   echo "  $LOGIN"
   exit 1
 fi
