@@ -41,9 +41,9 @@ export default function DashboardLayout({
   if (!user) return null;
 
   return (
-    <SidebarProvider className="min-h-dvh">
+    <SidebarProvider className="h-dvh overflow-hidden">
       <AppSidebar />
-      <SidebarInset className="overflow-hidden">
+      <SidebarInset className="overflow-hidden min-h-0">
         {/* Mobile sidebar trigger — fixed at bottom-left */}
         <SidebarTrigger className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] z-50 h-10 w-10 rounded-full bg-primary text-primary-foreground shadow-lg md:hidden" />
         {workspace ? (

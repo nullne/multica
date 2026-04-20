@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -547,6 +547,19 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   } = useIssueSubscribers(id, user?.id);
 
   const loading = issueLoading;
+
+  // Reset internal scroll to top whenever the displayed issue changes.
+  // The scroll container belongs to IssueDetail itself; when this component
+  // is reused (or React's natural mount/remount doesn't reset the inner
+  // scrollTop reliably — e.g. when nested inside another resizable panel
+  // group like the Inbox), we must explicitly snap back to the top so the
+  // user always lands on the issue title rather than a stale scroll
+  // position. The highlight-comment effect below runs after timeline data
+  // loads and will smoothly scroll past this reset when applicable.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (container) container.scrollTop = 0;
+  }, [id]);
 
   // Scroll to highlighted comment once timeline loads
   useEffect(() => {
