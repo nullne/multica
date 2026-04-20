@@ -142,17 +142,10 @@ export class ApiClient {
   }
 
   // Auth
-  async sendCode(email: string): Promise<void> {
-    await this.fetch("/auth/send-code", {
+  async loginWithFirebase(idToken: string): Promise<LoginResponse> {
+    return this.fetch("/auth/firebase", {
       method: "POST",
-      body: JSON.stringify({ email }),
-    });
-  }
-
-  async verifyCode(email: string, code: string): Promise<LoginResponse> {
-    return this.fetch("/auth/verify-code", {
-      method: "POST",
-      body: JSON.stringify({ email, code }),
+      body: JSON.stringify({ id_token: idToken }),
     });
   }
 

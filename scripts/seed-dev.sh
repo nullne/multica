@@ -7,6 +7,7 @@ set -eu
 
 API_URL="${API_URL:-http://backend:8080}"
 SEED_EMAIL="${SEED_EMAIL:-dev@multica.local}"
+SEED_FIREBASE_ID_TOKEN="${SEED_FIREBASE_ID_TOKEN:-}"
 CONFIG_DIR="${CONFIG_DIR:-/root/.multica}"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 
@@ -46,11 +47,13 @@ create_agent() {
 
 echo "==> Seeding dev environment..."
 
-# 1. Authenticate (master code 888888 works in non-production).
-#    send-code may return 500 if no email service, but still inserts the DB row.
+# 1. Authenticate with a Firebase Google ID token.
 echo "  Authenticating as ${SEED_EMAIL}..."
-api POST /auth/send-code -d "{\"email\":\"${SEED_EMAIL}\"}" > /dev/null 2>&1
-LOGIN=$(api POST /auth/verify-code -d "{\"email\":\"${SEED_EMAIL}\",\"code\":\"888888\"}")
+if [ -z "$SEED_FIREBASE_ID_TOKEN" ]; then
+  echo "  ERROR: SEED_FIREBASE_ID_TOKEN is required"
+  exit 1
+fi
+LOGIN=$(api POST /auth/firebase -d "{\"id_token\":\"${SEED_FIREBASE_ID_TOKEN}\"}")
 TOKEN=$(echo "$LOGIN" | jq -r '.token // empty')
 if [ -z "$TOKEN" ]; then
   echo "  ERROR: authentication failed"

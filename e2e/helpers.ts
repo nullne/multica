@@ -7,11 +7,11 @@ const DEFAULT_E2E_WORKSPACE = "e2e-workspace";
 
 /**
  * Log in as the default E2E user and ensure the workspace exists first.
- * Authenticates via API (send-code → DB read → verify-code), then injects
- * the token into localStorage so the browser session is authenticated.
+ * Authenticates via the Firebase login endpoint, then injects the token into
+ * localStorage so the browser session is authenticated.
  *
  * If an existing TestApiClient is provided, its token is reused to avoid
- * hitting the send-code rate limit.
+ * repeated auth setup.
  */
 export async function loginAsDefault(page: Page, existingApi?: TestApiClient) {
   const api = existingApi ?? new TestApiClient();

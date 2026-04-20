@@ -18,7 +18,6 @@ import (
 	"github.com/nullne/multica/server/internal/handler"
 	"github.com/nullne/multica/server/internal/middleware"
 	"github.com/nullne/multica/server/internal/realtime"
-	"github.com/nullne/multica/server/internal/service"
 	"github.com/nullne/multica/server/internal/storage"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
@@ -49,11 +48,10 @@ func allowedOrigins() []string {
 // NewRouter creates the fully-configured Chi router with all middleware and routes.
 func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Router {
 	queries := db.New(pool)
-	emailSvc := service.NewEmailService()
 	s3 := storage.NewS3StorageFromEnv()
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
 	githubApp := gh.NewAppFromEnv()
-	h := handler.New(queries, pool, hub, bus, emailSvc, s3, cfSigner, githubApp)
+	h := handler.New(queries, pool, hub, bus, s3, cfSigner, githubApp)
 
 	r := chi.NewRouter()
 
@@ -82,8 +80,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	})
 
 	// Auth (public)
-	r.Post("/auth/send-code", h.SendCode)
-	r.Post("/auth/verify-code", h.VerifyCode)
+	r.Post("/auth/firebase", h.LoginWithFirebase)
 
 	// Webhook ingest (public — authenticated by webhook token, not JWT)
 	r.Post("/api/webhooks/{id}", h.IngestWebhook)
@@ -135,22 +132,22 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/members", h.ListMembersWithUser)
 					r.Post("/leave", h.LeaveWorkspace)
 				})
-			// Admin-level access
-			r.Group(func(r chi.Router) {
-				r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
-				r.Put("/", h.UpdateWorkspace)
-				r.Patch("/", h.UpdateWorkspace)
-				r.Post("/members", h.CreateMember)
-				r.Get("/providers", h.GetWorkspaceProviders)
-				r.Patch("/providers", h.UpdateWorkspaceProviders)
-				r.Post("/update-all-daemons", h.UpdateAllDaemons)
-				r.Get("/github/install-url", h.GitHubInstallURL)
-				r.Get("/github/status", h.GitHubStatus)
-				r.Post("/github/connect", h.GitHubConnect)
-				r.Delete("/github", h.GitHubDisconnect)
-				r.Get("/github/event-rules", h.ListGitHubEventRules)
-				r.Put("/github/event-rules", h.UpsertGitHubEventRule)
-				r.Delete("/github/event-rules/{ruleId}", h.DeleteGitHubEventRule)
+				// Admin-level access
+				r.Group(func(r chi.Router) {
+					r.Use(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner", "admin"))
+					r.Put("/", h.UpdateWorkspace)
+					r.Patch("/", h.UpdateWorkspace)
+					r.Post("/members", h.CreateMember)
+					r.Get("/providers", h.GetWorkspaceProviders)
+					r.Patch("/providers", h.UpdateWorkspaceProviders)
+					r.Post("/update-all-daemons", h.UpdateAllDaemons)
+					r.Get("/github/install-url", h.GitHubInstallURL)
+					r.Get("/github/status", h.GitHubStatus)
+					r.Post("/github/connect", h.GitHubConnect)
+					r.Delete("/github", h.GitHubDisconnect)
+					r.Get("/github/event-rules", h.ListGitHubEventRules)
+					r.Put("/github/event-rules", h.UpsertGitHubEventRule)
+					r.Delete("/github/event-rules/{ruleId}", h.DeleteGitHubEventRule)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
 						r.Delete("/", h.DeleteMember)
@@ -187,12 +184,12 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/subscribers", h.ListIssueSubscribers)
 					r.Post("/subscribe", h.SubscribeToIssue)
 					r.Post("/unsubscribe", h.UnsubscribeFromIssue)
-				r.Get("/active-task", h.GetActiveTaskForIssue)
-				r.Post("/tasks/{taskId}/cancel", h.CancelTask)
-				r.Get("/task-runs", h.ListTasksByIssue)
-				r.Put("/criteria", h.UpdateCriteria)
-				r.Post("/criteria/approve", h.ApproveCriteria)
-				r.Post("/criteria/reject", h.RejectCriteria)
+					r.Get("/active-task", h.GetActiveTaskForIssue)
+					r.Post("/tasks/{taskId}/cancel", h.CancelTask)
+					r.Get("/task-runs", h.ListTasksByIssue)
+					r.Put("/criteria", h.UpdateCriteria)
+					r.Post("/criteria/approve", h.ApproveCriteria)
+					r.Post("/criteria/reject", h.RejectCriteria)
 					r.Get("/labels", h.ListIssueLabels)
 					r.Put("/labels", h.SetIssueLabels)
 					r.Post("/reactions", h.AddIssueReaction)
@@ -252,15 +249,15 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				})
 			})
 
-		// Daemons
-		r.Get("/api/daemons", h.ListDaemons)
-		r.Patch("/api/daemons/{daemonId}", h.UpdateDaemon)
-		r.Get("/api/daemons/{daemonId}/env", h.GetDaemonEnv)
-		r.Post("/api/daemons/{daemonId}/archive", h.ArchiveDaemon)
-		r.Post("/api/daemons/{daemonId}/restore", h.RestoreDaemon)
+			// Daemons
+			r.Get("/api/daemons", h.ListDaemons)
+			r.Patch("/api/daemons/{daemonId}", h.UpdateDaemon)
+			r.Get("/api/daemons/{daemonId}/env", h.GetDaemonEnv)
+			r.Post("/api/daemons/{daemonId}/archive", h.ArchiveDaemon)
+			r.Post("/api/daemons/{daemonId}/restore", h.RestoreDaemon)
 
-		// Runtimes
-		r.Route("/api/runtimes", func(r chi.Router) {
+			// Runtimes
+			r.Route("/api/runtimes", func(r chi.Router) {
 				r.Get("/", h.ListAgentRuntimes)
 				r.Get("/{runtimeId}/usage", h.GetRuntimeUsage)
 				r.Get("/{runtimeId}/activity", h.GetRuntimeTaskActivity)
