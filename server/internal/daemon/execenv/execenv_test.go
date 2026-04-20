@@ -905,7 +905,7 @@ func TestInjectRuntimeConfig_GitHubCodeAccess(t *testing.T) {
 		},
 		{
 			level:    "write",
-			contains: []string{"push branches", "cannot"},
+			contains: []string{"push branches", "create pull requests", "MUST NOT"},
 			absent:   []string{"full access"},
 		},
 		{
