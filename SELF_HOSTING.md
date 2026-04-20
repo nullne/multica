@@ -82,6 +82,29 @@ server-side project ID and the public Firebase app settings used by the web UI.
 | `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase web app ID |
 | `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Firebase sender ID for the web app |
 
+> **Important — `NEXT_PUBLIC_*` variables are baked in at build time.**
+> Next.js inlines `NEXT_PUBLIC_*` values into the client JavaScript bundle
+> when the frontend image is built. Setting them at runtime in
+> `docker-compose.prod.yml` has no effect on the browser code.
+>
+> The published `ghcr.io/nullne/multica/frontend` image is built with the
+> Multica Cloud Firebase project. To self-host with **your own** Firebase
+> project you must rebuild the frontend image locally:
+>
+> ```bash
+> docker build -f apps/web/Dockerfile -t my-multica-frontend:latest \
+>   --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_APP_ID=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=... \
+>   .
+> ```
+>
+> Then point `docker-compose.prod.yml` at your locally-built image. The
+> server-side `FIREBASE_PROJECT_ID` is read at runtime and does not require
+> a rebuild.
+
 ### File Storage (Optional)
 
 For file uploads and attachments, configure S3 and CloudFront:

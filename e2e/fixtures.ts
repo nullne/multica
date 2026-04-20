@@ -8,9 +8,8 @@ import pg from "pg";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? `http://localhost:${process.env.PORT ?? "8080"}`;
 const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://multica:multica@localhost:5432/multica?sslmode=disable";
-const TEST_FIREBASE_ID_TOKEN = process.env.TEST_FIREBASE_ID_TOKEN ?? "";
 
-// Cache tokens by email to avoid repeated Firebase logins across tests.
+// Cache tokens by email to avoid repeated logins across tests.
 const tokenCache = new Map<string, { token: string; workspaceId: string }>();
 
 interface TestWorkspace {
@@ -36,18 +35,14 @@ export class TestApiClient {
       return { token: cached.token };
     }
 
-    if (!TEST_FIREBASE_ID_TOKEN) {
-      throw new Error("TEST_FIREBASE_ID_TOKEN is required for E2E login");
-    }
-
-    const loginRes = await fetch(`${API_BASE}/auth/firebase`, {
+    const loginRes = await fetch(`${API_BASE}/auth/dev`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id_token: TEST_FIREBASE_ID_TOKEN }),
+      body: JSON.stringify({ email, name }),
     });
     const data = await loginRes.json();
     if (!loginRes.ok || !data.token) {
-      throw new Error(`firebase login failed: ${loginRes.status}`);
+      throw new Error(`dev login failed: ${loginRes.status} (is DEV_AUTH_BYPASS=1 set on the backend?)`);
     }
     this.token = data.token;
 

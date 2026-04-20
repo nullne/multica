@@ -81,6 +81,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 
 	// Auth (public)
 	r.Post("/auth/firebase", h.LoginWithFirebase)
+	// Dev-only auth bypass — gated by DEV_AUTH_BYPASS env flag inside the
+	// handler so the route is inert in production.
+	r.Post("/auth/dev", h.LoginDev)
 
 	// Webhook ingest (public — authenticated by webhook token, not JWT)
 	r.Post("/api/webhooks/{id}", h.IngestWebhook)

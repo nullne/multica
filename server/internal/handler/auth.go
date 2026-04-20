@@ -45,6 +45,22 @@ type FirebaseLoginRequest struct {
 	IDToken string `json:"id_token"`
 }
 
+type DevLoginRequest struct {
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
+// devAuthBypassEnabled reports whether the DEV_AUTH_BYPASS env flag is set to a
+// truthy value. The dev login endpoint is only accepted when this is true so
+// production builds can never use it.
+func devAuthBypassEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEV_AUTH_BYPASS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func defaultWorkspaceName(user db.User) string {
 	name := strings.TrimSpace(user.Name)
 	if name == "" {
@@ -242,6 +258,7 @@ func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
 
 	identity, err := h.FirebaseVerifier.VerifyIDToken(r.Context(), idToken)
 	if err != nil {
+		slog.Warn("firebase login rejected", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusUnauthorized, "invalid firebase token")
 		return
 	}
@@ -278,6 +295,53 @@ func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("user logged in", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	writeJSON(w, http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  userToResponse(user),
+	})
+}
+
+// LoginDev issues a JWT for an arbitrary email/name without verifying any
+// identity provider. It is gated by the DEV_AUTH_BYPASS env flag so it cannot
+// be enabled in production. Used by the docker-compose dev seed script and the
+// E2E test suite to bootstrap a local user without provisioning Firebase.
+func (h *Handler) LoginDev(w http.ResponseWriter, r *http.Request) {
+	if !devAuthBypassEnabled() {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	var req DevLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	user, err := h.findOrCreateUser(r.Context(), email, strings.TrimSpace(req.Name), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	if err := h.ensureUserWorkspace(r.Context(), user); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to provision workspace")
+		return
+	}
+
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		slog.Warn("dev login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	slog.Info("dev login", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
 		User:  userToResponse(user),

@@ -905,13 +905,13 @@ func TestInjectRuntimeConfig_GitHubCodeAccess(t *testing.T) {
 		},
 		{
 			level:    "write",
-			contains: []string{"push branches", "cannot"},
-			absent:   []string{"full access"},
+			contains: []string{"push branches", "create pull requests", "MUST NOT"},
+			absent:   []string{"full access", "cannot"},
 		},
 		{
 			level:    "admin",
 			contains: []string{"full access", "merge"},
-			absent:   []string{"read-only", "cannot"},
+			absent:   []string{"read-only", "cannot", "MUST NOT"},
 		},
 	}
 

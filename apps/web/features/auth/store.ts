@@ -5,7 +5,9 @@ import type { User } from "@/shared/types";
 import { api } from "@/shared/api";
 import { setLoggedInCookie, clearLoggedInCookie } from "./auth-cookie";
 import {
+  completeFirebaseEmailLinkSignIn,
   completeFirebaseGoogleRedirectSignIn,
+  sendFirebaseEmailLink,
   signInWithFirebaseGoogle,
 } from "./firebase";
 import type { LoginResponse } from "@/shared/api/client";
@@ -17,6 +19,9 @@ interface AuthState {
   initialize: () => Promise<void>;
   signInWithGoogle: () => Promise<LoginResponse | null>;
   completeGoogleRedirectSignIn: () => Promise<LoginResponse | null>;
+  sendEmailSignInLink: (email: string, returnUrl: string) => Promise<void>;
+  signInWithEmailLink: (email: string, url: string) => Promise<LoginResponse>;
+  signInAsDev: (email: string, name?: string) => Promise<LoginResponse>;
   logout: () => void;
   setUser: (user: User) => void;
 }
@@ -65,6 +70,29 @@ export const useAuthStore = create<AuthState>((set) => ({
       return null;
     }
     const { token, user } = await api.loginWithFirebase(firebaseToken);
+    localStorage.setItem("multica_token", token);
+    api.setToken(token);
+    setLoggedInCookie();
+    set({ user });
+    return { token, user };
+  },
+
+  sendEmailSignInLink: async (email, returnUrl) => {
+    await sendFirebaseEmailLink(email, returnUrl);
+  },
+
+  signInWithEmailLink: async (email, url) => {
+    const firebaseToken = await completeFirebaseEmailLinkSignIn(email, url);
+    const { token, user } = await api.loginWithFirebase(firebaseToken);
+    localStorage.setItem("multica_token", token);
+    api.setToken(token);
+    setLoggedInCookie();
+    set({ user });
+    return { token, user };
+  },
+
+  signInAsDev: async (email, name) => {
+    const { token, user } = await api.loginAsDev(email, name);
     localStorage.setItem("multica_token", token);
     api.setToken(token);
     setLoggedInCookie();
