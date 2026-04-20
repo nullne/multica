@@ -12,6 +12,8 @@ vi.mock("next/navigation", () => ({
 // Mock auth store
 const mockSignInWithGoogle = vi.fn();
 const mockSignInAsDev = vi.fn();
+const mockSendEmailSignInLink = vi.fn();
+const mockSignInWithEmailLink = vi.fn();
 vi.mock("@/features/auth", () => ({
   useAuthStore: (selector: (s: any) => any) =>
     selector({
@@ -19,7 +21,16 @@ vi.mock("@/features/auth", () => ({
       isLoading: false,
       signInWithGoogle: mockSignInWithGoogle,
       signInAsDev: mockSignInAsDev,
+      sendEmailSignInLink: mockSendEmailSignInLink,
+      signInWithEmailLink: mockSignInWithEmailLink,
     }),
+}));
+
+// Mock firebase helpers used by the login page directly. The tests do not
+// exercise the actual email-link callback flow.
+vi.mock("@/features/auth/firebase", () => ({
+  isFirebaseEmailLink: vi.fn().mockReturnValue(false),
+  getStoredEmailLinkEmail: vi.fn().mockReturnValue(null),
 }));
 
 // Mock workspace store
@@ -84,11 +95,11 @@ describe("LoginPage", () => {
     });
   });
 
-  it("shows helper copy for Firebase Google auth", () => {
+  it("shows helper copy for Firebase auth", () => {
     render(<LoginPage />);
 
     expect(
-      screen.getByText("Sign in with your Firebase-enabled Google account.")
+      screen.getByText("Sign in with Google or get a one-time link by email.")
     ).toBeInTheDocument();
   });
 
@@ -101,6 +112,46 @@ describe("LoginPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Network error")).toBeInTheDocument();
+    });
+  });
+
+  it("sends a passwordless email link and shows the inbox screen", async () => {
+    mockSendEmailSignInLink.mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    render(<LoginPage />);
+
+    await user.type(
+      screen.getByPlaceholderText("you@example.com"),
+      "alice@example.com"
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Email me a sign-in link" })
+    );
+
+    await waitFor(() => {
+      expect(mockSendEmailSignInLink).toHaveBeenCalledWith(
+        "alice@example.com",
+        expect.stringMatching(/\/login$/)
+      );
+      expect(screen.getByText("Check your inbox")).toBeInTheDocument();
+    });
+  });
+
+  it("shows error when sending the email link fails", async () => {
+    mockSendEmailSignInLink.mockRejectedValueOnce(new Error("Quota exceeded"));
+    const user = userEvent.setup();
+    render(<LoginPage />);
+
+    await user.type(
+      screen.getByPlaceholderText("you@example.com"),
+      "alice@example.com"
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Email me a sign-in link" })
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Quota exceeded")).toBeInTheDocument();
     });
   });
 });
