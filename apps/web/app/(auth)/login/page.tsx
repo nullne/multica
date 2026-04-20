@@ -37,10 +37,14 @@ function redirectToCliCallback(
   window.location.href = `${cliCallback}${separator}token=${encodeURIComponent(token)}&state=${encodeURIComponent(cliState)}`;
 }
 
-// When set (only via docker-compose.dev.yml), the login page replaces the
-// Google button with a one-click dev login that calls /auth/dev. The backend
-// gates that endpoint behind DEV_AUTH_BYPASS=1, so this is inert in prod.
+// When set (only via docker-compose.dev.yml), the login page shows a
+// one-click dev login that calls /auth/dev. The backend gates that endpoint
+// behind DEV_AUTH_BYPASS=1, so this is inert in prod.
 const DEV_LOGIN_EMAIL = process.env.NEXT_PUBLIC_DEV_EMAIL ?? "";
+
+// When the Firebase web config is also present, the Google button stays
+// visible alongside the dev button so both flows can be exercised in dev.
+const FIREBASE_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY);
 
 function LoginPageContent() {
   const router = useRouter();
@@ -170,36 +174,35 @@ function LoginPageContent() {
         </CardHeader>
         <CardContent className="space-y-4">
           {DEV_LOGIN_EMAIL ? (
-            <>
-              <Button
-                onClick={handleDevSignIn}
-                disabled={submitting}
-                className="w-full"
-                size="lg"
-              >
-                {submitting
-                  ? "Signing in..."
-                  : `Continue as ${DEV_LOGIN_EMAIL} (dev)`}
-              </Button>
-              <p className="text-center text-sm text-muted-foreground">
-                Dev auth bypass — only enabled when DEV_AUTH_BYPASS=1.
-              </p>
-            </>
-          ) : (
-            <>
-              <Button
-                onClick={handleGoogleSignIn}
-                disabled={submitting}
-                className="w-full"
-                size="lg"
-              >
-                {submitting ? "Signing in..." : "Continue with Google"}
-              </Button>
-              <p className="text-center text-sm text-muted-foreground">
-                Sign in with your Firebase-enabled Google account.
-              </p>
-            </>
-          )}
+            <Button
+              onClick={handleDevSignIn}
+              disabled={submitting}
+              className="w-full"
+              size="lg"
+            >
+              {submitting
+                ? "Signing in..."
+                : `Continue as ${DEV_LOGIN_EMAIL} (dev)`}
+            </Button>
+          ) : null}
+
+          {FIREBASE_CONFIGURED || !DEV_LOGIN_EMAIL ? (
+            <Button
+              onClick={handleGoogleSignIn}
+              disabled={submitting}
+              variant={DEV_LOGIN_EMAIL ? "outline" : "default"}
+              className="w-full"
+              size="lg"
+            >
+              {submitting ? "Signing in..." : "Continue with Google"}
+            </Button>
+          ) : null}
+
+          <p className="text-center text-sm text-muted-foreground">
+            {DEV_LOGIN_EMAIL
+              ? "Dev auth bypass — only enabled when DEV_AUTH_BYPASS=1."
+              : "Sign in with your Firebase-enabled Google account."}
+          </p>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </CardContent>
       </Card>
