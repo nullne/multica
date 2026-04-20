@@ -15,9 +15,10 @@ func newTestCodexClient(t *testing.T) (*codexClient, *fakeStdin, []Message) {
 	var messages []Message
 
 	c := &codexClient{
-		cfg:     Config{Logger: slog.Default()},
-		stdin:   fs,
-		pending: make(map[int]*pendingRPC),
+		cfg:             Config{Logger: slog.Default()},
+		stdin:           fs,
+		pending:         make(map[int]*pendingRPC),
+		pendingCommands: make(map[string]string),
 		onMessage: func(msg Message) {
 			mu.Lock()
 			messages = append(messages, msg)
@@ -352,7 +353,7 @@ func TestCodexRawTurnCompletedAborted(t *testing.T) {
 func TestCodexRawItemCommandExecution(t *testing.T) {
 	t.Parallel()
 
-	c, _, _ := newTestCodexClient(t)
+	c, stdin, _ := newTestCodexClient(t)
 	c.notificationProtocol = "raw"
 
 	var messages []Message
@@ -360,7 +361,15 @@ func TestCodexRawItemCommandExecution(t *testing.T) {
 		messages = append(messages, msg)
 	}
 
-	c.handleLine(`{"jsonrpc":"2.0","method":"item/started","params":{"item":{"type":"commandExecution","id":"item-1","command":"git status"}}}`)
+	// Real Codex raw protocol: approval request arrives first with the command
+	// text; item/started only carries the item id and type, not the command.
+	c.handleLine(`{"jsonrpc":"2.0","id":1,"method":"item/commandExecution/requestApproval","params":{"itemId":"item-1","command":"git status","workingDirectory":"/repo"}}`)
+	// Verify an accept response was written to stdin.
+	if lines := stdin.Lines(); len(lines) == 0 {
+		t.Fatal("expected accept response on stdin")
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/started","params":{"item":{"type":"commandExecution","id":"item-1"}}}`)
 	c.handleLine(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"commandExecution","id":"item-1","aggregatedOutput":"on branch main"}}}`)
 
 	if len(messages) != 2 {
@@ -371,6 +380,30 @@ func TestCodexRawItemCommandExecution(t *testing.T) {
 	}
 	if messages[1].Type != MessageToolResult || messages[1].Output != "on branch main" {
 		t.Fatalf("unexpected complete message: %+v", messages[1])
+	}
+}
+
+// TestCodexRawItemCommandExecutionFallback verifies that if item/started
+// includes the command field directly (older Codex versions), it still works.
+func TestCodexRawItemCommandExecutionFallback(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := newTestCodexClient(t)
+	c.notificationProtocol = "raw"
+
+	var messages []Message
+	c.onMessage = func(msg Message) {
+		messages = append(messages, msg)
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/started","params":{"item":{"type":"commandExecution","id":"item-2","command":"ls -la"}}}`)
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"commandExecution","id":"item-2","aggregatedOutput":"total 0"}}}`)
+
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
+	}
+	if messages[0].Input["command"] != "ls -la" {
+		t.Fatalf("unexpected command: %+v", messages[0])
 	}
 }
 
