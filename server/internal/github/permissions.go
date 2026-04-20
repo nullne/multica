@@ -15,12 +15,6 @@ const (
 
 // basePermissions returns the permissions every agent token receives
 // regardless of code access level.
-//
-// Note: pull_requests defaults to read here. Only the admin tier upgrades
-// it to write in PermissionsForCodeAccess. GitHub bundles PR
-// create/update/merge/close under a single "write" permission, so giving
-// the write tier pull_requests=write would also let it merge — see
-// PermissionsForCodeAccess for the full matrix.
 func basePermissions() map[string]string {
 	return map[string]string{
 		"issues":        PermWrite,
@@ -38,13 +32,13 @@ func basePermissions() map[string]string {
 //
 //	level   contents  pull_requests  issues  checks  statuses  metadata
 //	read    read      read           write   read    read      read
-//	write   write     read           write   read    read      read
+//	write   write     write          write   read    read      read
 //	admin   write     write          write   read    read      read
 //
 // pull_requests=write covers PR create / update / merge / close at the
-// GitHub API level; it is intentionally restricted to admin so that
-// read/write agents cannot merge or close PRs even by calling the API
-// directly with their installation token.
+// GitHub API level. Both write and admin agents receive this permission so
+// they can open PRs. Merge is further restricted to admin-only via
+// MergeAllowed() as a server-side guard.
 func PermissionsForCodeAccess(level string) map[string]string {
 	perms := basePermissions()
 	switch level {
@@ -52,6 +46,7 @@ func PermissionsForCodeAccess(level string) map[string]string {
 		perms["contents"] = PermRead
 	case CodeAccessWrite:
 		perms["contents"] = PermWrite
+		perms["pull_requests"] = PermWrite
 	case CodeAccessAdmin:
 		perms["contents"] = PermWrite
 		perms["pull_requests"] = PermWrite

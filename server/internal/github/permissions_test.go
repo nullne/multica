@@ -3,8 +3,7 @@ package github
 import "testing"
 
 // TestPermissionsForCodeAccess_Matrix asserts the full permission matrix
-// for every supported code access level. See PermissionsForCodeAccess for
-// the rationale; pull_requests=write is intentionally admin-only.
+// for every supported code access level.
 func TestPermissionsForCodeAccess_Matrix(t *testing.T) {
 	cases := []struct {
 		level string
@@ -25,7 +24,7 @@ func TestPermissionsForCodeAccess_Matrix(t *testing.T) {
 			level: CodeAccessWrite,
 			want: map[string]string{
 				"contents":      PermWrite,
-				"pull_requests": PermRead,
+				"pull_requests": PermWrite,
 				"issues":        PermWrite,
 				"checks":        PermRead,
 				"statuses":      PermRead,

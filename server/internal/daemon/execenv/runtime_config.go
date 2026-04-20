@@ -153,9 +153,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			b.WriteString("Do not attempt to push commits or merge pull requests. ")
 			b.WriteString("You can create issues and comment on issues/PRs.\n\n")
 		case "write":
-			b.WriteString("You can push branches to repositories. ")
-			b.WriteString("You **cannot** open, merge, or close pull requests — your installation token does not carry pull_request write access. ")
-			b.WriteString("After pushing, ask a human reviewer or an admin agent to open the PR.\n\n")
+			b.WriteString("You can push branches and create pull requests. ")
+			b.WriteString("You **MUST NOT** merge or close pull requests — merging is reserved for admin agents after review.\n\n")
 		case "admin":
 			b.WriteString("You have full access: push code, create pull requests, and merge them.\n\n")
 		}
