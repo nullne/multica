@@ -37,6 +37,7 @@ type Daemon struct {
 	workspaces      map[string]*workspaceState
 	runtimeIndex    map[string]Runtime            // runtimeID -> Runtime for provider lookups
 	taskBranches    map[string]string             // taskID -> latest checked out branch
+	taskTokens      map[string]string             // taskID -> GitHub installation token (cleared on task end)
 	providerConfigs map[string]ProviderConfig     // provider -> workspace-level config (API keys, etc.)
 	reloading       sync.Mutex                    // prevents concurrent reloadWorkspaces
 
@@ -57,6 +58,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		workspaces:      make(map[string]*workspaceState),
 		runtimeIndex:    make(map[string]Runtime),
 		taskBranches:    make(map[string]string),
+		taskTokens:      make(map[string]string),
 		providerConfigs: make(map[string]ProviderConfig),
 	}
 }
@@ -209,13 +211,6 @@ func (d *Daemon) loadWatchedWorkspaces(ctx context.Context) error {
 			d.runtimeIndex[rt.ID] = rt
 		}
 		d.mu.Unlock()
-
-		// Sync workspace repos to local cache.
-		if d.repoCache != nil && len(resp.Repos) > 0 {
-			if err := d.repoCache.Sync(ws.ID, repoDataToInfo(resp.Repos)); err != nil {
-				d.logger.Warn("repo cache sync failed", "workspace_id", ws.ID, "error", err)
-			}
-		}
 
 		d.logger.Info("watching workspace", "workspace_id", ws.ID, "name", ws.Name, "runtimes", len(resp.Runtimes), "repos", len(resp.Repos))
 	}
@@ -667,13 +662,6 @@ func (d *Daemon) reloadWorkspaces(ctx context.Context) {
 				d.runtimeIndex[rt.ID] = rt
 			}
 			d.mu.Unlock()
-
-			// Sync workspace repos to local cache.
-			if d.repoCache != nil && len(resp.Repos) > 0 {
-				if err := d.repoCache.Sync(id, repoDataToInfo(resp.Repos)); err != nil {
-					d.logger.Warn("repo cache sync failed", "workspace_id", id, "error", err)
-				}
-			}
 
 			d.logger.Info("now watching workspace", "workspace_id", id, "name", name)
 		}
@@ -1135,6 +1123,13 @@ func (d *Daemon) pollLoop(ctx context.Context) error {
 func (d *Daemon) handleTask(ctx context.Context, task Task) {
 	defer d.clearTaskBranch(task.ID)
 
+	// Make the task's GitHub token discoverable by the daemon's own git
+	// operations (e.g. /repo/checkout) for the duration of this task. The
+	// token never leaves the daemon process — agents and the CLI just send
+	// task_id, and the daemon looks the token up internally.
+	d.rememberTaskToken(task.ID, task.GitHubToken)
+	defer d.clearTaskToken(task.ID)
+
 	d.mu.Lock()
 	rt := d.runtimeIndex[task.RuntimeID]
 	d.mu.Unlock()
@@ -1531,15 +1526,6 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		}
 		return TaskResult{Status: "blocked", Comment: errMsg}, nil
 	}
-}
-
-// repoDataToInfo converts daemon RepoData to repocache RepoInfo.
-func repoDataToInfo(repos []RepoData) []repocache.RepoInfo {
-	info := make([]repocache.RepoInfo, len(repos))
-	for i, r := range repos {
-		info[i] = repocache.RepoInfo{URL: r.URL, Description: r.Description}
-	}
-	return info
 }
 
 func convertReposForEnv(repos []RepoData) []execenv.RepoContextForEnv {
