@@ -100,6 +100,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		// Assignment-triggered: full workflow
 		b.WriteString("You are responsible for managing the issue status throughout your work.\n\n")
 		fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand your task\n", ctx.IssueID)
+		b.WriteString("   - If the issue title is just the identifier (e.g. `MUL-77`, matching `[A-Z]+-\\d+`), generate a concise descriptive title from the description and update it: `multica issue update <id> --title 'Your Title'`\n")
 		fmt.Fprintf(&b, "2. Run `multica issue status %s in_progress`\n", ctx.IssueID)
 		b.WriteString("3. Read comments for additional context or human instructions\n")
 		b.WriteString("4. If the task requires code changes:\n")

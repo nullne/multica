@@ -963,3 +963,54 @@ func TestInjectRuntimeConfig_NoGitHubSection(t *testing.T) {
 		t.Error("should not contain GitHub Access section when GitHubCodeAccess is empty")
 	}
 }
+
+func TestInjectRuntimeConfig_IdentifierTitleRename(t *testing.T) {
+	t.Parallel()
+
+	t.Run("assignment-triggered includes rename instruction", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		ctx := TaskContextForEnv{IssueID: "test-issue-id"}
+
+		if err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+			t.Fatalf("InjectRuntimeConfig: %v", err)
+		}
+
+		content, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+		if err != nil {
+			t.Fatalf("read CLAUDE.md: %v", err)
+		}
+		s := string(content)
+		for _, want := range []string{
+			"[A-Z]+-\\d+",
+			"multica issue update",
+			"--title",
+		} {
+			if !strings.Contains(s, want) {
+				t.Errorf("CLAUDE.md missing identifier-rename instruction %q", want)
+			}
+		}
+	})
+
+	t.Run("comment-triggered omits rename instruction", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		ctx := TaskContextForEnv{
+			IssueID:          "test-issue-id",
+			TriggerCommentID: "some-comment-id",
+		}
+
+		if err := InjectRuntimeConfig(dir, "claude", ctx); err != nil {
+			t.Fatalf("InjectRuntimeConfig: %v", err)
+		}
+
+		content, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+		if err != nil {
+			t.Fatalf("read CLAUDE.md: %v", err)
+		}
+		// Comment-triggered workflow does not include auto-rename logic.
+		if strings.Contains(string(content), "[A-Z]+-\\d+") {
+			t.Error("comment-triggered CLAUDE.md should not contain identifier-rename instruction")
+		}
+	})
+}
