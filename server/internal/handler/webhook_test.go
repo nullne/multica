@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	wh "github.com/nullne/multica/server/internal/webhook"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -115,6 +116,91 @@ func TestMergeActionConfig_NonCreateIssue(t *testing.T) {
 	}
 	if _, ok := result["foo"]; ok {
 		t.Errorf("non-create_issue should not merge, but found 'foo'")
+	}
+}
+
+func TestMergeActionConfig_CommentIssue(t *testing.T) {
+	existing := db.WebhookAction{
+		ActionType: "comment_issue",
+		Config: mustJSON(CommentIssueActionConfig{
+			ContentTemplate: "old",
+			MentionAgentID:  "agent-1",
+		}),
+	}
+
+	merged, err := mergeActionConfig(existing, map[string]any{"content_template": "new"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result CommentIssueActionConfig
+	json.Unmarshal(merged, &result)
+	if result.ContentTemplate != "new" {
+		t.Errorf("content_template = %q, want new", result.ContentTemplate)
+	}
+	if result.MentionAgentID != "agent-1" {
+		t.Errorf("mention_agent_id clobbered: %q", result.MentionAgentID)
+	}
+}
+
+func TestActionMatchesFilters_NoFilters(t *testing.T) {
+	evt := wh.Event{Type: "github.pull_request.opened", Data: map[string]string{"repo": "acme/widgets"}}
+	if !actionMatchesFilters(nil, nil, evt) {
+		t.Error("empty filters should match everything")
+	}
+}
+
+func TestActionMatchesFilters_EventTypePrefix(t *testing.T) {
+	evt := wh.Event{Type: "github.pull_request.opened", Data: map[string]string{"repo": "acme/widgets"}}
+	if !actionMatchesFilters([]string{"github.pull_request"}, nil, evt) {
+		t.Error("prefix match should accept github.pull_request.opened")
+	}
+	if actionMatchesFilters([]string{"github.issues"}, nil, evt) {
+		t.Error("non-matching prefix should reject")
+	}
+	if !actionMatchesFilters([]string{"github.issues", "github.pull_request"}, nil, evt) {
+		t.Error("OR match should accept when one entry matches")
+	}
+}
+
+func TestActionMatchesFilters_RepoMatch(t *testing.T) {
+	evt := wh.Event{Type: "github.push", Data: map[string]string{"repo": "acme/widgets"}}
+	if !actionMatchesFilters(nil, []string{"acme/widgets"}, evt) {
+		t.Error("exact repo match should accept")
+	}
+	if actionMatchesFilters(nil, []string{"other/repo"}, evt) {
+		t.Error("non-matching repo should reject")
+	}
+}
+
+func TestActionMatchesFilters_ExactEventType(t *testing.T) {
+	evt := wh.Event{Type: "github.push", Data: map[string]string{"repo": "acme/widgets"}}
+	if !actionMatchesFilters([]string{"github.push"}, nil, evt) {
+		t.Error("exact event type should match")
+	}
+}
+
+func TestValidateActionConfig_CommentIssueRequiresBot(t *testing.T) {
+	webhookNoBot := db.Webhook{}
+	cfg := CommentIssueActionConfig{ContentTemplate: "{{.body}}"}
+	if err := validateActionConfig(webhookNoBot, "comment_issue", cfg); err == nil {
+		t.Error("comment_issue without bot_user_id should fail validation")
+	}
+}
+
+func TestValidateActionConfig_CreateIssueRequiresAgent(t *testing.T) {
+	if err := validateActionConfig(db.Webhook{}, "create_issue", map[string]any{}); err == nil {
+		t.Error("create_issue without agent_id should fail validation")
+	}
+}
+
+func TestRenderTemplate(t *testing.T) {
+	out := renderTemplate("Hello {{.name}}, repo={{.repo}}", map[string]string{
+		"name": "world",
+		"repo": "acme/x",
+	})
+	if out != "Hello world, repo=acme/x" {
+		t.Errorf("got %q", out)
 	}
 }
 

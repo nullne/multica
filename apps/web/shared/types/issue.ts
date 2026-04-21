@@ -36,6 +36,19 @@ export interface Label {
   color: string;
 }
 
+export type IssueLinkDirection = "source" | "output";
+export type IssueLinkKind = "pr" | "issue" | "branch" | "commit" | string;
+
+export interface IssueLink {
+  id: string;
+  source_type: string;
+  kind: IssueLinkKind;
+  direction: IssueLinkDirection;
+  url: string;
+  external_id?: string;
+  created_at: string;
+}
+
 export interface Issue {
   id: string;
   workspace_id: string;
@@ -43,8 +56,6 @@ export interface Issue {
   identifier: string;
   title: string;
   description: string | null;
-  linked_branch?: string | null;
-  linked_pr_url?: string | null;
   status: IssueStatus;
   priority: IssuePriority;
   assignee_type: IssueAssigneeType | null;
@@ -62,6 +73,7 @@ export interface Issue {
   dispatch_daemon_id: string | null;
   dispatch_daemon_label: string | null;
   labels: Label[];
+  links?: IssueLink[];
   reactions?: IssueReaction[];
   created_at: string;
   updated_at: string;

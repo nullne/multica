@@ -328,18 +328,52 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 		slog.Debug("task completion payload parse failed", "task_id", util.UUIDToString(task.ID), "error", err)
 	}
 	if payload.BranchName != "" || payload.PRURL != "" {
-		issue, updateErr := s.Queries.UpdateIssueDevLinks(ctx, db.UpdateIssueDevLinksParams{
-			ID:           task.IssueID,
-			LinkedBranch: pgtype.Text{String: payload.BranchName, Valid: payload.BranchName != ""},
-			LinkedPrUrl:  pgtype.Text{String: payload.PRURL, Valid: payload.PRURL != ""},
-		})
-		if updateErr != nil {
-			slog.Warn("update issue dev links failed",
+		// Persist agent-produced links (PR and branch) into issue_link as
+		// outgoing references. Branch URLs aren't real URLs, so we synthesize
+		// a stable identifier "branch:<repo>?<branch>" to satisfy the unique
+		// (workspace_id, url) constraint while still being identifiable.
+		issue, issueErr := s.Queries.GetIssue(ctx, task.IssueID)
+		if issueErr != nil {
+			slog.Warn("load issue for dev-link write failed",
 				"issue_id", util.UUIDToString(task.IssueID),
 				"task_id", util.UUIDToString(task.ID),
-				"error", updateErr,
+				"error", issueErr,
 			)
 		} else {
+			if payload.PRURL != "" {
+				if _, err := s.Queries.CreateIssueLink(ctx, db.CreateIssueLinkParams{
+					IssueID:     issue.ID,
+					WorkspaceID: issue.WorkspaceID,
+					SourceType:  "github",
+					Kind:        "pr",
+					Direction:   "output",
+					Url:         payload.PRURL,
+					ExternalID:  "",
+				}); err != nil {
+					slog.Warn("create outgoing pr link failed",
+						"issue_id", util.UUIDToString(issue.ID),
+						"task_id", util.UUIDToString(task.ID),
+						"error", err,
+					)
+				}
+			}
+			if payload.BranchName != "" {
+				if _, err := s.Queries.CreateIssueLink(ctx, db.CreateIssueLinkParams{
+					IssueID:     issue.ID,
+					WorkspaceID: issue.WorkspaceID,
+					SourceType:  "github",
+					Kind:        "branch",
+					Direction:   "output",
+					Url:         "branch:" + payload.BranchName,
+					ExternalID:  payload.BranchName,
+				}); err != nil {
+					slog.Warn("create outgoing branch link failed",
+						"issue_id", util.UUIDToString(issue.ID),
+						"task_id", util.UUIDToString(task.ID),
+						"error", err,
+					)
+				}
+			}
 			s.broadcastIssueUpdated(issue)
 		}
 	}
@@ -836,8 +870,6 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		"identifier":          issuePrefix + "-" + strconv.Itoa(int(issue.Number)),
 		"title":               issue.Title,
 		"description":         util.TextToPtr(issue.Description),
-		"linked_branch":       util.TextToPtr(issue.LinkedBranch),
-		"linked_pr_url":       util.TextToPtr(issue.LinkedPrUrl),
 		"status":              issue.Status,
 		"priority":            issue.Priority,
 		"assignee_type":       util.TextToPtr(issue.AssigneeType),

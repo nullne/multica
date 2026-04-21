@@ -2,11 +2,15 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/nullne/multica/server/internal/auth"
 	gh "github.com/nullne/multica/server/internal/github"
+	wh "github.com/nullne/multica/server/internal/webhook"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -25,9 +29,20 @@ func (h *Handler) GitHubInstallURL(w http.ResponseWriter, r *http.Request) {
 // completes the GitHub App installation flow. The frontend page at
 // /github/callback receives the redirect from GitHub (with installation_id
 // and state query params) and calls this endpoint.
+//
+// Side effects (in one transaction):
+//  1. Persist installation_id on the workspace.
+//  2. Upsert a source_type='github' webhook record bound to installation_id.
+//     This is what /api/github/events looks up to route incoming events
+//     through the unified webhook pipeline.
 func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 	if h.GitHubApp == nil {
 		writeError(w, http.StatusNotImplemented, "GitHub App not configured")
+		return
+	}
+
+	userID, ok := requireUserID(w, r)
+	if !ok {
 		return
 	}
 
@@ -40,12 +55,64 @@ func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := resolveWorkspaceID(r)
-	ws, err := h.Queries.SetGitHubInstallation(r.Context(), db.SetGitHubInstallationParams{
+	installationID := pgtype.Int8{Int64: body.InstallationID, Valid: true}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	qtx := h.Queries.WithTx(tx)
+
+	ws, err := qtx.SetGitHubInstallation(r.Context(), db.SetGitHubInstallationParams{
 		ID:                   parseUUID(workspaceID),
-		GithubInstallationID: pgtype.Int8{Int64: body.InstallationID, Valid: true},
+		GithubInstallationID: installationID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save installation")
+		return
+	}
+
+	// Idempotency: if a webhook is already bound to this installation (e.g.
+	// the user re-runs the install flow), skip creation.
+	if _, err := qtx.GetWebhookByInstallationID(r.Context(), installationID); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, "failed to check existing webhook")
+			return
+		}
+		// No existing webhook — create one. token_hash is required+unique by
+		// schema even though GitHub webhooks authenticate via HMAC, so we
+		// generate a random token to satisfy the constraint. The token is
+		// never returned to the client.
+		rawToken, tokErr := wh.GenerateToken()
+		if tokErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate token")
+			return
+		}
+		prefix := rawToken
+		if len(prefix) > 12 {
+			prefix = prefix[:12]
+		}
+		if _, err := qtx.CreateWebhook(r.Context(), db.CreateWebhookParams{
+			WorkspaceID:        ws.ID,
+			Name:               "GitHub App",
+			SourceType:         "github",
+			TokenHash:          auth.HashToken(rawToken),
+			TokenPrefix:        prefix,
+			DedupWindowSeconds: 600,
+			CreatedBy:          parseUUID(userID),
+			InstallationID:     installationID,
+		}); err != nil {
+			slog.Warn("github connect: create webhook failed", "workspace_id", workspaceID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to create github webhook")
+			return
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
 
@@ -73,14 +140,48 @@ func (h *Handler) GitHubStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// GitHubDisconnect removes the GitHub App installation from the workspace.
+// GitHubDisconnect removes the GitHub App installation from the workspace
+// and the matching webhook record (so /api/github/events stops routing
+// events for this installation).
 func (h *Handler) GitHubDisconnect(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)
-	ws, err := h.Queries.ClearGitHubInstallation(r.Context(), parseUUID(workspaceID))
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	qtx := h.Queries.WithTx(tx)
+
+	current, err := qtx.GetWorkspace(r.Context(), parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	if current.GithubInstallationID.Valid {
+		if err := qtx.DeleteWebhookByInstallationID(r.Context(), current.GithubInstallationID); err != nil {
+			slog.Warn("github disconnect: delete webhook failed",
+				"workspace_id", workspaceID,
+				"installation_id", current.GithubInstallationID.Int64,
+				"error", err,
+			)
+		}
+	}
+
+	ws, err := qtx.ClearGitHubInstallation(r.Context(), parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to disconnect")
 		return
 	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, workspaceToResponse(ws))
 }
 

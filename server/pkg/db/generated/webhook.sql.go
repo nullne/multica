@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearWebhookBotUser = `-- name: ClearWebhookBotUser :one
+UPDATE webhook SET bot_user_id = NULL, updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id
+`
+
+func (q *Queries) ClearWebhookBotUser(ctx context.Context, id pgtype.UUID) (Webhook, error) {
+	row := q.db.QueryRow(ctx, clearWebhookBotUser, id)
+	var i Webhook
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.SourceType,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.Status,
+		&i.DedupWindowSeconds,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BotUserID,
+		&i.InstallationID,
+	)
+	return i, err
+}
+
 const countWebhookEvents = `-- name: CountWebhookEvents :one
 SELECT count(*) FROM webhook_event_log WHERE webhook_id = $1
 `
@@ -23,9 +50,9 @@ func (q *Queries) CountWebhookEvents(ctx context.Context, webhookID pgtype.UUID)
 }
 
 const createWebhook = `-- name: CreateWebhook :one
-INSERT INTO webhook (workspace_id, name, source_type, token_hash, token_prefix, dedup_window_seconds, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at
+INSERT INTO webhook (workspace_id, name, source_type, token_hash, token_prefix, dedup_window_seconds, created_by, bot_user_id, installation_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id
 `
 
 type CreateWebhookParams struct {
@@ -36,6 +63,8 @@ type CreateWebhookParams struct {
 	TokenPrefix        string      `json:"token_prefix"`
 	DedupWindowSeconds int32       `json:"dedup_window_seconds"`
 	CreatedBy          pgtype.UUID `json:"created_by"`
+	BotUserID          pgtype.UUID `json:"bot_user_id"`
+	InstallationID     pgtype.Int8 `json:"installation_id"`
 }
 
 func (q *Queries) CreateWebhook(ctx context.Context, arg CreateWebhookParams) (Webhook, error) {
@@ -47,6 +76,8 @@ func (q *Queries) CreateWebhook(ctx context.Context, arg CreateWebhookParams) (W
 		arg.TokenPrefix,
 		arg.DedupWindowSeconds,
 		arg.CreatedBy,
+		arg.BotUserID,
+		arg.InstallationID,
 	)
 	var i Webhook
 	err := row.Scan(
@@ -61,6 +92,8 @@ func (q *Queries) CreateWebhook(ctx context.Context, arg CreateWebhookParams) (W
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BotUserID,
+		&i.InstallationID,
 	)
 	return i, err
 }
@@ -157,6 +190,15 @@ func (q *Queries) DeleteWebhookAction(ctx context.Context, id pgtype.UUID) error
 	return err
 }
 
+const deleteWebhookByInstallationID = `-- name: DeleteWebhookByInstallationID :exec
+DELETE FROM webhook WHERE installation_id = $1
+`
+
+func (q *Queries) DeleteWebhookByInstallationID(ctx context.Context, installationID pgtype.Int8) error {
+	_, err := q.db.Exec(ctx, deleteWebhookByInstallationID, installationID)
+	return err
+}
+
 const findRecentWebhookEvent = `-- name: FindRecentWebhookEvent :one
 SELECT id FROM webhook_event_log
 WHERE webhook_id = $1 AND dedup_key = $2 AND status = 'processed'
@@ -178,7 +220,7 @@ func (q *Queries) FindRecentWebhookEvent(ctx context.Context, arg FindRecentWebh
 }
 
 const getWebhook = `-- name: GetWebhook :one
-SELECT id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at FROM webhook WHERE id = $1
+SELECT id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id FROM webhook WHERE id = $1
 `
 
 func (q *Queries) GetWebhook(ctx context.Context, id pgtype.UUID) (Webhook, error) {
@@ -196,6 +238,8 @@ func (q *Queries) GetWebhook(ctx context.Context, id pgtype.UUID) (Webhook, erro
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BotUserID,
+		&i.InstallationID,
 	)
 	return i, err
 }
@@ -220,8 +264,33 @@ func (q *Queries) GetWebhookAction(ctx context.Context, id pgtype.UUID) (Webhook
 	return i, err
 }
 
+const getWebhookByInstallationID = `-- name: GetWebhookByInstallationID :one
+SELECT id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id FROM webhook WHERE installation_id = $1
+`
+
+func (q *Queries) GetWebhookByInstallationID(ctx context.Context, installationID pgtype.Int8) (Webhook, error) {
+	row := q.db.QueryRow(ctx, getWebhookByInstallationID, installationID)
+	var i Webhook
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.SourceType,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.Status,
+		&i.DedupWindowSeconds,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BotUserID,
+		&i.InstallationID,
+	)
+	return i, err
+}
+
 const getWebhookByTokenHash = `-- name: GetWebhookByTokenHash :one
-SELECT id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at FROM webhook WHERE token_hash = $1
+SELECT id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id FROM webhook WHERE token_hash = $1
 `
 
 func (q *Queries) GetWebhookByTokenHash(ctx context.Context, tokenHash string) (Webhook, error) {
@@ -239,6 +308,8 @@ func (q *Queries) GetWebhookByTokenHash(ctx context.Context, tokenHash string) (
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BotUserID,
+		&i.InstallationID,
 	)
 	return i, err
 }
@@ -352,7 +423,7 @@ func (q *Queries) ListWebhookEvents(ctx context.Context, arg ListWebhookEventsPa
 }
 
 const listWebhooksByWorkspace = `-- name: ListWebhooksByWorkspace :many
-SELECT id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at FROM webhook WHERE workspace_id = $1 ORDER BY created_at DESC
+SELECT id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id FROM webhook WHERE workspace_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListWebhooksByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]Webhook, error) {
@@ -376,6 +447,8 @@ func (q *Queries) ListWebhooksByWorkspace(ctx context.Context, workspaceID pgtyp
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.BotUserID,
+			&i.InstallationID,
 		); err != nil {
 			return nil, err
 		}
@@ -390,7 +463,7 @@ func (q *Queries) ListWebhooksByWorkspace(ctx context.Context, workspaceID pgtyp
 const regenerateWebhookToken = `-- name: RegenerateWebhookToken :one
 UPDATE webhook SET token_hash = $2, token_prefix = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id
 `
 
 type RegenerateWebhookTokenParams struct {
@@ -414,6 +487,8 @@ func (q *Queries) RegenerateWebhookToken(ctx context.Context, arg RegenerateWebh
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BotUserID,
+		&i.InstallationID,
 	)
 	return i, err
 }
@@ -424,9 +499,10 @@ UPDATE webhook SET
     source_type = COALESCE($3, source_type),
     status = COALESCE($4, status),
     dedup_window_seconds = COALESCE($5, dedup_window_seconds),
+    bot_user_id = COALESCE($6, bot_user_id),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, source_type, token_hash, token_prefix, status, dedup_window_seconds, created_by, created_at, updated_at, bot_user_id, installation_id
 `
 
 type UpdateWebhookParams struct {
@@ -435,6 +511,7 @@ type UpdateWebhookParams struct {
 	SourceType         pgtype.Text `json:"source_type"`
 	Status             pgtype.Text `json:"status"`
 	DedupWindowSeconds pgtype.Int4 `json:"dedup_window_seconds"`
+	BotUserID          pgtype.UUID `json:"bot_user_id"`
 }
 
 func (q *Queries) UpdateWebhook(ctx context.Context, arg UpdateWebhookParams) (Webhook, error) {
@@ -444,6 +521,7 @@ func (q *Queries) UpdateWebhook(ctx context.Context, arg UpdateWebhookParams) (W
 		arg.SourceType,
 		arg.Status,
 		arg.DedupWindowSeconds,
+		arg.BotUserID,
 	)
 	var i Webhook
 	err := row.Scan(
@@ -458,6 +536,8 @@ func (q *Queries) UpdateWebhook(ctx context.Context, arg UpdateWebhookParams) (W
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BotUserID,
+		&i.InstallationID,
 	)
 	return i, err
 }

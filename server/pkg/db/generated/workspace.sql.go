@@ -111,6 +111,30 @@ func (q *Queries) GetWorkspace(ctx context.Context, id pgtype.UUID) (Workspace, 
 	return i, err
 }
 
+const getWorkspaceByInstallationID = `-- name: GetWorkspaceByInstallationID :one
+SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id FROM workspace WHERE github_installation_id = $1
+`
+
+func (q *Queries) GetWorkspaceByInstallationID(ctx context.Context, githubInstallationID pgtype.Int8) (Workspace, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceByInstallationID, githubInstallationID)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Context,
+		&i.Repos,
+		&i.IssuePrefix,
+		&i.IssueCounter,
+		&i.GithubInstallationID,
+	)
+	return i, err
+}
+
 const getWorkspaceBySlug = `-- name: GetWorkspaceBySlug :one
 SELECT id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter, github_installation_id FROM workspace
 WHERE slug = $1

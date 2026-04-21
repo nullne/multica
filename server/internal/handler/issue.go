@@ -24,8 +24,6 @@ type IssueResponse struct {
 	Identifier            string                  `json:"identifier"`
 	Title                 string                  `json:"title"`
 	Description           *string                 `json:"description"`
-	LinkedBranch          *string                 `json:"linked_branch"`
-	LinkedPRURL           *string                 `json:"linked_pr_url"`
 	Status                string                  `json:"status"`
 	Priority              string                  `json:"priority"`
 	AssigneeType          *string                 `json:"assignee_type"`
@@ -45,8 +43,34 @@ type IssueResponse struct {
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
 	Labels                []LabelResponse         `json:"labels"`
+	Links                 []IssueLinkResponse     `json:"links"`
 	Reactions             []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments           []AttachmentResponse    `json:"attachments,omitempty"`
+}
+
+// IssueLinkResponse describes an external link attached to an issue (e.g.
+// the GitHub PR an agent opened, or the upstream GitHub issue that created
+// this Multica issue).
+type IssueLinkResponse struct {
+	ID         string `json:"id"`
+	SourceType string `json:"source_type"`
+	Kind       string `json:"kind"`
+	Direction  string `json:"direction"`
+	URL        string `json:"url"`
+	ExternalID string `json:"external_id,omitempty"`
+	CreatedAt  string `json:"created_at"`
+}
+
+func issueLinkToResponse(l db.IssueLink) IssueLinkResponse {
+	return IssueLinkResponse{
+		ID:         uuidToString(l.ID),
+		SourceType: l.SourceType,
+		Kind:       l.Kind,
+		Direction:  l.Direction,
+		URL:        l.Url,
+		ExternalID: l.ExternalID,
+		CreatedAt:  timestampToString(l.CreatedAt),
+	}
 }
 
 type agentTriggerSnapshot struct {
@@ -85,8 +109,6 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		Identifier:            identifier,
 		Title:                 i.Title,
 		Description:           textToPtr(i.Description),
-		LinkedBranch:          textToPtr(i.LinkedBranch),
-		LinkedPRURL:           textToPtr(i.LinkedPrUrl),
 		Status:                i.Status,
 		Priority:              i.Priority,
 		AssigneeType:          textToPtr(i.AssigneeType),
@@ -104,6 +126,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
 		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
 		Labels:                []LabelResponse{},
+		Links:                 []IssueLinkResponse{},
 		CreatedAt:             timestampToString(i.CreatedAt),
 		UpdatedAt:             timestampToString(i.UpdatedAt),
 	}
@@ -160,7 +183,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		resp[i] = issueToResponse(issue, prefix)
 	}
 
-	// Batch-fetch labels for all issues.
+	// Batch-fetch labels and external links for all issues.
 	if len(issues) > 0 {
 		issueIDs := make([]pgtype.UUID, len(issues))
 		for i, issue := range issues {
@@ -181,6 +204,20 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			for i := range resp {
 				if labels, ok := labelMap[resp[i].ID]; ok {
 					resp[i].Labels = labels
+				}
+			}
+		}
+
+		linkRows, err := h.Queries.ListIssueLinksByIssues(ctx, issueIDs)
+		if err == nil {
+			linkMap := make(map[string][]IssueLinkResponse)
+			for _, l := range linkRows {
+				iid := uuidToString(l.IssueID)
+				linkMap[iid] = append(linkMap[iid], issueLinkToResponse(l))
+			}
+			for i := range resp {
+				if links, ok := linkMap[resp[i].ID]; ok {
+					resp[i].Links = links
 				}
 			}
 		}
@@ -207,6 +244,15 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 		resp.Labels = make([]LabelResponse, len(labels))
 		for i, l := range labels {
 			resp.Labels[i] = labelToResponse(l)
+		}
+	}
+
+	// Fetch external links (incoming source URLs and outgoing PRs/branches).
+	links, err := h.Queries.ListIssueLinksByIssue(r.Context(), issue.ID)
+	if err == nil && len(links) > 0 {
+		resp.Links = make([]IssueLinkResponse, len(links))
+		for i, l := range links {
+			resp.Links[i] = issueLinkToResponse(l)
 		}
 	}
 

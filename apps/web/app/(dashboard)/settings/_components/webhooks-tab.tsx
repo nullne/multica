@@ -1,9 +1,35 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Webhook, Trash2, Copy, Check, Plus, Pause, Play, RefreshCw, ChevronDown, ChevronRight, Pencil } from "lucide-react";
+import {
+  Webhook,
+  Trash2,
+  Copy,
+  Check,
+  Plus,
+  Pause,
+  Play,
+  RefreshCw,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Bot,
+  GitBranch as Github,
+} from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import type { WebhookWithActions, CreateWebhookResponse, Agent, Daemon, CreateIssueActionConfig, WebhookAction, AdapterInfo } from "@/shared/types";
+import type {
+  WebhookWithActions,
+  CreateWebhookResponse,
+  Agent,
+  Daemon,
+  CreateIssueActionConfig,
+  CommentIssueActionConfig,
+  WebhookAction,
+  WebhookActionType,
+  WebhookSourceType,
+  AdapterInfo,
+  BotUser,
+} from "@/shared/types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,11 +68,20 @@ import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover
 import { useWorkspaceStore } from "@/features/workspace";
 import { useLabelStore } from "@/features/labels";
 import type { Label as IssueLabel } from "@/shared/types";
-import { GitHubEventsSection } from "./github-events-section";
+
+const GITHUB_EVENT_TYPES: { value: string; label: string }[] = [
+  { value: "github.push", label: "Push" },
+  { value: "github.pull_request", label: "Pull request" },
+  { value: "github.issues", label: "Issue" },
+  { value: "github.issue_comment", label: "Issue / PR comment" },
+];
 
 export function WebhooksTab() {
+  const workspaceId = useWorkspaceStore((s) => s.workspace?.id ?? null);
   const [webhooks, setWebhooks] = useState<WebhookWithActions[]>([]);
+  const [bots, setBots] = useState<BotUser[]>([]);
   const [daemons, setDaemons] = useState<Daemon[]>([]);
+  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<WebhookWithActions | null>(null);
@@ -57,27 +92,32 @@ export function WebhooksTab() {
   const [exampleCopied, setExampleCopied] = useState(false);
   const agents = useWorkspaceStore((s) => s.agents);
 
-  const loadWebhooks = useCallback(async () => {
+  const reload = useCallback(async () => {
+    if (!workspaceId) return;
     try {
-      const [list, daemonList] = await Promise.all([
+      const [webhookList, daemonList, botList, adapterList] = await Promise.all([
         api.listWebhooks(),
         api.listDaemons(),
+        api.listBotUsers(workspaceId),
+        api.listWebhookAdapters(),
       ]);
-      setWebhooks(list);
+      setWebhooks(webhookList);
       setDaemons(daemonList);
+      setBots(botList);
+      setAdapters(adapterList);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load webhooks");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceId]);
 
-  useEffect(() => { loadWebhooks(); }, [loadWebhooks]);
+  useEffect(() => { reload(); }, [reload]);
 
   const handleDelete = async (id: string) => {
     try {
       await api.deleteWebhook(id);
-      await loadWebhooks();
+      await reload();
       toast.success("Webhook deleted");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to delete webhook");
@@ -88,7 +128,7 @@ export function WebhooksTab() {
     const newStatus = wh.webhook.status === "active" ? "paused" : "active";
     try {
       await api.updateWebhook(wh.webhook.id, { status: newStatus });
-      await loadWebhooks();
+      await reload();
       toast.success(newStatus === "active" ? "Webhook activated" : "Webhook paused");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update webhook");
@@ -101,7 +141,7 @@ export function WebhooksTab() {
       const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
       const wh = webhooks.find((w) => w.webhook.id === id);
       setNewTokenData({ token: result.token, webhookId: id, url: `${baseUrl}/api/webhooks/${id}`, sourceType: wh?.webhook.source_type ?? "standard" });
-      await loadWebhooks();
+      await reload();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to regenerate token");
     }
@@ -130,7 +170,12 @@ export function WebhooksTab() {
 
   return (
     <div className="space-y-8">
-      <GitHubEventsSection />
+      <BotUsersSection
+        workspaceId={workspaceId}
+        bots={bots}
+        loading={loading}
+        onChanged={reload}
+      />
 
       <section className="space-y-4">
         <div className="flex items-center justify-between">
@@ -145,7 +190,8 @@ export function WebhooksTab() {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Webhooks allow external systems (alerting, monitoring, CI) to send events that automatically create issues and trigger agent processing.
+          Webhooks let external systems (alerting, monitoring, CI, GitHub) push events that
+          create issues or comment on existing ones.
         </p>
 
         {loading ? (
@@ -174,6 +220,7 @@ export function WebhooksTab() {
               <WebhookCard
                 key={wh.webhook.id}
                 wh={wh}
+                bots={bots}
                 agentName={agentName}
                 envName={envName}
                 apiBaseUrl={apiBaseUrl}
@@ -192,19 +239,22 @@ export function WebhooksTab() {
         onOpenChange={setCreateOpen}
         agents={agents}
         daemons={daemons}
+        adapters={adapters}
         apiBaseUrl={apiBaseUrl}
         onCreated={async (data) => {
           setNewTokenData(data);
-          await loadWebhooks();
+          await reload();
         }}
       />
 
       <EditWebhookDialog
         webhook={editingWebhook}
-        onOpenChange={(v) => { if (!v) setEditingWebhook(null); }}
+        bots={bots}
         agents={agents}
         daemons={daemons}
-        onUpdated={loadWebhooks}
+        adapters={adapters}
+        onOpenChange={(v) => { if (!v) setEditingWebhook(null); }}
+        onUpdated={reload}
       />
 
       <AlertDialog open={!!deleteConfirmId} onOpenChange={(v) => { if (!v) setDeleteConfirmId(null); }}>
@@ -212,7 +262,8 @@ export function WebhooksTab() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete webhook</AlertDialogTitle>
             <AlertDialogDescription>
-              This webhook and all its event history will be permanently deleted. External systems will receive errors when sending to this URL.
+              This webhook and all its event history will be permanently deleted.
+              External systems will receive errors when sending to this URL.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -310,10 +361,6 @@ export function WebhooksTab() {
   );
 }
 
-function getActionConfig(action: WebhookAction): CreateIssueActionConfig {
-  return action.config as CreateIssueActionConfig;
-}
-
 function usageExamplePayload(sourceType?: string): string {
   switch (sourceType) {
     case "oss-alert":
@@ -329,8 +376,165 @@ function usageExamplePayload(sourceType?: string): string {
   }
 }
 
-function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onRegenerate, onDelete }: {
+// ----------------------------------------------------------------------------
+// Bot users section
+// ----------------------------------------------------------------------------
+
+function BotUsersSection({
+  workspaceId,
+  bots,
+  loading,
+  onChanged,
+}: {
+  workspaceId: string | null;
+  bots: BotUser[];
+  loading: boolean;
+  onChanged: () => Promise<void> | void;
+}) {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  const handleCreate = async () => {
+    if (!workspaceId || !name.trim()) return;
+    setCreating(true);
+    try {
+      await api.createBotUser(workspaceId, { name: name.trim() });
+      toast.success("Bot user created");
+      setName("");
+      setCreateOpen(false);
+      await onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to create bot");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleDelete = async (botId: string) => {
+    if (!workspaceId) return;
+    try {
+      await api.deleteBotUser(workspaceId, botId);
+      toast.success("Bot user deleted");
+      await onChanged();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to delete bot");
+    }
+  };
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">Bot users</h2>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-3.5 w-3.5 mr-1" />
+          Add bot
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Bot users post comments on behalf of webhooks. They appear in member lists but
+        cannot log in. Bind one to a webhook&apos;s &quot;Comment on linked issue&quot; action.
+      </p>
+
+      {loading ? (
+        <Skeleton className="h-10 w-full" />
+      ) : bots.length === 0 ? (
+        <Card>
+          <CardContent className="py-4 text-center text-xs text-muted-foreground">
+            No bot users yet.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="rounded-md border divide-y">
+          {bots.map((b) => (
+            <div key={b.id} className="flex items-center justify-between px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium truncate">{b.name}</div>
+                <div className="text-[11px] text-muted-foreground truncate">{b.email}</div>
+              </div>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button variant="ghost" size="icon-sm" onClick={() => setDeleteConfirmId(b.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  }
+                />
+                <TooltipContent>Delete bot</TooltipContent>
+              </Tooltip>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create bot user</DialogTitle>
+            <DialogDescription>
+              The bot will be added to this workspace as a regular member with role &quot;member&quot;.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="bot-name">Name</Label>
+            <Input id="bot-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. GitHub Bot" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreate} disabled={creating || !name.trim()}>
+              {creating ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!deleteConfirmId} onOpenChange={(v) => { if (!v) setDeleteConfirmId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete bot user</AlertDialogTitle>
+            <AlertDialogDescription>
+              Webhooks bound to this bot will lose their author and any &quot;Comment on linked issue&quot; actions will fail until you assign a new bot.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={async () => {
+                if (deleteConfirmId) await handleDelete(deleteConfirmId);
+                setDeleteConfirmId(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </section>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Webhook card
+// ----------------------------------------------------------------------------
+
+function WebhookCard({
+  wh,
+  bots,
+  agentName,
+  envName,
+  apiBaseUrl,
+  onToggle,
+  onEdit,
+  onRegenerate,
+  onDelete,
+}: {
   wh: WebhookWithActions;
+  bots: BotUser[];
   agentName: (agentId: string) => string;
   envName: (daemonId: string) => string;
   apiBaseUrl: string;
@@ -342,8 +546,11 @@ function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onR
   const [expanded, setExpanded] = useState(false);
   const webhook = wh.webhook;
   const isActive = webhook.status === "active";
-  const primaryAction = wh.actions[0];
-  const primaryConfig = primaryAction ? getActionConfig(primaryAction) : null;
+  const isGitHub = webhook.source_type === "github";
+  const url = isGitHub
+    ? `${apiBaseUrl}/api/github/events`
+    : `${apiBaseUrl}/api/webhooks/${webhook.id}`;
+  const botName = webhook.bot_user_id ? (bots.find((b) => b.id === webhook.bot_user_id)?.name ?? "(deleted bot)") : null;
 
   return (
     <Card>
@@ -354,6 +561,7 @@ function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onR
           </button>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
+              {isGitHub && <Github className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
               <span className="text-sm font-medium truncate">{webhook.name}</span>
               <Badge variant={isActive ? "default" : "secondary"} className="text-[10px] px-1.5 py-0">
                 {isActive ? "Active" : "Paused"}
@@ -363,8 +571,9 @@ function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onR
               </Badge>
             </div>
             <div className="text-xs text-muted-foreground">
-              {primaryConfig ? `Agent: ${agentName(primaryConfig.agent_id)}` : "No action configured"}
-              {" · "}{wh.event_count} events · {webhook.token_prefix}...
+              {wh.actions.length} action{wh.actions.length === 1 ? "" : "s"} · {wh.event_count} events
+              {!isGitHub && ` · ${webhook.token_prefix}...`}
+              {botName && ` · bot: ${botName}`}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -388,74 +597,53 @@ function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onR
               />
               <TooltipContent>{isActive ? "Pause" : "Activate"}</TooltipContent>
             </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button variant="ghost" size="icon-sm" onClick={onRegenerate}>
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  </Button>
-                }
-              />
-              <TooltipContent>Regenerate token</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button variant="ghost" size="icon-sm" onClick={onDelete}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                }
-              />
-              <TooltipContent>Delete</TooltipContent>
-            </Tooltip>
+            {!isGitHub && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button variant="ghost" size="icon-sm" onClick={onRegenerate}>
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </Button>
+                  }
+                />
+                <TooltipContent>Regenerate token</TooltipContent>
+              </Tooltip>
+            )}
+            {!isGitHub && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button variant="ghost" size="icon-sm" onClick={onDelete}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  }
+                />
+                <TooltipContent>Delete</TooltipContent>
+              </Tooltip>
+            )}
           </div>
         </div>
         {expanded && (
           <div className="ml-7 space-y-2 text-xs text-muted-foreground border-t pt-2">
             <div className="flex gap-2">
               <span className="font-medium w-28 shrink-0">URL:</span>
-              <code className="break-all">{apiBaseUrl}/api/webhooks/{webhook.id}</code>
+              <code className="break-all">{url}</code>
             </div>
             <div className="flex gap-2">
               <span className="font-medium w-28 shrink-0">Dedup window:</span>
               <span>{webhook.dedup_window_seconds}s</span>
             </div>
-            {primaryConfig && (
-              <>
-                <div className="border-t pt-2 mt-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide">Action: Create Issue</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="font-medium w-28 shrink-0">Agent:</span>
-                  <span>{agentName(primaryConfig.agent_id)}</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="font-medium w-28 shrink-0">Provider:</span>
-                  <span className="capitalize">{primaryConfig.dispatch_provider || "Auto"}</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="font-medium w-28 shrink-0">Environment:</span>
-                  <span>{primaryConfig.dispatch_daemon_id ? envName(primaryConfig.dispatch_daemon_id) : "Any"}</span>
-                </div>
-                {primaryConfig.title_template && (
-                  <div className="flex gap-2">
-                    <span className="font-medium w-28 shrink-0">Issue title:</span>
-                    <code>{primaryConfig.title_template}</code>
-                  </div>
-                )}
-                {primaryConfig.description_template && (
-                  <div className="flex gap-2">
-                    <span className="font-medium w-28 shrink-0">Issue desc:</span>
-                    <code className="break-all">{primaryConfig.description_template}</code>
-                  </div>
-                )}
-                {primaryConfig.labels && primaryConfig.labels.length > 0 && (
-                  <div className="flex gap-2">
-                    <span className="font-medium w-28 shrink-0">Labels:</span>
-                    <WebhookLabelDisplay labelIds={primaryConfig.labels} />
-                  </div>
-                )}
-              </>
+            {wh.actions.map((a, idx) => (
+              <ActionSummary
+                key={a.id}
+                action={a}
+                index={idx}
+                agentName={agentName}
+                envName={envName}
+              />
+            ))}
+            {wh.actions.length === 0 && (
+              <div className="italic text-muted-foreground/70">No actions configured</div>
             )}
           </div>
         )}
@@ -464,17 +652,91 @@ function WebhookCard({ wh, agentName, envName, apiBaseUrl, onToggle, onEdit, onR
   );
 }
 
-function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, onCreated }: {
+function ActionSummary({
+  action,
+  index,
+  agentName,
+  envName,
+}: {
+  action: WebhookAction;
+  index: number;
+  agentName: (id: string) => string;
+  envName: (id: string) => string;
+}) {
+  return (
+    <div className="border-t pt-2 mt-1">
+      <span className="text-[10px] font-semibold uppercase tracking-wide">
+        Action #{index + 1}: {action.action_type}
+        {!action.enabled && <Badge variant="outline" className="ml-2 text-[8px] px-1 py-0">disabled</Badge>}
+      </span>
+      {action.action_type === "create_issue" && (() => {
+        const cfg = action.config as CreateIssueActionConfig;
+        return (
+          <div className="space-y-0.5 mt-1">
+            <PropLine label="Agent" value={agentName(cfg.agent_id)} />
+            {cfg.dispatch_provider && <PropLine label="Provider" value={cfg.dispatch_provider} />}
+            {cfg.dispatch_daemon_id && <PropLine label="Environment" value={envName(cfg.dispatch_daemon_id)} />}
+            {cfg.title_template && <PropLine label="Title" value={cfg.title_template} mono />}
+            {cfg.event_types && cfg.event_types.length > 0 && (
+              <PropLine label="Events" value={cfg.event_types.join(", ")} />
+            )}
+            {cfg.repos && cfg.repos.length > 0 && (
+              <PropLine label="Repos" value={cfg.repos.join(", ")} />
+            )}
+          </div>
+        );
+      })()}
+      {action.action_type === "comment_issue" && (() => {
+        const cfg = action.config as CommentIssueActionConfig;
+        return (
+          <div className="space-y-0.5 mt-1">
+            {cfg.mention_agent_id && <PropLine label="Mention" value={`@${agentName(cfg.mention_agent_id)}`} />}
+            {cfg.content_template && <PropLine label="Content" value={cfg.content_template} mono />}
+            {cfg.event_types && cfg.event_types.length > 0 && (
+              <PropLine label="Events" value={cfg.event_types.join(", ")} />
+            )}
+            {cfg.repos && cfg.repos.length > 0 && (
+              <PropLine label="Repos" value={cfg.repos.join(", ")} />
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+function PropLine({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex gap-2">
+      <span className="font-medium w-24 shrink-0">{label}:</span>
+      {mono ? <code className="break-all">{value}</code> : <span className="truncate">{value}</span>}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Create dialog
+// ----------------------------------------------------------------------------
+
+function CreateWebhookDialog({
+  open,
+  onOpenChange,
+  agents,
+  daemons,
+  adapters,
+  apiBaseUrl,
+  onCreated,
+}: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   agents: Agent[];
   daemons: Daemon[];
+  adapters: AdapterInfo[];
   apiBaseUrl: string;
   onCreated: (data: { token: string; webhookId: string; url: string; sourceType: string }) => void;
 }) {
   const [name, setName] = useState("");
-  const [sourceType, setSourceType] = useState("standard");
-  const [actionType, setActionType] = useState("create_issue");
+  const [sourceType, setSourceType] = useState<WebhookSourceType>("standard");
   const [agentId, setAgentId] = useState("");
   const [dispatchProvider, setDispatchProvider] = useState("");
   const [dispatchDaemonId, setDispatchDaemonId] = useState("");
@@ -482,18 +744,13 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
   const [selectedLabels, setSelectedLabels] = useState<IssueLabel[]>([]);
   const [creating, setCreating] = useState(false);
-  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [showSchema, setShowSchema] = useState(false);
   const allLabels = useLabelStore((s) => s.labels);
 
   const activeAgents = agents.filter((a: Agent) => !a.archived_at);
   const selectedAgent = activeAgents.find((a) => a.id === agentId);
-
-  useEffect(() => {
-    if (open) {
-      api.listWebhookAdapters().then(setAdapters).catch(() => {});
-    }
-  }, [open]);
+  const selectableAdapters = adapters.filter((a) => a.source_type !== "github");
+  const currentAdapter = adapters.find((a) => a.source_type === sourceType);
 
   useEffect(() => {
     if (open && activeAgents.length > 0 && !agentId) {
@@ -501,14 +758,12 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
     }
   }, [open, activeAgents, agentId]);
 
-  const currentAdapter = adapters.find((a) => a.source_type === sourceType);
-
   const handleCreate = async () => {
     setCreating(true);
     try {
       const result: CreateWebhookResponse = await api.createWebhook({
         name,
-        source_type: sourceType as "standard" | "oss-alert",
+        source_type: sourceType,
         agent_id: agentId,
         title_template: titleTemplate || undefined,
         description_template: descriptionTemplate || undefined,
@@ -520,7 +775,6 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
       onOpenChange(false);
       setName("");
       setSourceType("standard");
-      setActionType("create_issue");
       setAgentId("");
       setDispatchProvider("");
       setDispatchDaemonId("");
@@ -541,7 +795,8 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
         <DialogHeader>
           <DialogTitle>Create Webhook</DialogTitle>
           <DialogDescription>
-            Create an endpoint for external systems to send events.
+            Create a token-authenticated endpoint for external systems. GitHub webhooks are
+            managed automatically through the GitHub App connect flow.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -553,10 +808,10 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
             </div>
             <div className="space-y-1.5">
               <Label>Source Type</Label>
-              <Select value={sourceType} onValueChange={(v) => { if (v) { setSourceType(v); setShowSchema(false); } }}>
+              <Select value={sourceType} onValueChange={(v) => { if (v) { setSourceType(v as WebhookSourceType); setShowSchema(false); } }}>
                 <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {adapters.map((a) => (
+                  {selectableAdapters.map((a) => (
                     <SelectItem key={a.source_type} value={a.source_type}>
                       {a.source_type}
                     </SelectItem>
@@ -564,135 +819,35 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
                 </SelectContent>
               </Select>
             </div>
-            {currentAdapter && (
-              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-                <p className="text-xs text-muted-foreground">{currentAdapter.description}</p>
-                <button
-                  type="button"
-                  onClick={() => setShowSchema(!showSchema)}
-                  className="text-xs text-primary hover:underline flex items-center gap-1"
-                >
-                  {showSchema ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  {showSchema ? "Hide" : "Show"} payload schema & example
-                </button>
-                {showSchema && (
-                  <div className="space-y-2 pt-1">
-                    <div>
-                      <p className="text-[10px] font-medium text-muted-foreground mb-1">Available template variables:</p>
-                      <div className="grid gap-0.5">
-                        {currentAdapter.keys.map((k) => (
-                          <div key={k.key} className="flex items-start gap-2 text-[10px]">
-                            <code className="font-mono text-primary shrink-0">{`{{.${k.key}}}`}</code>
-                            <span className="text-muted-foreground">{k.description}</span>
-                            {k.required && <Badge variant="outline" className="text-[8px] px-1 py-0 shrink-0">required</Badge>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    {currentAdapter.example && (
-                      <div>
-                        <p className="text-[10px] font-medium text-muted-foreground mb-1">Example payload:</p>
-                        <pre className="rounded bg-muted p-2 text-[10px] overflow-x-auto whitespace-pre">
-                          {currentAdapter.example}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+            <SchemaPanel adapter={currentAdapter} show={showSchema} onToggle={() => setShowSchema(!showSchema)} />
           </div>
 
           <div className="border-t pt-4 space-y-3">
             <div>
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Action</h3>
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Default Action</h3>
               <p className="text-[11px] text-muted-foreground mt-1">
-                When an event is received, execute the following action.
+                A &quot;Create issue&quot; action is created automatically. Add more actions
+                (comment, mention, filters) after the webhook exists.
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <Label className="w-24 shrink-0 text-right">Action Type</Label>
-              <Select value={actionType} onValueChange={(v) => { if (v) setActionType(v); }}>
-                <SelectTrigger size="sm" className="w-auto"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="create_issue">Create Issue</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {actionType === "create_issue" && (
-              <>
-                <div className="flex items-center gap-3">
-                  <Label className="w-24 shrink-0 text-right">Agent</Label>
-                  <Select value={agentId} onValueChange={(v) => { if (v) setAgentId(v); }}>
-                    <SelectTrigger size="sm" className="w-auto">
-                      <SelectValue placeholder="Select agent">
-                        {activeAgents.find((a) => a.id === agentId)?.name}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {activeAgents.map((a: Agent) => (
-                        <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {selectedAgent && selectedAgent.providers.length > 0 && (
-                  <div className="flex items-center gap-3">
-                    <Label className="w-24 shrink-0 text-right">Provider</Label>
-                    <Select value={dispatchProvider} onValueChange={(v) => setDispatchProvider(v ?? "")}>
-                      <SelectTrigger size="sm" className="w-auto">
-                        <SelectValue placeholder="Auto">
-                          {dispatchProvider ? <span className="capitalize">{dispatchProvider}</span> : "Auto"}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="">Auto</SelectItem>
-                        {selectedAgent.providers.map((p) => (
-                          <SelectItem key={p} value={p}>
-                            <span className="capitalize">{p}</span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-                <div className="flex items-center gap-3">
-                  <Label className="w-24 shrink-0 text-right">Environment</Label>
-                  <Select value={dispatchDaemonId} onValueChange={(v) => setDispatchDaemonId(v ?? "")}>
-                    <SelectTrigger size="sm" className="w-auto">
-                      <SelectValue placeholder="Any environment">
-                        {dispatchDaemonId
-                          ? (daemons.find((d) => d.id === dispatchDaemonId)?.device_name || daemons.find((d) => d.id === dispatchDaemonId)?.daemon_id)
-                          : "Any environment"}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="">Any environment</SelectItem>
-                      {daemons.map((d) => (
-                        <SelectItem key={d.id} value={d.id}>
-                          <span className="flex items-center gap-2">
-                            <span className={`h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
-                            {d.device_name || d.daemon_id}
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="wh-title-tmpl">Issue Title Template <span className="text-muted-foreground">(optional, defaults to event title)</span></Label>
-                  <Input id="wh-title-tmpl" value={titleTemplate} onChange={(e) => setTitleTemplate(e.target.value)} placeholder="e.g. [Alert] {{.title}}" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="wh-desc-tmpl">Issue Description Template <span className="text-muted-foreground">(optional, defaults to event body)</span></Label>
-                  <Textarea id="wh-desc-tmpl" value={descriptionTemplate} onChange={(e) => setDescriptionTemplate(e.target.value)} placeholder="e.g. {{.body}}" rows={2} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Labels <span className="text-muted-foreground">(optional)</span></Label>
-                  <WebhookLabelPicker labels={allLabels} selected={selectedLabels} onChange={setSelectedLabels} />
-                </div>
-              </>
-            )}
+            <CreateIssueActionFields
+              agents={activeAgents}
+              selectedAgent={selectedAgent}
+              daemons={daemons}
+              agentId={agentId}
+              setAgentId={setAgentId}
+              dispatchProvider={dispatchProvider}
+              setDispatchProvider={setDispatchProvider}
+              dispatchDaemonId={dispatchDaemonId}
+              setDispatchDaemonId={setDispatchDaemonId}
+              titleTemplate={titleTemplate}
+              setTitleTemplate={setTitleTemplate}
+              descriptionTemplate={descriptionTemplate}
+              setDescriptionTemplate={setDescriptionTemplate}
+              selectedLabels={selectedLabels}
+              setSelectedLabels={setSelectedLabels}
+              allLabels={allLabels}
+            />
           </div>
         </div>
         <DialogFooter>
@@ -706,74 +861,118 @@ function CreateWebhookDialog({ open, onOpenChange, agents, daemons, apiBaseUrl, 
   );
 }
 
-function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }: {
+// ----------------------------------------------------------------------------
+// Edit dialog
+// ----------------------------------------------------------------------------
+
+function EditWebhookDialog({
+  webhook,
+  bots,
+  agents,
+  daemons,
+  adapters,
+  onOpenChange,
+  onUpdated,
+}: {
   webhook: WebhookWithActions | null;
-  onOpenChange: (v: boolean) => void;
+  bots: BotUser[];
   agents: Agent[];
   daemons: Daemon[];
+  adapters: AdapterInfo[];
+  onOpenChange: (v: boolean) => void;
   onUpdated: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [sourceType, setSourceType] = useState("standard");
-  const [actionType, setActionType] = useState("create_issue");
-  const [agentId, setAgentId] = useState("");
-  const [dispatchProvider, setDispatchProvider] = useState("");
-  const [dispatchDaemonId, setDispatchDaemonId] = useState("");
-  const [titleTemplate, setTitleTemplate] = useState("");
-  const [descriptionTemplate, setDescriptionTemplate] = useState("");
-  const [selectedLabels, setSelectedLabels] = useState<IssueLabel[]>([]);
+  const [botUserId, setBotUserId] = useState<string>("");
+  const [actions, setActions] = useState<WebhookAction[]>([]);
   const [saving, setSaving] = useState(false);
-  const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [showSchema, setShowSchema] = useState(false);
   const allLabels = useLabelStore((s) => s.labels);
-
   const activeAgents = agents.filter((a: Agent) => !a.archived_at);
-  const selectedAgent = activeAgents.find((a) => a.id === agentId);
 
   useEffect(() => {
     if (webhook) {
       setName(webhook.webhook.name);
-      setSourceType(webhook.webhook.source_type);
-      const action = webhook.actions[0];
-      if (action) {
-        setActionType(action.action_type);
-        const cfg = action.config as CreateIssueActionConfig;
-        setAgentId(cfg.agent_id || "");
-        setDispatchProvider(cfg.dispatch_provider || "");
-        setDispatchDaemonId(cfg.dispatch_daemon_id || "");
-        setTitleTemplate(cfg.title_template || "");
-        setDescriptionTemplate(cfg.description_template || "");
-        const labelIds = cfg.labels || [];
-        const resolved = useLabelStore.getState().labels.filter((l) => labelIds.includes(l.id));
-        setSelectedLabels(resolved);
-      }
-      api.listWebhookAdapters().then(setAdapters).catch(() => {});
+      setBotUserId(webhook.webhook.bot_user_id ?? "");
+      setActions(webhook.actions);
     }
   }, [webhook]);
 
+  if (!webhook) return null;
+
+  const sourceType = webhook.webhook.source_type;
+  const isGitHub = sourceType === "github";
   const currentAdapter = adapters.find((a) => a.source_type === sourceType);
+
+  const handleAddAction = (actionType: WebhookActionType) => {
+    if (!webhook) return;
+    const baseConfig: CreateIssueActionConfig | CommentIssueActionConfig =
+      actionType === "create_issue"
+        ? {
+            agent_id: activeAgents[0]?.id ?? "",
+            title_template: "",
+            description_template: "",
+            labels: [],
+          }
+        : {
+            content_template: "{{.body}}",
+            mention_agent_id: undefined,
+          };
+    const draft: WebhookAction = {
+      id: `__draft_${Date.now()}`,
+      webhook_id: webhook.webhook.id,
+      action_type: actionType,
+      config: baseConfig,
+      enabled: true,
+      position: actions.length,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    setActions((prev) => [...prev, draft]);
+  };
+
+  const handleRemoveAction = async (action: WebhookAction) => {
+    if (!action.id.startsWith("__draft_")) {
+      try {
+        await api.deleteWebhookAction(webhook.webhook.id, action.id);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to delete action");
+        return;
+      }
+    }
+    setActions((prev) => prev.filter((a) => a.id !== action.id));
+  };
 
   const handleSave = async () => {
     if (!webhook) return;
     setSaving(true);
     try {
+      // 1. Save endpoint-level fields.
       await api.updateWebhook(webhook.webhook.id, {
         name,
-        source_type: sourceType as "standard" | "oss-alert",
+        bot_user_id: botUserId || undefined,
       });
+      // Backend uses empty string to mean "clear bot user".
+      if (!botUserId && webhook.webhook.bot_user_id) {
+        await api.updateWebhook(webhook.webhook.id, { bot_user_id: "" });
+      }
 
-      const action = webhook.actions[0];
-      if (action) {
-        const config: CreateIssueActionConfig = {
-          agent_id: agentId,
-          title_template: titleTemplate,
-          description_template: descriptionTemplate,
-          labels: selectedLabels.map((l) => l.id),
-          dispatch_provider: dispatchProvider || undefined,
-          dispatch_daemon_id: dispatchDaemonId || undefined,
-          dispatch_daemon_label: undefined,
-        };
-        await api.updateWebhookAction(webhook.webhook.id, action.id, { config });
+      // 2. Persist each action: drafts → POST, existing → PUT.
+      for (const action of actions) {
+        if (action.id.startsWith("__draft_")) {
+          await api.createWebhookAction(webhook.webhook.id, {
+            action_type: action.action_type,
+            config: action.config,
+            enabled: action.enabled,
+            position: action.position,
+          });
+        } else {
+          await api.updateWebhookAction(webhook.webhook.id, action.id, {
+            config: action.config,
+            enabled: action.enabled,
+            position: action.position,
+          });
+        }
       }
 
       toast.success("Webhook updated");
@@ -786,169 +985,129 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
     }
   };
 
+  const updateActionConfig = (idx: number, partial: Record<string, unknown>) => {
+    setActions((prev) => prev.map((a, i) => i === idx ? { ...a, config: { ...(a.config as object), ...partial } } : a));
+  };
+
   return (
     <Dialog open={!!webhook} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Webhook</DialogTitle>
           <DialogDescription>
-            Update the webhook endpoint and action configuration.
+            Configure the endpoint and the actions that fire on incoming events.
           </DialogDescription>
         </DialogHeader>
+
         <div className="space-y-4">
           <div className="space-y-3">
             <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Endpoint</h3>
             <div className="space-y-1.5">
               <Label htmlFor="edit-wh-name">Name</Label>
-              <Input id="edit-wh-name" value={name} onChange={(e) => setName(e.target.value)} />
+              <Input id="edit-wh-name" value={name} onChange={(e) => setName(e.target.value)} disabled={isGitHub} />
             </div>
             <div className="space-y-1.5">
               <Label>Source Type</Label>
-              <Select value={sourceType} onValueChange={(v) => { if (v) { setSourceType(v); setShowSchema(false); } }}>
-                <SelectTrigger size="sm"><SelectValue /></SelectTrigger>
+              <Input value={sourceType} disabled />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Bot user (for comment_issue actions)</Label>
+              <Select value={botUserId} onValueChange={(v) => setBotUserId(v ?? "")}>
+                <SelectTrigger size="sm"><SelectValue placeholder="None" /></SelectTrigger>
                 <SelectContent>
-                  {adapters.map((a) => (
-                    <SelectItem key={a.source_type} value={a.source_type}>
-                      {a.source_type}
-                    </SelectItem>
+                  <SelectItem value="">None</SelectItem>
+                  {bots.map((b) => (
+                    <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {bots.length === 0 && (
+                <p className="text-[10px] text-muted-foreground">
+                  Create a bot user above first.
+                </p>
+              )}
             </div>
-            {currentAdapter && (
-              <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-                <p className="text-xs text-muted-foreground">{currentAdapter.description}</p>
-                <button
-                  type="button"
-                  onClick={() => setShowSchema(!showSchema)}
-                  className="text-xs text-primary hover:underline flex items-center gap-1"
-                >
-                  {showSchema ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                  {showSchema ? "Hide" : "Show"} payload schema & example
-                </button>
-                {showSchema && (
-                  <div className="space-y-2 pt-1">
-                    <div>
-                      <p className="text-[10px] font-medium text-muted-foreground mb-1">Available template variables:</p>
-                      <div className="grid gap-0.5">
-                        {currentAdapter.keys.map((k) => (
-                          <div key={k.key} className="flex items-start gap-2 text-[10px]">
-                            <code className="font-mono text-primary shrink-0">{`{{.${k.key}}}`}</code>
-                            <span className="text-muted-foreground">{k.description}</span>
-                            {k.required && <Badge variant="outline" className="text-[8px] px-1 py-0 shrink-0">required</Badge>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    {currentAdapter.example && (
-                      <div>
-                        <p className="text-[10px] font-medium text-muted-foreground mb-1">Example payload:</p>
-                        <pre className="rounded bg-muted p-2 text-[10px] overflow-x-auto whitespace-pre">
-                          {currentAdapter.example}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+            <SchemaPanel adapter={currentAdapter} show={showSchema} onToggle={() => setShowSchema(!showSchema)} />
           </div>
 
           <div className="border-t pt-4 space-y-3">
-            <div>
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Action</h3>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                When an event is received, execute the following action.
-              </p>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Actions</h3>
+              <Popover>
+                <PopoverTrigger
+                  render={
+                    <Button size="sm" variant="outline">
+                      <Plus className="h-3 w-3 mr-1" />
+                      Add action
+                    </Button>
+                  }
+                />
+                <PopoverContent align="end" className="w-44 p-1">
+                  <button
+                    type="button"
+                    onClick={() => handleAddAction("create_issue")}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent"
+                  >
+                    Create issue
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddAction("comment_issue")}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-accent"
+                  >
+                    Comment on linked issue
+                  </button>
+                </PopoverContent>
+              </Popover>
             </div>
-            <div className="flex items-center gap-3">
-              <Label className="w-24 shrink-0 text-right">Action Type</Label>
-              <Select value={actionType} onValueChange={(v) => { if (v) setActionType(v); }}>
-                <SelectTrigger size="sm" className="w-auto"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="create_issue">Create Issue</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {actionType === "create_issue" && (
-              <>
-                <div className="flex items-center gap-3">
-                  <Label className="w-24 shrink-0 text-right">Agent</Label>
-                  <Select value={agentId} onValueChange={(v) => { if (v) setAgentId(v); }}>
-                    <SelectTrigger size="sm" className="w-auto">
-                      <SelectValue placeholder="Select agent">
-                        {activeAgents.find((a) => a.id === agentId)?.name}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {activeAgents.map((a: Agent) => (
-                        <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                {selectedAgent && selectedAgent.providers.length > 0 && (
-                  <div className="flex items-center gap-3">
-                    <Label className="w-24 shrink-0 text-right">Provider</Label>
-                    <Select value={dispatchProvider} onValueChange={(v) => setDispatchProvider(v ?? "")}>
-                      <SelectTrigger size="sm" className="w-auto">
-                        <SelectValue placeholder="Auto">
-                          {dispatchProvider ? <span className="capitalize">{dispatchProvider}</span> : "Auto"}
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="">Auto</SelectItem>
-                        {selectedAgent.providers.map((p) => (
-                          <SelectItem key={p} value={p}>
-                            <span className="capitalize">{p}</span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-                <div className="flex items-center gap-3">
-                  <Label className="w-24 shrink-0 text-right">Environment</Label>
-                  <Select value={dispatchDaemonId} onValueChange={(v) => setDispatchDaemonId(v ?? "")}>
-                    <SelectTrigger size="sm" className="w-auto">
-                      <SelectValue placeholder="Any environment">
-                        {dispatchDaemonId
-                          ? (daemons.find((d) => d.id === dispatchDaemonId)?.device_name || daemons.find((d) => d.id === dispatchDaemonId)?.daemon_id)
-                          : "Any environment"}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="">Any environment</SelectItem>
-                      {daemons.map((d) => (
-                        <SelectItem key={d.id} value={d.id}>
-                          <span className="flex items-center gap-2">
-                            <span className={`h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
-                            {d.device_name || d.daemon_id}
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-wh-title-tmpl">Issue Title Template <span className="text-muted-foreground">(optional, defaults to event title)</span></Label>
-                  <Input id="edit-wh-title-tmpl" value={titleTemplate} onChange={(e) => setTitleTemplate(e.target.value)} placeholder="e.g. [Alert] {{.title}}" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-wh-desc-tmpl">Issue Description Template <span className="text-muted-foreground">(optional, defaults to event body)</span></Label>
-                  <Textarea id="edit-wh-desc-tmpl" value={descriptionTemplate} onChange={(e) => setDescriptionTemplate(e.target.value)} placeholder="e.g. {{.body}}" rows={2} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Labels <span className="text-muted-foreground">(optional)</span></Label>
-                  <WebhookLabelPicker labels={allLabels} selected={selectedLabels} onChange={setSelectedLabels} />
-                </div>
-              </>
+
+            {actions.length === 0 && (
+              <Card>
+                <CardContent className="py-4 text-center text-xs text-muted-foreground">
+                  No actions yet. Add one to react to incoming events.
+                </CardContent>
+              </Card>
             )}
+
+            {actions.map((action, idx) => (
+              <Card key={action.id} className="border-dashed">
+                <CardContent className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold">
+                      {action.action_type === "create_issue" ? "Create issue" : "Comment on linked issue"}
+                    </div>
+                    <Button variant="ghost" size="icon-sm" onClick={() => handleRemoveAction(action)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+
+                  {action.action_type === "create_issue" && (
+                    <CreateIssueActionEditor
+                      cfg={action.config as CreateIssueActionConfig}
+                      agents={activeAgents}
+                      daemons={daemons}
+                      allLabels={allLabels}
+                      onChange={(partial) => updateActionConfig(idx, partial)}
+                      isGitHub={isGitHub}
+                    />
+                  )}
+                  {action.action_type === "comment_issue" && (
+                    <CommentIssueActionEditor
+                      cfg={action.config as CommentIssueActionConfig}
+                      agents={activeAgents}
+                      onChange={(partial) => updateActionConfig(idx, partial)}
+                      isGitHub={isGitHub}
+                    />
+                  )}
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </div>
+
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving || !name.trim() || !agentId}>
+          <Button onClick={handleSave} disabled={saving || !name.trim()}>
             {saving ? "Saving..." : "Save"}
           </Button>
         </DialogFooter>
@@ -956,6 +1115,357 @@ function EditWebhookDialog({ webhook, onOpenChange, agents, daemons, onUpdated }
     </Dialog>
   );
 }
+
+// ----------------------------------------------------------------------------
+// Action editors
+// ----------------------------------------------------------------------------
+
+function CreateIssueActionFields({
+  agents,
+  selectedAgent,
+  daemons,
+  agentId,
+  setAgentId,
+  dispatchProvider,
+  setDispatchProvider,
+  dispatchDaemonId,
+  setDispatchDaemonId,
+  titleTemplate,
+  setTitleTemplate,
+  descriptionTemplate,
+  setDescriptionTemplate,
+  selectedLabels,
+  setSelectedLabels,
+  allLabels,
+}: {
+  agents: Agent[];
+  selectedAgent: Agent | undefined;
+  daemons: Daemon[];
+  agentId: string;
+  setAgentId: (v: string) => void;
+  dispatchProvider: string;
+  setDispatchProvider: (v: string) => void;
+  dispatchDaemonId: string;
+  setDispatchDaemonId: (v: string) => void;
+  titleTemplate: string;
+  setTitleTemplate: (v: string) => void;
+  descriptionTemplate: string;
+  setDescriptionTemplate: (v: string) => void;
+  selectedLabels: IssueLabel[];
+  setSelectedLabels: (v: IssueLabel[]) => void;
+  allLabels: IssueLabel[];
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-3">
+        <Label className="w-24 shrink-0 text-right">Agent</Label>
+        <Select value={agentId} onValueChange={(v) => { if (v) setAgentId(v); }}>
+          <SelectTrigger size="sm" className="w-auto">
+            <SelectValue placeholder="Select agent">
+              {agents.find((a) => a.id === agentId)?.name}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {agents.map((a: Agent) => (
+              <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {selectedAgent && selectedAgent.providers.length > 0 && (
+        <div className="flex items-center gap-3">
+          <Label className="w-24 shrink-0 text-right">Provider</Label>
+          <Select value={dispatchProvider} onValueChange={(v) => setDispatchProvider(v ?? "")}>
+            <SelectTrigger size="sm" className="w-auto">
+              <SelectValue placeholder="Auto">
+                {dispatchProvider ? <span className="capitalize">{dispatchProvider}</span> : "Auto"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Auto</SelectItem>
+              {selectedAgent.providers.map((p) => (
+                <SelectItem key={p} value={p}>
+                  <span className="capitalize">{p}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <Label className="w-24 shrink-0 text-right">Environment</Label>
+        <Select value={dispatchDaemonId} onValueChange={(v) => setDispatchDaemonId(v ?? "")}>
+          <SelectTrigger size="sm" className="w-auto">
+            <SelectValue placeholder="Any environment">
+              {dispatchDaemonId
+                ? (daemons.find((d) => d.id === dispatchDaemonId)?.device_name || daemons.find((d) => d.id === dispatchDaemonId)?.daemon_id)
+                : "Any environment"}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Any environment</SelectItem>
+            {daemons.map((d) => (
+              <SelectItem key={d.id} value={d.id}>
+                <span className="flex items-center gap-2">
+                  <span className={`h-1.5 w-1.5 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
+                  {d.device_name || d.daemon_id}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="wh-title-tmpl">Issue Title Template <span className="text-muted-foreground">(optional, defaults to event title)</span></Label>
+        <Input id="wh-title-tmpl" value={titleTemplate} onChange={(e) => setTitleTemplate(e.target.value)} placeholder="e.g. [Alert] {{.title}}" />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="wh-desc-tmpl">Issue Description Template <span className="text-muted-foreground">(optional, defaults to event body)</span></Label>
+        <Textarea id="wh-desc-tmpl" value={descriptionTemplate} onChange={(e) => setDescriptionTemplate(e.target.value)} placeholder="e.g. {{.body}}" rows={2} />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Labels <span className="text-muted-foreground">(optional)</span></Label>
+        <WebhookLabelPicker labels={allLabels} selected={selectedLabels} onChange={setSelectedLabels} />
+      </div>
+    </>
+  );
+}
+
+function CreateIssueActionEditor({
+  cfg,
+  agents,
+  daemons,
+  allLabels,
+  onChange,
+  isGitHub,
+}: {
+  cfg: CreateIssueActionConfig;
+  agents: Agent[];
+  daemons: Daemon[];
+  allLabels: IssueLabel[];
+  onChange: (partial: Partial<CreateIssueActionConfig>) => void;
+  isGitHub: boolean;
+}) {
+  const selectedAgent = agents.find((a) => a.id === cfg.agent_id);
+  const selectedLabels = (cfg.labels ?? []).map((id) => allLabels.find((l) => l.id === id)).filter((l): l is IssueLabel => !!l);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        <Label className="w-24 shrink-0 text-right">Agent</Label>
+        <Select value={cfg.agent_id} onValueChange={(v) => v && onChange({ agent_id: v })}>
+          <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="Select agent" /></SelectTrigger>
+          <SelectContent>
+            {agents.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))}
+          </SelectContent>
+        </Select>
+      </div>
+      {selectedAgent && selectedAgent.providers.length > 0 && (
+        <div className="flex items-center gap-3">
+          <Label className="w-24 shrink-0 text-right">Provider</Label>
+          <Select value={cfg.dispatch_provider ?? ""} onValueChange={(v) => onChange({ dispatch_provider: v || undefined })}>
+            <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="Auto" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Auto</SelectItem>
+              {selectedAgent.providers.map((p) => (<SelectItem key={p} value={p}>{p}</SelectItem>))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <Label className="w-24 shrink-0 text-right">Environment</Label>
+        <Select value={cfg.dispatch_daemon_id ?? ""} onValueChange={(v) => onChange({ dispatch_daemon_id: v || undefined })}>
+          <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="Any environment" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">Any environment</SelectItem>
+            {daemons.map((d) => (<SelectItem key={d.id} value={d.id}>{d.device_name || d.daemon_id}</SelectItem>))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Title template</Label>
+        <Input value={cfg.title_template ?? ""} onChange={(e) => onChange({ title_template: e.target.value })} placeholder="{{.title}}" />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Description template</Label>
+        <Textarea value={cfg.description_template ?? ""} onChange={(e) => onChange({ description_template: e.target.value })} rows={2} placeholder="{{.body}}" />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Labels</Label>
+        <WebhookLabelPicker
+          labels={allLabels}
+          selected={selectedLabels}
+          onChange={(picks) => onChange({ labels: picks.map((l) => l.id) })}
+        />
+      </div>
+      {isGitHub && (
+        <FilterFields
+          eventTypes={cfg.event_types ?? []}
+          repos={cfg.repos ?? []}
+          onChange={(partial) => onChange(partial)}
+        />
+      )}
+    </div>
+  );
+}
+
+function CommentIssueActionEditor({
+  cfg,
+  agents,
+  onChange,
+  isGitHub,
+}: {
+  cfg: CommentIssueActionConfig;
+  agents: Agent[];
+  onChange: (partial: Partial<CommentIssueActionConfig>) => void;
+  isGitHub: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        <Label>Comment template</Label>
+        <Textarea
+          value={cfg.content_template ?? ""}
+          onChange={(e) => onChange({ content_template: e.target.value })}
+          rows={3}
+          placeholder="{{.body}}"
+        />
+      </div>
+      <div className="flex items-center gap-3">
+        <Label className="w-24 shrink-0 text-right">@Mention</Label>
+        <Select value={cfg.mention_agent_id ?? ""} onValueChange={(v) => onChange({ mention_agent_id: v || undefined })}>
+          <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="No mention" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">No mention</SelectItem>
+            {agents.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))}
+          </SelectContent>
+        </Select>
+      </div>
+      {isGitHub && (
+        <FilterFields
+          eventTypes={cfg.event_types ?? []}
+          repos={cfg.repos ?? []}
+          onChange={(partial) => onChange(partial)}
+        />
+      )}
+    </div>
+  );
+}
+
+function FilterFields({
+  eventTypes,
+  repos,
+  onChange,
+}: {
+  eventTypes: string[];
+  repos: string[];
+  onChange: (partial: { event_types?: string[]; repos?: string[] }) => void;
+}) {
+  const toggleEvent = (val: string) => {
+    if (eventTypes.includes(val)) {
+      onChange({ event_types: eventTypes.filter((t) => t !== val) });
+    } else {
+      onChange({ event_types: [...eventTypes, val] });
+    }
+  };
+
+  const reposText = repos.join(", ");
+
+  return (
+    <div className="rounded-md border bg-muted/30 p-2 space-y-2">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Filters (GitHub)</div>
+      <div className="space-y-1.5">
+        <Label className="text-[11px]">Event types (any selected)</Label>
+        <div className="flex flex-wrap gap-1">
+          {GITHUB_EVENT_TYPES.map((et) => {
+            const on = eventTypes.includes(et.value);
+            return (
+              <button
+                key={et.value}
+                type="button"
+                onClick={() => toggleEvent(et.value)}
+                className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${on ? "bg-primary text-primary-foreground" : "bg-background hover:bg-accent"}`}
+              >
+                {et.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        <Label className="text-[11px]">Repos (comma-separated owner/repo, leave blank for all)</Label>
+        <Input
+          value={reposText}
+          onChange={(e) => {
+            const list = e.target.value
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+            onChange({ repos: list });
+          }}
+          placeholder="owner/repo, owner/repo"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Schema panel (adapter doc)
+// ----------------------------------------------------------------------------
+
+function SchemaPanel({
+  adapter,
+  show,
+  onToggle,
+}: {
+  adapter: AdapterInfo | undefined;
+  show: boolean;
+  onToggle: () => void;
+}) {
+  if (!adapter) return null;
+  return (
+    <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+      <p className="text-xs text-muted-foreground">{adapter.description}</p>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="text-xs text-primary hover:underline flex items-center gap-1"
+      >
+        {show ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {show ? "Hide" : "Show"} payload schema & example
+      </button>
+      {show && (
+        <div className="space-y-2 pt-1">
+          <div>
+            <p className="text-[10px] font-medium text-muted-foreground mb-1">Available template variables:</p>
+            <div className="grid gap-0.5">
+              {adapter.keys.map((k) => (
+                <div key={k.key} className="flex items-start gap-2 text-[10px]">
+                  <code className="font-mono text-primary shrink-0">{`{{.${k.key}}}`}</code>
+                  <span className="text-muted-foreground">{k.description}</span>
+                  {k.required && <Badge variant="outline" className="text-[8px] px-1 py-0 shrink-0">required</Badge>}
+                </div>
+              ))}
+            </div>
+          </div>
+          {adapter.example && (
+            <div>
+              <p className="text-[10px] font-medium text-muted-foreground mb-1">Example payload:</p>
+              <pre className="rounded bg-muted p-2 text-[10px] overflow-x-auto whitespace-pre">
+                {adapter.example}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Label picker (existing implementation)
+// ----------------------------------------------------------------------------
 
 function WebhookLabelPicker({ labels, selected, onChange }: {
   labels: IssueLabel[];
@@ -1031,25 +1541,5 @@ function WebhookLabelPicker({ labels, selected, onChange }: {
         </div>
       </PopoverContent>
     </Popover>
-  );
-}
-
-function WebhookLabelDisplay({ labelIds }: { labelIds: string[] }) {
-  const allLabels = useLabelStore((s) => s.labels);
-  const resolved = labelIds.map((id) => allLabels.find((l) => l.id === id)).filter((l): l is IssueLabel => !!l);
-
-  return (
-    <div className="flex flex-wrap gap-1">
-      {resolved.map((l) => (
-        <span
-          key={l.id}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs"
-          style={{ backgroundColor: l.color + "20" }}
-        >
-          <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
-          {l.name}
-        </span>
-      ))}
-    </div>
   );
 }

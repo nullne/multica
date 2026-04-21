@@ -39,6 +39,9 @@ UPDATE workspace SET github_installation_id = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
+-- name: GetWorkspaceByInstallationID :one
+SELECT * FROM workspace WHERE github_installation_id = $1;
+
 -- name: ClearGitHubInstallation :one
 UPDATE workspace SET github_installation_id = NULL, updated_at = now()
 WHERE id = $1

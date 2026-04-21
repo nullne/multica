@@ -21,7 +21,7 @@ INSERT INTO issue (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
     $16, $17, $18
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
 `
 
 type CreateIssueParams struct {
@@ -87,8 +87,6 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,
@@ -108,7 +106,7 @@ func (q *Queries) DeleteIssue(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getIssue = `-- name: GetIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
 WHERE id = $1
 `
 
@@ -135,8 +133,6 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,
@@ -147,7 +143,7 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 }
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
 WHERE workspace_id = $1 AND number = $2
 `
 
@@ -179,8 +175,6 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,
@@ -191,7 +185,7 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 }
 
 const getIssueInWorkspace = `-- name: GetIssueInWorkspace :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -223,8 +217,6 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,
@@ -235,7 +227,7 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 }
 
 const listIssues = `-- name: ListIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
 WHERE workspace_id = $1
   AND ($4::text IS NULL OR status = $4)
   AND ($5::text IS NULL OR priority = $5)
@@ -289,8 +281,6 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]Issue
 			&i.UpdatedAt,
 			&i.Number,
 			&i.VerifierAgentID,
-			&i.LinkedBranch,
-			&i.LinkedPrUrl,
 			&i.MaxVerificationRounds,
 			&i.CriteriaStatus,
 			&i.DispatchProvider,
@@ -324,7 +314,7 @@ UPDATE issue SET
     dispatch_daemon_label = $14,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
 `
 
 type UpdateIssueParams struct {
@@ -382,8 +372,6 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,
@@ -399,7 +387,7 @@ UPDATE issue SET
     criteria_status = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
 `
 
 type UpdateIssueAcceptanceCriteriaParams struct {
@@ -431,8 +419,6 @@ func (q *Queries) UpdateIssueAcceptanceCriteria(ctx context.Context, arg UpdateI
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,
@@ -447,7 +433,7 @@ UPDATE issue SET
     criteria_status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
 `
 
 type UpdateIssueCriteriaStatusParams struct {
@@ -478,57 +464,6 @@ func (q *Queries) UpdateIssueCriteriaStatus(ctx context.Context, arg UpdateIssue
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
-		&i.MaxVerificationRounds,
-		&i.CriteriaStatus,
-		&i.DispatchProvider,
-		&i.DispatchDaemonID,
-		&i.DispatchDaemonLabel,
-	)
-	return i, err
-}
-
-const updateIssueDevLinks = `-- name: UpdateIssueDevLinks :one
-UPDATE issue SET
-    linked_branch = COALESCE($2, linked_branch),
-    linked_pr_url = COALESCE($3, linked_pr_url),
-    updated_at = now()
-WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
-`
-
-type UpdateIssueDevLinksParams struct {
-	ID           pgtype.UUID `json:"id"`
-	LinkedBranch pgtype.Text `json:"linked_branch"`
-	LinkedPrUrl  pgtype.Text `json:"linked_pr_url"`
-}
-
-func (q *Queries) UpdateIssueDevLinks(ctx context.Context, arg UpdateIssueDevLinksParams) (Issue, error) {
-	row := q.db.QueryRow(ctx, updateIssueDevLinks, arg.ID, arg.LinkedBranch, arg.LinkedPrUrl)
-	var i Issue
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Title,
-		&i.Description,
-		&i.Status,
-		&i.Priority,
-		&i.AssigneeType,
-		&i.AssigneeID,
-		&i.CreatorType,
-		&i.CreatorID,
-		&i.ParentIssueID,
-		&i.AcceptanceCriteria,
-		&i.ContextRefs,
-		&i.Position,
-		&i.DueDate,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.Number,
-		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,
@@ -543,7 +478,7 @@ UPDATE issue SET
     status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, linked_branch, linked_pr_url, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
 `
 
 type UpdateIssueStatusParams struct {
@@ -574,8 +509,6 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.UpdatedAt,
 		&i.Number,
 		&i.VerifierAgentID,
-		&i.LinkedBranch,
-		&i.LinkedPrUrl,
 		&i.MaxVerificationRounds,
 		&i.CriteriaStatus,
 		&i.DispatchProvider,

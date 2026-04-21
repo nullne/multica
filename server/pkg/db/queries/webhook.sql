@@ -1,6 +1,6 @@
 -- name: CreateWebhook :one
-INSERT INTO webhook (workspace_id, name, source_type, token_hash, token_prefix, dedup_window_seconds, created_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO webhook (workspace_id, name, source_type, token_hash, token_prefix, dedup_window_seconds, created_by, bot_user_id, installation_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, sqlc.narg('bot_user_id'), sqlc.narg('installation_id'))
 RETURNING *;
 
 -- name: GetWebhook :one
@@ -8,6 +8,9 @@ SELECT * FROM webhook WHERE id = $1;
 
 -- name: GetWebhookByTokenHash :one
 SELECT * FROM webhook WHERE token_hash = $1;
+
+-- name: GetWebhookByInstallationID :one
+SELECT * FROM webhook WHERE installation_id = $1;
 
 -- name: ListWebhooksByWorkspace :many
 SELECT * FROM webhook WHERE workspace_id = $1 ORDER BY created_at DESC;
@@ -18,12 +21,21 @@ UPDATE webhook SET
     source_type = COALESCE(sqlc.narg('source_type'), source_type),
     status = COALESCE(sqlc.narg('status'), status),
     dedup_window_seconds = COALESCE(sqlc.narg('dedup_window_seconds'), dedup_window_seconds),
+    bot_user_id = COALESCE(sqlc.narg('bot_user_id'), bot_user_id),
     updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ClearWebhookBotUser :one
+UPDATE webhook SET bot_user_id = NULL, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
 -- name: DeleteWebhook :exec
 DELETE FROM webhook WHERE id = $1;
+
+-- name: DeleteWebhookByInstallationID :exec
+DELETE FROM webhook WHERE installation_id = $1;
 
 -- name: RegenerateWebhookToken :one
 UPDATE webhook SET token_hash = $2, token_prefix = $3, updated_at = now()

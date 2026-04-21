@@ -1436,27 +1436,54 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   <PropRow label="Updated">
                     <span className="text-muted-foreground">{shortDate(issue.updated_at)}</span>
                   </PropRow>
-                  <PropRow label="Branch">
-                    {issue.linked_branch ? (
-                      <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{issue.linked_branch}</code>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </PropRow>
-                  <PropRow label="Pull request">
-                    {issue.linked_pr_url ? (
-                      <a
-                        href={issue.linked_pr_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="truncate text-primary hover:underline"
-                      >
-                        {issue.linked_pr_url}
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </PropRow>
+                  {(() => {
+                    const branch = issue.links?.find((l) => l.kind === "branch" && l.direction === "output");
+                    const outgoingPr = issue.links?.find((l) => l.kind === "pr" && l.direction === "output");
+                    const sourceLinks = issue.links?.filter((l) => l.direction === "source") ?? [];
+                    return (
+                      <>
+                        <PropRow label="Branch">
+                          {branch ? (
+                            <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{branch.external_id || branch.url.replace(/^branch:/, "")}</code>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </PropRow>
+                        <PropRow label="Pull request">
+                          {outgoingPr ? (
+                            <a
+                              href={outgoingPr.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="truncate text-primary hover:underline"
+                            >
+                              {outgoingPr.url}
+                            </a>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </PropRow>
+                        {sourceLinks.length > 0 && (
+                          <PropRow label="Source">
+                            <div className="flex flex-col gap-0.5">
+                              {sourceLinks.map((l) => (
+                                <a
+                                  key={l.id}
+                                  href={l.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="truncate text-primary hover:underline"
+                                  title={l.url}
+                                >
+                                  {l.external_id || l.url}
+                                </a>
+                              ))}
+                            </div>
+                          </PropRow>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>}
               </div>
 

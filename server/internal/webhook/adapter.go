@@ -45,6 +45,7 @@ type AdapterInfo struct {
 var adapters = map[string]Adapter{
 	"standard":  &standardAdapter{},
 	"oss-alert": &ossAlertAdapter{},
+	"github":    &githubAdapter{},
 }
 
 // GetAdapter returns the adapter for a given source type.
@@ -61,8 +62,9 @@ func ListAdapters() []AdapterInfo {
 	descriptions := map[string]string{
 		"standard":  "Multica standard format. Send events using our schema — no adapter needed.",
 		"oss-alert": "Prometheus AlertManager style alerts. Parses labels, annotations, startsAt, endsAt, generatorURL.",
+		"github":    "GitHub App webhook events. Receives push, pull_request, issues, and issue_comment events via /api/github/events.",
 	}
-	order := []string{"standard", "oss-alert"}
+	order := []string{"standard", "oss-alert", "github"}
 	result := make([]AdapterInfo, 0, len(order))
 	for _, name := range order {
 		a := adapters[name]

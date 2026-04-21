@@ -43,17 +43,38 @@ import type {
   CreateWebhookRequest,
   CreateWebhookResponse,
   UpdateWebhookRequest,
+  CreateWebhookActionRequest,
   UpdateWebhookActionRequest,
   WebhookEvent,
   AdapterInfo,
-  GitHubEventRule,
-  UpsertGitHubEventRuleRequest,
+  BotUser,
+  CreateBotUserRequest,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
 
 export interface LoginResponse {
   token: string;
   user: User;
+}
+
+// makeRequestId returns a short identifier for log correlation. We can't
+// rely on crypto.randomUUID(): it requires a secure context (HTTPS or
+// localhost) and throws on http:// origins like http://frontend:3000 used by
+// the e2e docker setup.
+function makeRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    try {
+      return crypto.randomUUID().slice(0, 8);
+    } catch {
+      // Fall through to the non-secure fallback.
+    }
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = new Uint8Array(4);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return Math.random().toString(16).slice(2, 10);
 }
 
 export class ApiClient {
@@ -105,7 +126,7 @@ export class ApiClient {
   }
 
   private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
-    const rid = crypto.randomUUID().slice(0, 8);
+    const rid = makeRequestId();
     const start = Date.now();
     const method = init?.method ?? "GET";
 
@@ -575,20 +596,20 @@ export class ApiClient {
     });
   }
 
-  // GitHub Event Rules
-  async listGitHubEventRules(workspaceId: string): Promise<GitHubEventRule[]> {
-    return this.fetch(`/api/workspaces/${workspaceId}/github/event-rules`);
+  // Bot users (non-human members used as the author for webhook-driven comments)
+  async listBotUsers(workspaceId: string): Promise<BotUser[]> {
+    return this.fetch(`/api/workspaces/${workspaceId}/bot-users`);
   }
 
-  async upsertGitHubEventRule(workspaceId: string, data: UpsertGitHubEventRuleRequest): Promise<GitHubEventRule> {
-    return this.fetch(`/api/workspaces/${workspaceId}/github/event-rules`, {
-      method: "PUT",
+  async createBotUser(workspaceId: string, data: CreateBotUserRequest): Promise<BotUser> {
+    return this.fetch(`/api/workspaces/${workspaceId}/bot-users`, {
+      method: "POST",
       body: JSON.stringify(data),
     });
   }
 
-  async deleteGitHubEventRule(workspaceId: string, ruleId: string): Promise<void> {
-    await this.fetch(`/api/workspaces/${workspaceId}/github/event-rules/${ruleId}`, {
+  async deleteBotUser(workspaceId: string, userId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/bot-users/${userId}`, {
       method: "DELETE",
     });
   }
@@ -698,7 +719,7 @@ export class ApiClient {
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
     if (opts?.commentId) formData.append("comment_id", opts.commentId);
 
-    const rid = crypto.randomUUID().slice(0, 8);
+    const rid = makeRequestId();
     const start = Date.now();
     this.logger.info("→ POST /api/upload-file", { rid });
 
@@ -763,10 +784,27 @@ export class ApiClient {
     return this.fetch(`/api/webhooks/${id}/events`);
   }
 
+  async listWebhookActions(webhookId: string): Promise<WebhookAction[]> {
+    return this.fetch(`/api/webhooks/${webhookId}/actions`);
+  }
+
+  async createWebhookAction(webhookId: string, data: CreateWebhookActionRequest): Promise<WebhookAction> {
+    return this.fetch(`/api/webhooks/${webhookId}/actions`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
   async updateWebhookAction(webhookId: string, actionId: string, data: UpdateWebhookActionRequest): Promise<WebhookAction> {
     return this.fetch(`/api/webhooks/${webhookId}/actions/${actionId}`, {
       method: "PUT",
       body: JSON.stringify(data),
+    });
+  }
+
+  async deleteWebhookAction(webhookId: string, actionId: string): Promise<void> {
+    await this.fetch(`/api/webhooks/${webhookId}/actions/${actionId}`, {
+      method: "DELETE",
     });
   }
 

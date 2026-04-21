@@ -1,403 +1,269 @@
 package handler
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/nullne/multica/server/internal/auth"
+	gh "github.com/nullne/multica/server/internal/github"
+	wh "github.com/nullne/multica/server/internal/webhook"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
-func TestIsRelevantAction(t *testing.T) {
-	tests := []struct {
-		eventType string
-		action    string
-		want      bool
-	}{
-		{"push", "", true},
-		{"push", "anything", true},
-		{"pull_request", "opened", true},
-		{"pull_request", "synchronize", true},
-		{"pull_request", "reopened", true},
-		{"pull_request", "closed", true},
-		{"pull_request", "labeled", false},
-		{"pull_request", "assigned", false},
-		{"pull_request", "review_requested", false},
-		{"issues", "opened", true},
-		{"issues", "reopened", true},
-		{"issues", "closed", false},
-		{"issues", "labeled", false},
-		{"issues", "deleted", false},
-		{"issue_comment", "created", true},
-		{"issue_comment", "edited", false},
-		{"issue_comment", "deleted", false},
-		{"unknown_event", "opened", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.eventType+"/"+tt.action, func(t *testing.T) {
-			got := isRelevantAction(tt.eventType, tt.action)
-			if got != tt.want {
-				t.Errorf("isRelevantAction(%q, %q) = %v, want %v", tt.eventType, tt.action, got, tt.want)
-			}
-		})
-	}
+// signGitHubBody computes the X-Hub-Signature-256 header that GitHub would
+// send for the given body and shared secret.
+func signGitHubBody(secret, body []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
-func TestParsePushEvent(t *testing.T) {
-	payload := `{
-		"ref": "refs/heads/main",
-		"compare": "https://github.com/org/repo/compare/abc...def",
-		"pusher": {"name": "alice"},
-		"repository": {"full_name": "org/repo", "html_url": "https://github.com/org/repo"},
-		"commits": [
-			{"message": "fix: typo in readme\nsome details", "url": "https://github.com/org/repo/commit/abc", "author": {"name": "alice"}},
-			{"message": "feat: add new endpoint", "url": "https://github.com/org/repo/commit/def", "author": {"name": "bob"}}
-		]
-	}`
-
-	data := parsePushEvent([]byte(payload))
-
-	assertField(t, data, "branch", "main")
-	assertField(t, data, "repo", "org/repo")
-	assertField(t, data, "pusher", "alice")
-	assertField(t, data, "ref", "refs/heads/main")
-
-	if data["commits"] == "" {
-		t.Error("expected non-empty commits field")
-	}
-	if data["body"] == "" {
-		t.Error("expected non-empty body")
-	}
-}
-
-func TestParsePullRequestEvent(t *testing.T) {
-	payload := `{
-		"action": "opened",
-		"pull_request": {
-			"number": 42,
-			"title": "Add login feature",
-			"body": "This PR adds login.",
-			"html_url": "https://github.com/org/repo/pull/42",
-			"user": {"login": "alice"},
-			"head": {"ref": "feat/login"},
-			"base": {"ref": "main"},
-			"merged": false
-		},
-		"repository": {"full_name": "org/repo"}
-	}`
-
-	data := parsePullRequestEvent([]byte(payload))
-
-	assertField(t, data, "action", "opened")
-	assertField(t, data, "number", "42")
-	assertField(t, data, "title", "Add login feature")
-	assertField(t, data, "user", "alice")
-	assertField(t, data, "repo", "org/repo")
-	assertField(t, data, "head_branch", "feat/login")
-	assertField(t, data, "base_branch", "main")
-}
-
-func TestParsePullRequestEvent_Merged(t *testing.T) {
-	payload := `{
-		"action": "closed",
-		"pull_request": {
-			"number": 42,
-			"title": "Add login feature",
-			"body": "",
-			"html_url": "https://github.com/org/repo/pull/42",
-			"user": {"login": "alice"},
-			"head": {"ref": "feat/login"},
-			"base": {"ref": "main"},
-			"merged": true
-		},
-		"repository": {"full_name": "org/repo"}
-	}`
-
-	data := parsePullRequestEvent([]byte(payload))
-	assertField(t, data, "action", "merged")
-}
-
-func TestParseIssuesEvent(t *testing.T) {
-	payload := `{
-		"action": "opened",
-		"issue": {
-			"number": 10,
-			"title": "Bug: crash on startup",
-			"body": "The app crashes when...",
-			"html_url": "https://github.com/org/repo/issues/10",
-			"user": {"login": "bob"},
-			"labels": [{"name": "bug"}, {"name": "priority:high"}]
-		},
-		"repository": {"full_name": "org/repo"}
-	}`
-
-	data := parseIssuesEvent([]byte(payload))
-
-	assertField(t, data, "action", "opened")
-	assertField(t, data, "number", "10")
-	assertField(t, data, "title", "Bug: crash on startup")
-	assertField(t, data, "user", "bob")
-	assertField(t, data, "labels", "bug, priority:high")
-}
-
-func TestParseIssueCommentEvent(t *testing.T) {
-	payload := `{
-		"action": "created",
-		"comment": {
-			"body": "Looks good to me!",
-			"html_url": "https://github.com/org/repo/issues/10#issuecomment-123",
-			"user": {"login": "alice"}
-		},
-		"issue": {
-			"number": 10,
-			"title": "Bug: crash on startup",
-			"html_url": "https://github.com/org/repo/issues/10"
-		},
-		"repository": {"full_name": "org/repo"}
-	}`
-
-	data := parseIssueCommentEvent([]byte(payload))
-
-	assertField(t, data, "action", "created")
-	assertField(t, data, "number", "10")
-	assertField(t, data, "issue_title", "Bug: crash on startup")
-	assertField(t, data, "comment_body", "Looks good to me!")
-	assertField(t, data, "user", "alice")
-	assertField(t, data, "repo", "org/repo")
-}
-
-func TestDefaultTitleTemplates(t *testing.T) {
-	for _, et := range []string{"push", "pull_request", "issues", "issue_comment"} {
-		tmpl := defaultTitleTemplate(et)
-		if tmpl == "" {
-			t.Errorf("defaultTitleTemplate(%q) returned empty string", et)
-		}
-	}
-	if tmpl := defaultTitleTemplate("unknown"); tmpl != "" {
-		t.Errorf("defaultTitleTemplate(unknown) = %q, want empty", tmpl)
-	}
-}
-
-func TestParsePushEvent_ManyCommits(t *testing.T) {
-	type commit struct {
-		Message string `json:"message"`
-		URL     string `json:"url"`
-		Author  struct {
-			Name string `json:"name"`
-		} `json:"author"`
-	}
-	commits := make([]commit, 15)
-	for i := range commits {
-		commits[i] = commit{Message: "commit " + string(rune('A'+i)), URL: "https://example.com/" + string(rune('A'+i))}
-		commits[i].Author.Name = "dev"
-	}
-	payload := map[string]any{
-		"ref":        "refs/heads/main",
-		"compare":    "https://example.com/compare",
-		"pusher":     map[string]string{"name": "dev"},
-		"repository": map[string]string{"full_name": "org/repo", "html_url": "https://example.com"},
-		"commits":    commits,
-	}
-	b, _ := json.Marshal(payload)
-
-	data := parsePushEvent(b)
-	if data["commits"] == "" {
-		t.Error("expected non-empty commits")
-	}
-}
-
-func TestParseGitHubEventData_UnknownType(t *testing.T) {
-	data := parseGitHubEventData("unknown", []byte(`{}`))
-	if len(data) != 0 {
-		t.Errorf("expected empty data for unknown event type, got %v", data)
-	}
-}
-
-func TestValidGitHubEventTypes(t *testing.T) {
-	valid := []string{"push", "pull_request", "issues", "issue_comment"}
-	invalid := []string{"", "star", "fork", "deployment"}
-
-	for _, v := range valid {
-		if !validGitHubEventTypes[v] {
-			t.Errorf("expected %q to be a valid event type", v)
-		}
-	}
-	for _, v := range invalid {
-		if validGitHubEventTypes[v] {
-			t.Errorf("expected %q to NOT be a valid event type", v)
-		}
-	}
-}
-
-func assertField(t *testing.T, data map[string]string, key, want string) {
+// setupGitHubWebhookFixture installs a source_type='github' webhook bound to
+// the test workspace and returns its ID together with the installation_id.
+func setupGitHubWebhookFixture(t *testing.T, installationID int64) pgtype.UUID {
 	t.Helper()
-	got, ok := data[key]
-	if !ok {
-		t.Errorf("missing key %q in data", key)
-		return
+	ctx := context.Background()
+
+	rawToken, err := wh.GenerateToken()
+	if err != nil {
+		t.Fatalf("generate token: %v", err)
 	}
-	if got != want {
-		t.Errorf("data[%q] = %q, want %q", key, got, want)
+	prefix := rawToken
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
 	}
+
+	webhook, err := testHandler.Queries.CreateWebhook(ctx, db.CreateWebhookParams{
+		WorkspaceID:        parseUUID(testWorkspaceID),
+		Name:               "GitHub App Test",
+		SourceType:         "github",
+		TokenHash:          auth.HashToken(rawToken),
+		TokenPrefix:        prefix,
+		DedupWindowSeconds: 600,
+		CreatedBy:          parseUUID(testUserID),
+		InstallationID:     pgtype.Int8{Int64: installationID, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("create webhook: %v", err)
+	}
+	t.Cleanup(func() {
+		testHandler.Queries.DeleteWebhook(ctx, webhook.ID)
+	})
+	return webhook.ID
 }
 
-func TestIsValidRepoFullName(t *testing.T) {
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"owner/repo", true},
-		{"my-org/my-repo", true},
-		{"foo.bar/baz_qux-1", true},
-		{"a/b", true},
-		{"", false},
-		{"owner", false},
-		{"owner/", false},
-		{"/repo", false},
-		{"owner/repo/extra", false},
-		{"owner/re po", false},
-		{"owner repo", false},
-		{"owner/re$po", false},
-	}
-	for _, tc := range cases {
-		if got := isValidRepoFullName(tc.in); got != tc.want {
-			t.Errorf("isValidRepoFullName(%q) = %v, want %v", tc.in, got, tc.want)
-		}
-	}
-}
-
-// TestGitHubEventRulePerRepoLookup verifies that GetGitHubEventRule prefers
-// an exact repo match and falls back to the workspace-default rule
-// (repo_full_name = '') when no per-repo rule exists. Requires the test
-// database fixture from TestMain.
-func TestGitHubEventRulePerRepoLookup(t *testing.T) {
+func TestReceiveGitHubEvent_RejectsBadSignature(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")
 	}
 
-	ctx := context.Background()
-	q := testHandler.Queries
-
-	var agentIDStr string
-	err := testPool.QueryRow(ctx,
-		`SELECT id FROM agent WHERE workspace_id = $1 AND name = $2`,
-		testWorkspaceID, "Handler Test Agent",
-	).Scan(&agentIDStr)
+	// Provision a real GitHubApp so VerifySignature fails on bad sig (rather than
+	// failing because no webhook secret is configured).
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
 	if err != nil {
-		t.Fatalf("failed to find test agent: %v", err)
+		t.Fatalf("NewApp: %v", err)
 	}
-	agentID := parseUUID(agentIDStr)
-	wsID := parseUUID(testWorkspaceID)
+	app.SetWebhookSecret([]byte("secret"))
 
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM github_event_rule WHERE workspace_id = $1`, testWorkspaceID)
-	})
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
 
-	defaultRule, err := q.UpsertGitHubEventRule(ctx, db.UpsertGitHubEventRuleParams{
-		WorkspaceID:   wsID,
-		EventType:     "pull_request",
-		RepoFullName:  "",
-		AgentID:       agentID,
-		Enabled:       true,
-		TitleTemplate: "default-title",
-	})
-	if err != nil {
-		t.Fatalf("upsert default rule: %v", err)
-	}
-
-	overrideRule, err := q.UpsertGitHubEventRule(ctx, db.UpsertGitHubEventRuleParams{
-		WorkspaceID:   wsID,
-		EventType:     "pull_request",
-		RepoFullName:  "acme/widgets",
-		AgentID:       agentID,
-		Enabled:       true,
-		TitleTemplate: "override-title",
-	})
-	if err != nil {
-		t.Fatalf("upsert override rule: %v", err)
-	}
-
-	matched, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
-		WorkspaceID:  wsID,
-		EventType:    "pull_request",
-		RepoFullName: "acme/widgets",
-	})
-	if err != nil {
-		t.Fatalf("lookup matching repo: %v", err)
-	}
-	if matched.ID != overrideRule.ID {
-		t.Fatalf("expected override rule for matching repo")
-	}
-	if matched.TitleTemplate != "override-title" {
-		t.Fatalf("expected override title, got %q", matched.TitleTemplate)
-	}
-
-	fallback, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
-		WorkspaceID:  wsID,
-		EventType:    "pull_request",
-		RepoFullName: "other/repo",
-	})
-	if err != nil {
-		t.Fatalf("lookup unmatched repo: %v", err)
-	}
-	if fallback.ID != defaultRule.ID {
-		t.Fatalf("expected default rule for unmatched repo")
-	}
-	if fallback.TitleTemplate != "default-title" {
-		t.Fatalf("expected default title, got %q", fallback.TitleTemplate)
-	}
-
-	if err := q.DeleteGitHubEventRule(ctx, defaultRule.ID); err != nil {
-		t.Fatalf("delete default rule: %v", err)
-	}
-
-	matched2, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
-		WorkspaceID:  wsID,
-		EventType:    "pull_request",
-		RepoFullName: "acme/widgets",
-	})
-	if err != nil {
-		t.Fatalf("lookup matching repo after default removed: %v", err)
-	}
-	if matched2.ID != overrideRule.ID {
-		t.Fatalf("expected override rule still matches its repo")
-	}
-
-	if _, err := q.GetGitHubEventRule(ctx, db.GetGitHubEventRuleParams{
-		WorkspaceID:  wsID,
-		EventType:    "pull_request",
-		RepoFullName: "other/repo",
-	}); err == nil {
-		t.Fatalf("expected no-rows error for unmatched repo with no default")
-	}
-
-	rules, err := q.ListGitHubEventRules(ctx, wsID)
-	if err != nil {
-		t.Fatalf("list rules: %v", err)
-	}
-	if len(rules) != 1 || rules[0].ID != overrideRule.ID {
-		t.Fatalf("unexpected list result after delete: %+v", rules)
-	}
-
-	if _, err := q.UpsertGitHubEventRule(ctx, db.UpsertGitHubEventRuleParams{
-		WorkspaceID:   wsID,
-		EventType:     "pull_request",
-		RepoFullName:  "",
-		AgentID:       agentID,
-		Enabled:       true,
-		TitleTemplate: "default-title",
-	}); err != nil {
-		t.Fatalf("re-insert default: %v", err)
-	}
-	rules, err = q.ListGitHubEventRules(ctx, wsID)
-	if err != nil {
-		t.Fatalf("list rules: %v", err)
-	}
-	if len(rules) != 2 {
-		t.Fatalf("expected 2 rules, got %d", len(rules))
-	}
-	if rules[0].RepoFullName != "" || rules[1].RepoFullName != "acme/widgets" {
-		t.Fatalf("unexpected list ordering: %q then %q", rules[0].RepoFullName, rules[1].RepoFullName)
+	body := []byte(`{"installation":{"id":1}}`)
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "ping")
+	req.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for bad signature, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestReceiveGitHubEvent_PingShortCircuits(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	secret := []byte("test-secret")
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	body := []byte(`{"zen":"keep it logically awesome"}`)
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "ping")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ping: expected 200, got %d", w.Code)
+	}
+}
+
+func TestReceiveGitHubEvent_UnknownInstallation(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	secret := []byte("test-secret")
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	// installation_id 99999 has no webhook → handler returns 200 (silent drop)
+	body := []byte(`{"action":"opened","installation":{"id":99999},"pull_request":{"number":1,"html_url":"https://x"},"repository":{"full_name":"a/b"}}`)
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unknown installation: expected 200, got %d", w.Code)
+	}
+}
+
+func TestReceiveGitHubEvent_PullRequestCreatesIssueAndLink(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	ctx := context.Background()
+	secret := []byte("test-secret")
+
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	installationID := int64(424242)
+	webhookID := setupGitHubWebhookFixture(t, installationID)
+
+	// Look up the test agent to wire it as create_issue assignee.
+	var agentIDStr string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentIDStr); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	cfg := CreateIssueActionConfig{
+		AgentID:       agentIDStr,
+		TitleTemplate: "PR: {{.title}}",
+	}
+	cfgJSON, _ := json.Marshal(cfg)
+	if _, err := testHandler.Queries.CreateWebhookAction(ctx, db.CreateWebhookActionParams{
+		WebhookID:  webhookID,
+		ActionType: "create_issue",
+		Config:     cfgJSON,
+		Enabled:    true,
+		Position:   0,
+	}); err != nil {
+		t.Fatalf("create action: %v", err)
+	}
+
+	prURL := fmt.Sprintf("https://github.com/acme/widgets/pull/%d", uniqueIssueNumber())
+	body := []byte(fmt.Sprintf(`{
+		"action":"opened",
+		"installation":{"id":%d},
+		"pull_request":{"number":777,"title":"Fix bug","html_url":%q,"user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"x"},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, prURL))
+
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("PR opened: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify exactly one issue_link with the PR URL was created in this workspace.
+	link, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Url:         prURL,
+	})
+	if err != nil {
+		t.Fatalf("issue_link not found: %v", err)
+	}
+	if link.Direction != "source" {
+		t.Errorf("link.direction = %q, want source", link.Direction)
+	}
+	if link.Kind != "pr" {
+		t.Errorf("link.kind = %q, want pr", link.Kind)
+	}
+	if link.SourceType != "github" {
+		t.Errorf("link.source_type = %q, want github", link.SourceType)
+	}
+
+	// Cleanup.
+	t.Cleanup(func() {
+		testHandler.Queries.DeleteIssue(ctx, link.IssueID)
+		testHandler.Queries.DeleteIssueLink(ctx, link.ID)
+	})
+}
+
+// uniqueIssueNumber yields a value unlikely to collide across parallel test
+// runs on the same DB. We don't actually care about the number's meaning —
+// it just makes the PR URL unique so the issue_link unique constraint never
+// trips when tests are re-run without cleanup.
+var issueNumberCounter int64
+
+func uniqueIssueNumber() int64 {
+	issueNumberCounter++
+	return issueNumberCounter + 100000
+}
+
+// testRSAKeyPEM is a throw-away RSA key (PKCS1) used only to satisfy
+// NewApp's parser in handler-level tests. It is never used to talk to GitHub.
+// Generated with: openssl genrsa -traditional 2048
+var testRSAKeyPEM = []byte(`-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAlNLs7cx+NRpPfIAbLv4eMnQqbNcJDrKTxvTGdp71ANhjEBw7
+njVtpLI9zgJOuyRcAlfLAmETjx/sLj6ITFlR5fX0gBuY/R3KwjkeDZz/CaHQqInK
+qG/D57Th7GeVdW/+2y7o1YZXB8yjn/rbVeMhamNYdnC2/Ym4MG8165tcLyVmcjsr
+MWRFrruECrJctsvyzD2Lq4brUgxO1Puqp31nup32NWNpgKrcjmbJLQHWVcghnKtE
+ydMCNoZTE9g52m/gfwt+ede3qs2weLgAwVpskgpEGtJqa5KqQ1aWdJITCvKlO15n
+Sqlt4vl4YLC2uh7FMHyt1zLrRQqVAjiVVNA7xQIDAQABAoIBAAI/z9nmOdAWpjXk
+/8QtjgpILC358AabV1Vt9KPtUhmhq5meO55wA0i2cu2upj741TUp24UdL3z9yAWI
+52lz/iNiHMBk6mKE9UALOfONuGMOYYdykbALBGR3nOSESkN8nlb0tgsoHR+ejaiI
+05DQPnyLpNYhbPqW/sQooiF99x41RhWH77WPd4LiSY/f+pU7RT9yqJ+f2YdliER3
+EZBMWanvdpffvG/lRJP5JqxEfX5hsL5yviZemkyYYlsxG72W6VXAlPMulKG0mKYC
+IjfgYSdV+ujc3JFhM9L6UPu7Aw/SwcA4srq+zT94m1mWdRGFWxxYYlzd5vDVp634
+MY8B2XECgYEA0TmnJGT1ylzKwePPVKcZyYf9OK6EIri0ZA56rtH8gPBWAPBNZH0U
+/sEe6Q5TDRemsWm6t+8RzkytX7v7lD/WB5CqOtb6JqT4JYdgvCOVob0kupBfHbOO
+uiZ/mnCH8or+fSfV/9gPD8+RylGDjwFa5PVYwYkcF8MNBzPghioWu+kCgYEAthhl
+Lx5Q/9EnDElhTD040l6CNjoDY93yj2mAlq7i/sCvdkf5HxV+vdIAwzGjFo3RBrag
+RkRly5NYxO5KxC4Cq6i/az2sHtdA1ubM75T0ul0yflawcTpWEvUhbfuDAiyFAGi1
+ABSEZojIADKidBnVrOAqVKf2katyoWqc7il0w30CgYAHTev36U5rcjHh8wIaAntz
+/btpby5NyAUEOT0vPUWDeuCFx93r1DIXcsaRfF6J5nl7WCWcpkwI18R1wypVUqU2
+PmazBy5Uiw3ewYsvBk8DBodxu/iWIN6qwQ1TZvpYDWI1HF7sP67G7og4eAAPzgxO
+UgJ3P0Ir0jNyPO1pwa5pgQKBgQCzbYxehm/n8u6YE8JU/kp8N/X0euuWPz/ggmPb
+lo5D2hfK5Bacw3B0mHZ53/JEqg8an1+EfacUlqc0vV1cu72T6h5cDJQKe63/U8MC
+HHOdI3I6vS71Ezd3TKXZGqi3vqh7g7E+V/kyk3sHft1Gq6I5y1TKwAqc9SRp24Sw
+xJayfQKBgBT/h78vGtnVFicXvesfYeE6ROjAIBe4GPLexcp4IGJS8uPKkNVRjjNc
+AKSfqpp6NJbdJoVp065TrmAABlRexrJYOwRQXNo/u8PFbNK0/3FEAd8WT+LOUwz+
+Gv39lult+hj2NKk6PjOCLRPZBzuhRoDvV1+uT5KJJ+0dvFEQJ1++
+-----END RSA PRIVATE KEY-----
+`)

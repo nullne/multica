@@ -12,19 +12,25 @@ import (
 )
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO "user" (name, email, avatar_url)
-VALUES ($1, $2, $3)
-RETURNING id, name, email, avatar_url, created_at, updated_at
+INSERT INTO "user" (name, email, avatar_url, kind)
+VALUES ($1, $2, $3, COALESCE($4, 'human'))
+RETURNING id, name, email, avatar_url, created_at, updated_at, kind
 `
 
 type CreateUserParams struct {
 	Name      string      `json:"name"`
 	Email     string      `json:"email"`
 	AvatarUrl pgtype.Text `json:"avatar_url"`
+	Kind      interface{} `json:"kind"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, createUser, arg.Name, arg.Email, arg.AvatarUrl)
+	row := q.db.QueryRow(ctx, createUser,
+		arg.Name,
+		arg.Email,
+		arg.AvatarUrl,
+		arg.Kind,
+	)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -33,12 +39,22 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }
 
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM "user" WHERE id = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUser, id)
+	return err
+}
+
 const getUser = `-- name: GetUser :one
-SELECT id, name, email, avatar_url, created_at, updated_at FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, kind FROM "user"
 WHERE id = $1
 `
 
@@ -52,12 +68,13 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, name, email, avatar_url, created_at, updated_at FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, kind FROM "user"
 WHERE email = $1
 `
 
@@ -71,8 +88,45 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
+}
+
+const listBotsInWorkspace = `-- name: ListBotsInWorkspace :many
+SELECT u.id, u.name, u.email, u.avatar_url, u.created_at, u.updated_at, u.kind
+FROM "user" u
+JOIN member m ON m.user_id = u.id
+WHERE m.workspace_id = $1 AND u.kind = 'bot'
+ORDER BY u.created_at ASC
+`
+
+func (q *Queries) ListBotsInWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]User, error) {
+	rows, err := q.db.Query(ctx, listBotsInWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Email,
+			&i.AvatarUrl,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Kind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateUser = `-- name: UpdateUser :one
@@ -81,7 +135,7 @@ UPDATE "user" SET
     avatar_url = COALESCE($3, avatar_url),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at
+RETURNING id, name, email, avatar_url, created_at, updated_at, kind
 `
 
 type UpdateUserParams struct {
@@ -100,6 +154,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
 	)
 	return i, err
 }

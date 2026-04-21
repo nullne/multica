@@ -155,22 +155,6 @@ type DaemonToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-type GithubEventRule struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	EventType           string             `json:"event_type"`
-	AgentID             pgtype.UUID        `json:"agent_id"`
-	Enabled             bool               `json:"enabled"`
-	TitleTemplate       string             `json:"title_template"`
-	DescriptionTemplate string             `json:"description_template"`
-	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
-	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	RepoFullName        string             `json:"repo_full_name"`
-}
-
 type InboxItem struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
@@ -209,8 +193,6 @@ type Issue struct {
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	Number                int32              `json:"number"`
 	VerifierAgentID       pgtype.UUID        `json:"verifier_agent_id"`
-	LinkedBranch          pgtype.Text        `json:"linked_branch"`
-	LinkedPrUrl           pgtype.Text        `json:"linked_pr_url"`
 	MaxVerificationRounds pgtype.Int4        `json:"max_verification_rounds"`
 	CriteriaStatus        pgtype.Text        `json:"criteria_status"`
 	DispatchProvider      pgtype.Text        `json:"dispatch_provider"`
@@ -230,6 +212,18 @@ type IssueLabel struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	Name        string      `json:"name"`
 	Color       string      `json:"color"`
+}
+
+type IssueLink struct {
+	ID          pgtype.UUID        `json:"id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	SourceType  string             `json:"source_type"`
+	Kind        string             `json:"kind"`
+	Direction   string             `json:"direction"`
+	Url         string             `json:"url"`
+	ExternalID  string             `json:"external_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type IssueReaction struct {
@@ -329,6 +323,7 @@ type User struct {
 	AvatarUrl pgtype.Text        `json:"avatar_url"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Kind      string             `json:"kind"`
 }
 
 type VerificationCode struct {
@@ -353,6 +348,8 @@ type Webhook struct {
 	CreatedBy          pgtype.UUID        `json:"created_by"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	BotUserID          pgtype.UUID        `json:"bot_user_id"`
+	InstallationID     pgtype.Int8        `json:"installation_id"`
 }
 
 type WebhookAction struct {

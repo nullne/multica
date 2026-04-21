@@ -148,9 +148,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/github/status", h.GitHubStatus)
 					r.Post("/github/connect", h.GitHubConnect)
 					r.Delete("/github", h.GitHubDisconnect)
-					r.Get("/github/event-rules", h.ListGitHubEventRules)
-					r.Put("/github/event-rules", h.UpsertGitHubEventRule)
-					r.Delete("/github/event-rules/{ruleId}", h.DeleteGitHubEventRule)
+					r.Get("/bot-users", h.ListBotUsers)
+					r.Post("/bot-users", h.CreateBotUser)
+					r.Delete("/bot-users/{userId}", h.DeleteBotUser)
 					r.Route("/members/{memberId}", func(r chi.Router) {
 						r.Patch("/", h.UpdateMember)
 						r.Delete("/", h.DeleteMember)

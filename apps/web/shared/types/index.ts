@@ -1,4 +1,4 @@
-export type { Issue, IssueStatus, IssuePriority, IssueAssigneeType, IssueCreatorType, IssueReaction, AcceptanceCriterion, CriteriaStatus, Label } from "./issue";
+export type { Issue, IssueLink, IssueLinkDirection, IssueLinkKind, IssueStatus, IssuePriority, IssueAssigneeType, IssueCreatorType, IssueReaction, AcceptanceCriterion, CriteriaStatus, Label } from "./issue";
 export type {
   Agent,
   AgentStatus,
@@ -39,21 +39,21 @@ export type { Attachment } from "./attachment";
 export type {
   Webhook,
   WebhookAction,
+  WebhookActionType,
   CreateIssueActionConfig,
+  CommentIssueActionConfig,
   WebhookWithActions,
   WebhookSourceType,
   WebhookStatus,
   CreateWebhookRequest,
   CreateWebhookResponse,
   UpdateWebhookRequest,
+  CreateWebhookActionRequest,
   UpdateWebhookActionRequest,
   WebhookEvent,
   WebhookEventStatus,
   AdapterKey,
   AdapterInfo,
+  BotUser,
+  CreateBotUserRequest,
 } from "./webhook";
-export type {
-  GitHubEventType,
-  GitHubEventRule,
-  UpsertGitHubEventRuleRequest,
-} from "./github-event";
