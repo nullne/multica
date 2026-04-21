@@ -70,13 +70,17 @@ services:
 
   frontend:
     image: node:22-alpine
-    working_dir: /app
-    command: ["sh", "-c", "apk add --no-cache curl > /dev/null 2>&1; corepack enable && pnpm dev:web"]
+    working_dir: /app/apps/web
+    # Production build avoids Next.js dev-mode HMR issues (broken WebSocket
+    # handshake inside this docker network setup blocks client hydration).
+    command: ["sh", "-c", "apk add --no-cache curl > /dev/null 2>&1; corepack enable && pnpm --filter @multica/web exec next build --webpack && pnpm --filter @multica/web start"]
     environment:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       NEXT_PUBLIC_API_URL: ""
       NEXT_PUBLIC_WS_URL: ""
       REMOTE_API_URL: http://backend:8080
+      NODE_ENV: production
+      PORT: "3000"
       <<: *no-proxy
     volumes:
       - .:/app
@@ -92,7 +96,7 @@ services:
       interval: 5s
       timeout: 10s
       retries: 60
-      start_period: 30s
+      start_period: 120s
 
   # ---------------------------------------------------------------------------
   # Test runners — invoked via `docker compose run --rm <service>`
@@ -143,7 +147,7 @@ services:
     profiles: [test]
 
   e2e:
-    image: mcr.microsoft.com/playwright:v1.52.0-noble
+    image: mcr.microsoft.com/playwright:v1.58.2-noble
     working_dir: /app
     command: ["sh", "-c", "corepack enable && npx playwright install --with-deps chromium && pnpm exec playwright test"]
     environment:

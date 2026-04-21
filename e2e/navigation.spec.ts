@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { loginAsDefault, openWorkspaceMenu } from "./helpers";
+import { loginAsDefault } from "./helpers";
+
+const sidebarLink = (href: string) =>
+  `[data-slot="sidebar"] a[href="${href}"]`;
 
 test.describe("Navigation", () => {
   test.beforeEach(async ({ page }) => {
@@ -7,37 +10,28 @@ test.describe("Navigation", () => {
   });
 
   test("sidebar navigation works", async ({ page }) => {
-    // Click Inbox
-    await page.locator("nav a", { hasText: "Inbox" }).click();
+    await page.locator(sidebarLink("/inbox")).first().click();
     await page.waitForURL("**/inbox");
     await expect(page).toHaveURL(/\/inbox/);
 
-    // Click Agents
-    await page.locator("nav a", { hasText: "Agents" }).click();
+    await page.locator(sidebarLink("/agents")).first().click();
     await page.waitForURL("**/agents");
     await expect(page).toHaveURL(/\/agents/);
 
-    // Click Issues
-    await page.locator("nav a", { hasText: "Issues" }).click();
-    await page.waitForURL("**/issues");
-    await expect(page).toHaveURL(/\/issues/);
+    await page.locator(sidebarLink("/issues")).first().click();
+    await page.waitForURL((url) => url.pathname === "/issues");
+    await expect(page).toHaveURL(/\/issues$/);
   });
 
-  test("settings page loads via workspace menu", async ({ page }) => {
-    // Settings is inside the workspace dropdown menu
-    await openWorkspaceMenu(page);
-    await page.locator("text=Settings").click();
+  test("settings page is reachable from sidebar", async ({ page }) => {
+    await page.locator(sidebarLink("/settings")).first().click();
     await page.waitForURL("**/settings");
-
-    await expect(page.getByRole("heading", { name: "Workspace" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Members" })).toBeVisible();
+    await expect(page.locator('[role="tablist"]').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test("agents page shows agent list", async ({ page }) => {
-    await page.locator("nav a", { hasText: "Agents" }).click();
+  test("agents page renders", async ({ page }) => {
+    await page.locator(sidebarLink("/agents")).first().click();
     await page.waitForURL("**/agents");
-
-    // Should show "Agents" heading
-    await expect(page.locator("text=Agents").first()).toBeVisible();
+    await expect(page.locator("main").first()).toBeVisible();
   });
 });

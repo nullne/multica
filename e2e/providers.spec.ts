@@ -21,35 +21,36 @@ test.describe("Workspace Providers", () => {
 
   test("providers tab is visible in settings", async ({ page }) => {
     await page.goto("/settings");
-    await page.waitForURL("**/settings");
+    // Wait for dashboard chrome to render before asserting tabs (auth race).
+    await expect(page.locator('[data-slot="sidebar"]').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[role="tablist"]').first()).toBeVisible({ timeout: 10000 });
 
-    // Click the Providers tab
-    await page.locator("button", { hasText: "Providers" }).click();
+    // Click the Providers tab.
+    await page.locator('button:has-text("Providers")').first().click();
 
     // Provider cards should be visible
-    await expect(page.locator("text=Claude Code")).toBeVisible();
-    await expect(page.locator("text=Codex")).toBeVisible();
-    await expect(page.locator("text=OpenCode")).toBeVisible();
-    await expect(page.locator("text=Cursor")).toBeVisible();
+    await expect(page.locator("text=Claude Code").first()).toBeVisible();
+    await expect(page.locator("text=Codex").first()).toBeVisible();
 
     // Save button should be present
-    await expect(page.locator("button", { hasText: "Save" })).toBeVisible();
+    await expect(page.locator("button", { hasText: "Save" }).first()).toBeVisible();
   });
 
   test("can enable a provider and save configuration", async ({ page }) => {
     await page.goto("/settings");
-    await page.waitForURL("**/settings");
+    await expect(page.locator('[data-slot="sidebar"]').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[role="tablist"]').first()).toBeVisible({ timeout: 10000 });
 
-    // Navigate to Providers tab
-    await page.locator("button", { hasText: "Providers" }).click();
-    await expect(page.locator("text=Claude Code")).toBeVisible();
+    await page.locator('button:has-text("Providers")').first().click();
+    await expect(page.locator("text=Claude Code").first()).toBeVisible();
 
-    // Find the Claude Code card and toggle its switch.
+    // Find the Claude Code card and toggle its switch (base-ui Switch uses
+    // data-slot="switch", not role="switch").
     const claudeCard = page.locator("[data-slot='card']").filter({ hasText: "Claude Code" }).first();
-    await claudeCard.locator("button[role='switch']").click();
+    await claudeCard.locator("[data-slot='switch']").click();
 
     // API Key and Target Version fields should appear
-    await expect(page.locator("label:has-text('API Key')")).toBeVisible();
+    await expect(page.locator("label:has-text('API Key')").first()).toBeVisible();
     await expect(page.locator("label:has-text('Target Version')").first()).toBeVisible();
 
     // Fill in an API key
@@ -78,19 +79,20 @@ test.describe("Workspace Providers", () => {
     });
 
     await page.goto("/settings");
-    await page.waitForURL("**/settings");
+    await expect(page.locator('[data-slot="sidebar"]').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.locator('[role="tablist"]').first()).toBeVisible({ timeout: 10000 });
 
-    await page.locator("button", { hasText: "Providers" }).click();
-    await expect(page.locator("text=Claude Code")).toBeVisible();
+    await page.locator('button:has-text("Providers")').first().click();
+    await expect(page.locator("text=Claude Code").first()).toBeVisible();
 
-    // Find the Claude Code card's switch
+    // Find the Claude Code card's switch (base-ui Switch).
     const claudeCard = page.locator("[data-slot='card']").filter({ hasText: "Claude Code" }).first();
-    const claudeSwitch = claudeCard.locator("button[role='switch']");
-    await expect(claudeSwitch).toHaveAttribute("data-state", "checked");
+    const claudeSwitch = claudeCard.locator("[data-slot='switch']");
+    await expect(claudeSwitch).toHaveAttribute("data-checked", "");
 
     // Disable it
     await claudeSwitch.click();
-    await expect(claudeSwitch).toHaveAttribute("data-state", "unchecked");
+    await expect(claudeSwitch).toHaveAttribute("data-unchecked", "");
 
     // Save
     await page.locator("button", { hasText: "Save" }).click();

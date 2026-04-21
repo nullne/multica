@@ -6,21 +6,21 @@ test.describe("Authentication", () => {
     await page.goto("/login");
 
     await expect(page.locator("text=Multica").first()).toBeVisible();
-    await expect(page.locator('input[placeholder="Email"]')).toBeVisible();
-    await expect(page.locator('input[placeholder="Name"]')).toBeVisible();
-    await expect(page.locator('button[type="submit"]')).toContainText(
-      "Sign in",
-    );
+    // Firebase email link sign-in form (no DEV_LOGIN_EMAIL configured).
+    await expect(page.locator('input[placeholder="you@example.com"]')).toBeVisible();
+    await expect(page.locator("button", { hasText: "Email me a sign-in link" })).toBeVisible();
+    await expect(page.locator("button", { hasText: "Continue with Google" })).toBeVisible();
   });
 
   test("login and redirect to /issues", async ({ page }) => {
     await loginAsDefault(page);
 
     await expect(page).toHaveURL(/\/issues/);
-    await expect(page.locator("text=All Issues")).toBeVisible();
+    // Dashboard is rendered (shadcn sidebar visible).
+    await expect(page.locator('[data-slot="sidebar"]').first()).toBeVisible();
   });
 
-  test("unauthenticated user is redirected to /login", async ({ page }) => {
+  test("unauthenticated user is redirected away from dashboard", async ({ page }) => {
     await page.goto("/login");
     await page.evaluate(() => {
       localStorage.removeItem("multica_token");
@@ -28,19 +28,24 @@ test.describe("Authentication", () => {
     });
 
     await page.goto("/issues");
-    await page.waitForURL("**/login", { timeout: 10000 });
+    // Dashboard layout pushes unauthenticated users back to / (landing).
+    await page.waitForURL((url) => !url.pathname.startsWith("/issues"), {
+      timeout: 10000,
+    });
   });
 
-  test("logout redirects to /login", async ({ page }) => {
+  test("logout clears auth and exits dashboard", async ({ page }) => {
     await loginAsDefault(page);
 
     // Open the workspace dropdown menu
     await openWorkspaceMenu(page);
 
-    // Click Sign out
-    await page.locator("text=Sign out").click();
+    // Click "Log out" in the workspace dropdown.
+    await page.locator("text=Log out").click();
 
-    await page.waitForURL("**/login", { timeout: 10000 });
-    await expect(page).toHaveURL(/\/login/);
+    // After logout the dashboard layout pushes us to / (landing).
+    await page.waitForURL((url) => !url.pathname.startsWith("/issues"), {
+      timeout: 10000,
+    });
   });
 });

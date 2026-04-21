@@ -27,6 +27,9 @@ export async function loginAsDefault(page: Page, existingApi?: TestApiClient) {
   }, token);
   await page.goto("/issues");
   await page.waitForURL("**/issues", { timeout: 10000 });
+  // Ensure auth init settled so subsequent hard-navigations don't race with
+  // the "redirect to /" branch in the dashboard layout.
+  await page.locator('[data-slot="sidebar"]').first().waitFor({ state: "visible", timeout: 15000 });
 }
 
 /**
@@ -41,8 +44,9 @@ export async function createTestApi(): Promise<TestApiClient> {
 }
 
 export async function openWorkspaceMenu(page: Page) {
-  // Click the workspace switcher button (has ChevronDown icon)
-  await page.locator("aside button").first().click();
-  // Wait for dropdown to appear
-  await page.locator('[class*="popover"]').waitFor({ state: "visible" });
+  // The sidebar is rendered as a `<div data-slot="sidebar">` (shadcn ui).
+  // The first button inside is the workspace switcher dropdown trigger.
+  await page.locator('[data-slot="sidebar"] button').first().click();
+  // Wait for the dropdown menu (Radix DropdownMenu) to mount.
+  await page.locator('[role="menu"]').first().waitFor({ state: "visible" });
 }
