@@ -47,6 +47,8 @@ export interface User {
   updated_at: string;
 }
 
+export type UserKind = "human" | "bot";
+
 export interface MemberWithUser {
   id: string;
   workspace_id: string;
@@ -56,4 +58,5 @@ export interface MemberWithUser {
   name: string;
   email: string;
   avatar_url: string | null;
+  kind: UserKind;
 }

@@ -28,7 +28,7 @@ export type {
   DaemonStatus,
   RuntimeStatus,
 } from "./agent";
-export type { Workspace, WorkspaceRepo, ProviderConfig, WorkspaceProviderSettings, Member, MemberRole, User, MemberWithUser } from "./workspace";
+export type { Workspace, WorkspaceRepo, ProviderConfig, WorkspaceProviderSettings, Member, MemberRole, User, MemberWithUser, UserKind } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { Comment, CommentType, CommentAuthorType, Reaction } from "./comment";
 export type { TimelineEntry } from "./activity";

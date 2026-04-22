@@ -13,7 +13,6 @@ import {
   ChevronDown,
   ChevronRight,
   Pencil,
-  Bot,
   GitBranch as Github,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -69,12 +68,54 @@ import { useWorkspaceStore } from "@/features/workspace";
 import { useLabelStore } from "@/features/labels";
 import type { Label as IssueLabel } from "@/shared/types";
 
-const GITHUB_EVENT_TYPES: { value: string; label: string }[] = [
-  { value: "github.push", label: "Push" },
-  { value: "github.pull_request", label: "Pull request" },
-  { value: "github.issues", label: "Issue" },
-  { value: "github.issue_comment", label: "Issue / PR comment" },
+// GitHub event groups for the action filter UI. Each group has a parent
+// prefix (e.g. "github.pull_request") and an optional set of leaf actions
+// (e.g. "opened", "merged"). Selecting the parent stores the prefix string
+// and matches all sub-actions via the backend's prefix-match. Selecting
+// individual leaves stores the full event type "github.<event>.<action>".
+//
+// The set of leaves mirrors the actions accepted by isRelevantGitHubAction
+// in server/internal/webhook/github.go.
+const GITHUB_EVENT_GROUPS: {
+  parent: string;
+  label: string;
+  actions: { value: string; label: string }[];
+}[] = [
+  { parent: "github.push", label: "Push", actions: [] },
+  {
+    parent: "github.pull_request",
+    label: "Pull request",
+    actions: [
+      { value: "opened", label: "Opened" },
+      { value: "synchronize", label: "Synchronize" },
+      { value: "reopened", label: "Reopened" },
+      { value: "closed", label: "Closed (unmerged)" },
+      { value: "merged", label: "Merged" },
+    ],
+  },
+  {
+    parent: "github.issues",
+    label: "Issue",
+    actions: [
+      { value: "opened", label: "Opened" },
+      { value: "reopened", label: "Reopened" },
+      { value: "closed", label: "Closed" },
+    ],
+  },
+  {
+    parent: "github.issue_comment",
+    label: "Comment",
+    actions: [{ value: "created", label: "Created" }],
+  },
 ];
+
+// Convert a GitHub repo URL ("https://github.com/owner/repo[.git]") into
+// its full name ("owner/repo"). Returns null when the URL doesn't look
+// like a GitHub repo URL.
+function repoFullNameFromURL(url: string): string | null {
+  const m = url.match(/github\.com[:/]+([^/]+)\/([^/.]+)(?:\.git)?\/?$/);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
 
 export function WebhooksTab() {
   const workspaceId = useWorkspaceStore((s) => s.workspace?.id ?? null);
@@ -170,13 +211,6 @@ export function WebhooksTab() {
 
   return (
     <div className="space-y-8">
-      <BotUsersSection
-        workspaceId={workspaceId}
-        bots={bots}
-        loading={loading}
-        onChanged={reload}
-      />
-
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -191,7 +225,8 @@ export function WebhooksTab() {
 
         <p className="text-xs text-muted-foreground">
           Webhooks let external systems (alerting, monitoring, CI, GitHub) push events that
-          create issues or comment on existing ones.
+          create issues or comment on existing ones. Bot users (used as the comment author)
+          are managed in the Members tab.
         </p>
 
         {loading ? (
@@ -374,148 +409,6 @@ function usageExamplePayload(sourceType?: string): string {
     default:
       return `{"title": "Test alert", "body": "Something happened"}`;
   }
-}
-
-// ----------------------------------------------------------------------------
-// Bot users section
-// ----------------------------------------------------------------------------
-
-function BotUsersSection({
-  workspaceId,
-  bots,
-  loading,
-  onChanged,
-}: {
-  workspaceId: string | null;
-  bots: BotUser[];
-  loading: boolean;
-  onChanged: () => Promise<void> | void;
-}) {
-  const [createOpen, setCreateOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-
-  const handleCreate = async () => {
-    if (!workspaceId || !name.trim()) return;
-    setCreating(true);
-    try {
-      await api.createBotUser(workspaceId, { name: name.trim() });
-      toast.success("Bot user created");
-      setName("");
-      setCreateOpen(false);
-      await onChanged();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to create bot");
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleDelete = async (botId: string) => {
-    if (!workspaceId) return;
-    try {
-      await api.deleteBotUser(workspaceId, botId);
-      toast.success("Bot user deleted");
-      await onChanged();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to delete bot");
-    }
-  };
-
-  return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Bot className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">Bot users</h2>
-        </div>
-        <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-3.5 w-3.5 mr-1" />
-          Add bot
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Bot users post comments on behalf of webhooks. They appear in member lists but
-        cannot log in. Bind one to a webhook&apos;s &quot;Comment on linked issue&quot; action.
-      </p>
-
-      {loading ? (
-        <Skeleton className="h-10 w-full" />
-      ) : bots.length === 0 ? (
-        <Card>
-          <CardContent className="py-4 text-center text-xs text-muted-foreground">
-            No bot users yet.
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="rounded-md border divide-y">
-          {bots.map((b) => (
-            <div key={b.id} className="flex items-center justify-between px-3 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium truncate">{b.name}</div>
-                <div className="text-[11px] text-muted-foreground truncate">{b.email}</div>
-              </div>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button variant="ghost" size="icon-sm" onClick={() => setDeleteConfirmId(b.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  }
-                />
-                <TooltipContent>Delete bot</TooltipContent>
-              </Tooltip>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Create bot user</DialogTitle>
-            <DialogDescription>
-              The bot will be added to this workspace as a regular member with role &quot;member&quot;.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="bot-name">Name</Label>
-            <Input id="bot-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. GitHub Bot" />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={creating || !name.trim()}>
-              {creating ? "Creating..." : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <AlertDialog open={!!deleteConfirmId} onOpenChange={(v) => { if (!v) setDeleteConfirmId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete bot user</AlertDialogTitle>
-            <AlertDialogDescription>
-              Webhooks bound to this bot will lose their author and any &quot;Comment on linked issue&quot; actions will fail until you assign a new bot.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={async () => {
-                if (deleteConfirmId) await handleDelete(deleteConfirmId);
-                setDeleteConfirmId(null);
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </section>
-  );
 }
 
 // ----------------------------------------------------------------------------
@@ -1013,7 +906,13 @@ function EditWebhookDialog({
             <div className="space-y-1.5">
               <Label>Bot user (for comment_issue actions)</Label>
               <Select value={botUserId} onValueChange={(v) => setBotUserId(v ?? "")}>
-                <SelectTrigger size="sm"><SelectValue placeholder="None" /></SelectTrigger>
+                <SelectTrigger size="sm">
+                  <SelectValue placeholder="None">
+                    {botUserId
+                      ? (bots.find((b) => b.id === botUserId)?.name ?? "(deleted bot)")
+                      : "None"}
+                  </SelectValue>
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">None</SelectItem>
                   {bots.map((b) => (
@@ -1021,9 +920,13 @@ function EditWebhookDialog({
                   ))}
                 </SelectContent>
               </Select>
-              {bots.length === 0 && (
+              {bots.length === 0 ? (
                 <p className="text-[10px] text-muted-foreground">
-                  Create a bot user above first.
+                  No bot users exist. Create one in Settings &rarr; Members.
+                </p>
+              ) : (
+                <p className="text-[10px] text-muted-foreground">
+                  Manage bot users in Settings &rarr; Members.
                 </p>
               )}
             </div>
@@ -1249,12 +1152,17 @@ function CreateIssueActionEditor({
   const selectedAgent = agents.find((a) => a.id === cfg.agent_id);
   const selectedLabels = (cfg.labels ?? []).map((id) => allLabels.find((l) => l.id === id)).filter((l): l is IssueLabel => !!l);
 
+  const selectedDaemon = daemons.find((d) => d.id === cfg.dispatch_daemon_id);
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-3">
         <Label className="w-24 shrink-0 text-right">Agent</Label>
         <Select value={cfg.agent_id} onValueChange={(v) => v && onChange({ agent_id: v })}>
-          <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="Select agent" /></SelectTrigger>
+          <SelectTrigger size="sm" className="w-auto">
+            <SelectValue placeholder="Select agent">
+              {selectedAgent?.name ?? (cfg.agent_id ? "(deleted agent)" : "")}
+            </SelectValue>
+          </SelectTrigger>
           <SelectContent>
             {agents.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))}
           </SelectContent>
@@ -1264,7 +1172,11 @@ function CreateIssueActionEditor({
         <div className="flex items-center gap-3">
           <Label className="w-24 shrink-0 text-right">Provider</Label>
           <Select value={cfg.dispatch_provider ?? ""} onValueChange={(v) => onChange({ dispatch_provider: v || undefined })}>
-            <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="Auto" /></SelectTrigger>
+            <SelectTrigger size="sm" className="w-auto">
+              <SelectValue placeholder="Auto">
+                {cfg.dispatch_provider || "Auto"}
+              </SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value="">Auto</SelectItem>
               {selectedAgent.providers.map((p) => (<SelectItem key={p} value={p}>{p}</SelectItem>))}
@@ -1275,7 +1187,13 @@ function CreateIssueActionEditor({
       <div className="flex items-center gap-3">
         <Label className="w-24 shrink-0 text-right">Environment</Label>
         <Select value={cfg.dispatch_daemon_id ?? ""} onValueChange={(v) => onChange({ dispatch_daemon_id: v || undefined })}>
-          <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="Any environment" /></SelectTrigger>
+          <SelectTrigger size="sm" className="w-auto">
+            <SelectValue placeholder="Any environment">
+              {cfg.dispatch_daemon_id
+                ? (selectedDaemon?.device_name || selectedDaemon?.daemon_id || "(deleted environment)")
+                : "Any environment"}
+            </SelectValue>
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="">Any environment</SelectItem>
             {daemons.map((d) => (<SelectItem key={d.id} value={d.id}>{d.device_name || d.daemon_id}</SelectItem>))}
@@ -1334,7 +1252,13 @@ function CommentIssueActionEditor({
       <div className="flex items-center gap-3">
         <Label className="w-24 shrink-0 text-right">@Mention</Label>
         <Select value={cfg.mention_agent_id ?? ""} onValueChange={(v) => onChange({ mention_agent_id: v || undefined })}>
-          <SelectTrigger size="sm" className="w-auto"><SelectValue placeholder="No mention" /></SelectTrigger>
+          <SelectTrigger size="sm" className="w-auto">
+            <SelectValue placeholder="No mention">
+              {cfg.mention_agent_id
+                ? (agents.find((a) => a.id === cfg.mention_agent_id)?.name ?? "(deleted agent)")
+                : "No mention"}
+            </SelectValue>
+          </SelectTrigger>
           <SelectContent>
             <SelectItem value="">No mention</SelectItem>
             {agents.map((a) => (<SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>))}
@@ -1361,52 +1285,190 @@ function FilterFields({
   repos: string[];
   onChange: (partial: { event_types?: string[]; repos?: string[] }) => void;
 }) {
-  const toggleEvent = (val: string) => {
-    if (eventTypes.includes(val)) {
-      onChange({ event_types: eventTypes.filter((t) => t !== val) });
-    } else {
-      onChange({ event_types: [...eventTypes, val] });
-    }
-  };
+  // Repository options come from the workspace's registered repos (Settings
+  // -> Repositories). We display owner/repo and store owner/repo so the
+  // filter matches the value the github adapter writes into Event.Data.repo.
+  const workspace = useWorkspaceStore((s) => s.workspace);
+  const availableRepos = (workspace?.repos ?? [])
+    .map((r) => ({ url: r.url, fullName: repoFullNameFromURL(r.url), description: r.description }))
+    .filter((r): r is { url: string; fullName: string; description: string } => r.fullName !== null);
 
-  const reposText = repos.join(", ");
+  const setEventTypes = (next: string[]) => onChange({ event_types: next });
+  const setRepos = (next: string[]) => onChange({ repos: next });
 
   return (
     <div className="rounded-md border bg-muted/30 p-2 space-y-2">
       <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Filters (GitHub)</div>
+
+      <EventTypePicker eventTypes={eventTypes} onChange={setEventTypes} />
+
       <div className="space-y-1.5">
-        <Label className="text-[11px]">Event types (any selected)</Label>
-        <div className="flex flex-wrap gap-1">
-          {GITHUB_EVENT_TYPES.map((et) => {
-            const on = eventTypes.includes(et.value);
+        <Label className="text-[11px]">Repos (leave empty for all)</Label>
+        <RepoPicker
+          available={availableRepos}
+          selected={repos}
+          onChange={setRepos}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Hierarchical event-type picker: each group has a "select all" toggle and
+// a flat list of leaf chips. Storage rules (so the existing
+// actionMatchesFilters prefix-match keeps working unchanged):
+//   - Selecting the parent stores the parent prefix (e.g. "github.pull_request")
+//     and removes any of that group's leaf entries.
+//   - Selecting a leaf stores the full event type (e.g. "github.pull_request.opened")
+//     and removes the parent prefix.
+function EventTypePicker({
+  eventTypes,
+  onChange,
+}: {
+  eventTypes: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const isParentSelected = (parent: string) => eventTypes.includes(parent);
+  const isLeafSelected = (parent: string, action: string) =>
+    eventTypes.includes(`${parent}.${action}`);
+
+  const toggleParent = (parent: string, hasLeaves: boolean) => {
+    const others = eventTypes.filter(
+      (t) => t !== parent && !t.startsWith(`${parent}.`),
+    );
+    if (isParentSelected(parent)) {
+      onChange(others);
+      return;
+    }
+    onChange(hasLeaves ? [...others, parent] : [...others, parent]);
+  };
+
+  const toggleLeaf = (parent: string, action: string) => {
+    const full = `${parent}.${action}`;
+    const withoutParent = eventTypes.filter((t) => t !== parent);
+    if (isLeafSelected(parent, action)) {
+      onChange(withoutParent.filter((t) => t !== full));
+    } else {
+      onChange([...withoutParent, full]);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-[11px]">Event types (any selected)</Label>
+      <div className="space-y-1.5">
+        {GITHUB_EVENT_GROUPS.map((group) => {
+          const parentOn = isParentSelected(group.parent);
+          return (
+            <div key={group.parent} className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                onClick={() => toggleParent(group.parent, group.actions.length > 0)}
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${parentOn ? "bg-primary text-primary-foreground border-primary" : "bg-background hover:bg-accent"}`}
+                title={group.actions.length > 0 ? "Match all sub-actions" : undefined}
+              >
+                {group.label}
+                {group.actions.length > 0 ? " (all)" : ""}
+              </button>
+              {group.actions.map((act) => {
+                const on = isLeafSelected(group.parent, act.value);
+                return (
+                  <button
+                    key={act.value}
+                    type="button"
+                    onClick={() => toggleLeaf(group.parent, act.value)}
+                    disabled={parentOn}
+                    className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${on ? "bg-primary text-primary-foreground border-primary" : "bg-background hover:bg-accent"} ${parentOn ? "opacity-40 cursor-not-allowed" : ""}`}
+                  >
+                    {act.label}
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Multi-select popover backed by workspace.repos. Shows "All repos" when
+// nothing is selected; selected repos render as chips on the trigger.
+function RepoPicker({
+  available,
+  selected,
+  onChange,
+}: {
+  available: { url: string; fullName: string; description: string }[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const toggle = (fullName: string) => {
+    if (selected.includes(fullName)) {
+      onChange(selected.filter((r) => r !== fullName));
+    } else {
+      onChange([...selected, fullName]);
+    }
+  };
+
+  if (available.length === 0) {
+    return (
+      <div className="rounded-md border bg-background px-3 py-2 text-[11px] text-muted-foreground">
+        No repositories registered. Add them in Settings &rarr; Repositories.
+      </div>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className="flex flex-wrap items-center gap-1 rounded-md border bg-background px-3 py-2 text-sm min-h-9 w-full text-left hover:bg-accent/50 transition-colors"
+          >
+            {selected.length > 0 ? (
+              selected.map((fullName) => (
+                <span
+                  key={fullName}
+                  className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px]"
+                >
+                  {fullName}
+                </span>
+              ))
+            ) : (
+              <span className="text-muted-foreground">All repos</span>
+            )}
+          </button>
+        }
+      />
+      <PopoverContent align="start" className="w-72 p-0">
+        <div className="p-1 max-h-60 overflow-y-auto">
+          {available.map((repo) => {
+            const on = selected.includes(repo.fullName);
             return (
               <button
-                key={et.value}
+                key={repo.url}
                 type="button"
-                onClick={() => toggleEvent(et.value)}
-                className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${on ? "bg-primary text-primary-foreground" : "bg-background hover:bg-accent"}`}
+                onClick={() => toggle(repo.fullName)}
+                className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent transition-colors"
               >
-                {et.label}
+                <span className="mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border">
+                  {on && <Check className="h-2.5 w-2.5" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{repo.fullName}</span>
+                  {repo.description && (
+                    <span className="block truncate text-[10px] text-muted-foreground">{repo.description}</span>
+                  )}
+                </span>
               </button>
             );
           })}
         </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label className="text-[11px]">Repos (comma-separated owner/repo, leave blank for all)</Label>
-        <Input
-          value={reposText}
-          onChange={(e) => {
-            const list = e.target.value
-              .split(",")
-              .map((s) => s.trim())
-              .filter((s) => s.length > 0);
-            onChange({ repos: list });
-          }}
-          placeholder="owner/repo, owner/repo"
-        />
-      </div>
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -17,13 +17,17 @@ import (
 
 // BotUserResponse describes a bot user — a non-human "member" used as the
 // author for system-driven comments (e.g. webhook triggered comments).
+//
+// WebhookCount is the number of webhooks currently bound to this bot via
+// webhook.bot_user_id; surfaced to the UI so it can warn before deletion.
 type BotUserResponse struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Email     string  `json:"email"`
-	AvatarURL *string `json:"avatar_url"`
-	Kind      string  `json:"kind"`
-	CreatedAt string  `json:"created_at"`
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Email        string  `json:"email"`
+	AvatarURL    *string `json:"avatar_url"`
+	Kind         string  `json:"kind"`
+	WebhookCount int32   `json:"webhook_count"`
+	CreatedAt    string  `json:"created_at"`
 }
 
 func botUserToResponse(u db.User) BotUserResponse {
@@ -40,7 +44,7 @@ func botUserToResponse(u db.User) BotUserResponse {
 func (h *Handler) ListBotUsers(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
 
-	bots, err := h.Queries.ListBotsInWorkspace(r.Context(), parseUUID(workspaceID))
+	bots, err := h.Queries.ListBotsInWorkspaceWithUsage(r.Context(), parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list bot users")
 		return
@@ -48,7 +52,15 @@ func (h *Handler) ListBotUsers(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]BotUserResponse, len(bots))
 	for i, b := range bots {
-		resp[i] = botUserToResponse(b)
+		resp[i] = BotUserResponse{
+			ID:           uuidToString(b.ID),
+			Name:         b.Name,
+			Email:        b.Email,
+			AvatarURL:    textToPtr(b.AvatarUrl),
+			Kind:         b.Kind,
+			WebhookCount: b.WebhookCount,
+			CreatedAt:    timestampToString(b.CreatedAt),
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

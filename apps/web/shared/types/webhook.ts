@@ -132,12 +132,16 @@ export interface AdapterInfo {
 
 // Bot users are non-human members used as the author of webhook-driven
 // comments. They appear in member lists like normal users but cannot log in.
+//
+// webhook_count is how many webhooks currently bind to this bot via
+// bot_user_id; the Members tab uses it to warn before deletion.
 export interface BotUser {
   id: string;
   name: string;
   email: string;
   avatar_url: string | null;
   kind: "bot";
+  webhook_count: number;
   created_at: string;
 }
 

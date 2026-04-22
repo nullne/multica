@@ -305,6 +305,9 @@ type MemberWithUserResponse struct {
 	Name        string  `json:"name"`
 	Email       string  `json:"email"`
 	AvatarURL   *string `json:"avatar_url"`
+	// Kind is "human" or "bot"; the frontend uses it to render bot members in
+	// a separate section of the Members tab.
+	Kind string `json:"kind"`
 }
 
 func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
@@ -327,6 +330,7 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 			Name:        m.UserName,
 			Email:       m.UserEmail,
 			AvatarURL:   textToPtr(m.UserAvatarUrl),
+			Kind:        m.UserKind,
 		}
 	}
 
@@ -348,6 +352,7 @@ func memberWithUserResponse(member db.Member, user db.User) MemberWithUserRespon
 		Name:        user.Name,
 		Email:       user.Email,
 		AvatarURL:   textToPtr(user.AvatarUrl),
+		Kind:        user.Kind,
 	}
 }
 
