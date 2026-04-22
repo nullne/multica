@@ -20,6 +20,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { IssuesHeader } from "./issues-header";
 import { BoardView } from "./board-view";
 import { ListView } from "./list-view";
+import { SplitView } from "./split-view";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 
 export function IssuesPage() {
@@ -50,7 +51,8 @@ export function IssuesPage() {
   }, [viewMode, scope]);
 
   useEffect(() => {
-    if (isMobile && useIssueViewStore.getState().viewMode === "board") {
+    const mode = useIssueViewStore.getState().viewMode;
+    if (isMobile && (mode === "board" || mode === "split")) {
       useIssueViewStore.getState().setViewMode("list");
     }
   }, [isMobile]);
@@ -162,6 +164,8 @@ export function IssuesPage() {
                 hiddenStatuses={hiddenStatuses}
                 onMoveIssue={handleMoveIssue}
               />
+            ) : viewMode === "split" ? (
+              <SplitView issues={issues} visibleStatuses={visibleStatuses} />
             ) : (
               <ListView issues={issues} visibleStatuses={visibleStatuses} />
             )}
