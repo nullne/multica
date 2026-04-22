@@ -19,6 +19,8 @@ import (
 	"time"
 )
 
+const remoteTrackingFetchRefspec = "+refs/heads/*:refs/remotes/origin/*"
+
 // Cache manages bare git clones for workspace repositories.
 type Cache struct {
 	root   string // base directory for all caches (e.g. ~/multica_workspaces/.repos)
@@ -94,7 +96,17 @@ func gitCloneBareWithToken(url, dest, token string) error {
 		os.RemoveAll(dest)
 		return fmt.Errorf("git clone --bare: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", dest, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*")
+	if err := configureRemoteFetchRefspec(dest); err != nil {
+		return err
+	}
+	if err := gitFetchWithToken(dest, token); err != nil {
+		return err
+	}
+	return nil
+}
+
+func configureRemoteFetchRefspec(repoPath string) error {
+	cmd := exec.Command("git", "-C", repoPath, "config", "--replace-all", "remote.origin.fetch", remoteTrackingFetchRefspec)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("configure fetch refspec: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -211,6 +223,9 @@ func (c *Cache) ensureBareCache(workspaceID, url, token string) error {
 	}
 
 	c.logger.Info("repo cache: fetching", "url", url, "path", barePath, "with_token", token != "")
+	if err := configureRemoteFetchRefspec(barePath); err != nil {
+		return err
+	}
 	if err := gitFetchWithToken(barePath, token); err != nil {
 		return fmt.Errorf("fetch latest: %w", err)
 	}
@@ -236,21 +251,39 @@ func runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef string) error {
 	return nil
 }
 
-// getRemoteDefaultBranch returns the default branch ref for a bare repo.
-// Tries HEAD, then falls back to "main", then "master".
+// getRemoteDefaultBranch returns the best base ref for a bare repo.
+// Prefers remote-tracking refs so worktrees are based on the latest fetched
+// origin state instead of possibly stale local branches.
 func getRemoteDefaultBranch(barePath string) string {
-	// In a bare repo, HEAD points to the default branch.
-	cmd := exec.Command("git", "-C", barePath, "symbolic-ref", "HEAD")
+	cmd := exec.Command("git", "-C", barePath, "symbolic-ref", "refs/remotes/origin/HEAD")
 	if out, err := cmd.Output(); err == nil {
 		ref := strings.TrimSpace(string(out))
-		// ref looks like "refs/heads/main" — return just the branch name.
+		if strings.HasPrefix(ref, "refs/remotes/") {
+			return strings.TrimPrefix(ref, "refs/remotes/")
+		}
+		return ref
+	}
+
+	cmd = exec.Command("git", "-C", barePath, "rev-parse", "--verify", "origin/main")
+	if err := cmd.Run(); err == nil {
+		return "origin/main"
+	}
+
+	cmd = exec.Command("git", "-C", barePath, "rev-parse", "--verify", "origin/master")
+	if err := cmd.Run(); err == nil {
+		return "origin/master"
+	}
+
+	// Backward-compatibility fallback for caches that have not been migrated yet.
+	cmd = exec.Command("git", "-C", barePath, "symbolic-ref", "HEAD")
+	if out, err := cmd.Output(); err == nil {
+		ref := strings.TrimSpace(string(out))
 		if strings.HasPrefix(ref, "refs/heads/") {
 			return strings.TrimPrefix(ref, "refs/heads/")
 		}
 		return ref
 	}
 
-	// Fallback: check if main branch exists.
 	cmd = exec.Command("git", "-C", barePath, "rev-parse", "--verify", "main")
 	if err := cmd.Run(); err == nil {
 		return "main"
