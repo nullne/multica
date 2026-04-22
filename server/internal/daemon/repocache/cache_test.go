@@ -70,10 +70,15 @@ func createTestRepo(t *testing.T) string {
 
 func gitHead(t *testing.T, repoPath string) string {
 	t.Helper()
-	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD")
+	return gitRevParse(t, repoPath, "HEAD")
+}
+
+func gitRevParse(t *testing.T, repoPath, ref string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", ref)
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("git rev-parse HEAD failed in %s: %v", repoPath, err)
+		t.Fatalf("git rev-parse %s failed in %s: %v", ref, repoPath, err)
 	}
 	return strings.TrimSpace(string(out))
 }
@@ -183,19 +188,73 @@ func TestCreateWorktreeFetchesLatest(t *testing.T) {
 	}
 
 	// Second CreateWorktree should fetch the new commit.
-	if _, err := cache.CreateWorktree(WorktreeParams{
+	result, err := cache.CreateWorktree(WorktreeParams{
 		WorkspaceID: "ws-1",
 		RepoURL:     sourceRepo,
 		WorkDir:     t.TempDir(),
 		AgentName:   "agent",
 		TaskID:      "task-2",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("second CreateWorktree failed: %v", err)
 	}
 
-	newHead := gitHead(t, barePath)
-	if newHead != sourceHead {
-		t.Fatalf("expected cache HEAD %s to match source HEAD %s after fetch", newHead, sourceHead)
+	if got := gitHead(t, result.Path); got != sourceHead {
+		t.Fatalf("expected worktree HEAD %s to match source HEAD %s after fetch", got, sourceHead)
+	}
+	if got := gitRevParse(t, barePath, "refs/remotes/origin/main"); got != sourceHead {
+		t.Fatalf("expected refs/remotes/origin/main %s to match source HEAD %s after fetch", got, sourceHead)
+	}
+}
+
+func TestCreateWorktreeFetchesLatestWhenDefaultBranchCheckedOut(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+
+	if _, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     t.TempDir(),
+		AgentName:   "agent",
+		TaskID:      "task-1",
+	}); err != nil {
+		t.Fatalf("first CreateWorktree failed: %v", err)
+	}
+
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	pinnedPath := filepath.Join(t.TempDir(), "main-worktree")
+	cmd := exec.Command("git", "-C", barePath, "worktree", "add", pinnedPath, "main")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("add main worktree failed: %s: %v", out, err)
+	}
+
+	cmd = exec.Command("git", "-C", sourceRepo, "commit", "--allow-empty", "-m", "second")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("add commit failed: %s: %v", out, err)
+	}
+	sourceHead := gitHead(t, sourceRepo)
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     t.TempDir(),
+		AgentName:   "agent",
+		TaskID:      "task-2",
+	})
+	if err != nil {
+		t.Fatalf("second CreateWorktree failed with default branch checked out: %v", err)
+	}
+
+	if got := gitHead(t, result.Path); got != sourceHead {
+		t.Fatalf("expected worktree HEAD %s to match source HEAD %s after fetch", got, sourceHead)
+	}
+	if got := gitRevParse(t, barePath, "refs/remotes/origin/main"); got != sourceHead {
+		t.Fatalf("expected refs/remotes/origin/main %s to match source HEAD %s after fetch", got, sourceHead)
 	}
 }
 

@@ -78,6 +78,8 @@ func isBareRepo(path string) bool {
 	return err == nil
 }
 
+const remoteOriginFetchRefspec = "+refs/heads/*:refs/remotes/origin/*"
+
 func gitCloneBareWithToken(url, dest, token string) error {
 	args := []string{"clone", "--bare"}
 	if token != "" {
@@ -94,9 +96,11 @@ func gitCloneBareWithToken(url, dest, token string) error {
 		os.RemoveAll(dest)
 		return fmt.Errorf("git clone --bare: %s: %w", strings.TrimSpace(string(out)), err)
 	}
-	cmd = exec.Command("git", "-C", dest, "config", "remote.origin.fetch", "+refs/heads/*:refs/heads/*")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("configure fetch refspec: %s: %w", strings.TrimSpace(string(out)), err)
+	if err := configureRemoteFetchRefspec(dest); err != nil {
+		return err
+	}
+	if err := gitFetchWithToken(dest, token); err != nil {
+		return err
 	}
 	return nil
 }
@@ -115,6 +119,14 @@ func gitFetchWithToken(barePath, token string) error {
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func configureRemoteFetchRefspec(barePath string) error {
+	cmd := exec.Command("git", "-C", barePath, "config", "remote.origin.fetch", remoteOriginFetchRefspec)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("configure fetch refspec: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
@@ -210,6 +222,10 @@ func (c *Cache) ensureBareCache(workspaceID, url, token string) error {
 		return nil
 	}
 
+	if err := configureRemoteFetchRefspec(barePath); err != nil {
+		return fmt.Errorf("configure fetch refspec: %w", err)
+	}
+
 	c.logger.Info("repo cache: fetching", "url", url, "path", barePath, "with_token", token != "")
 	if err := gitFetchWithToken(barePath, token); err != nil {
 		return fmt.Errorf("fetch latest: %w", err)
@@ -236,32 +252,44 @@ func runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef string) error {
 	return nil
 }
 
-// getRemoteDefaultBranch returns the default branch ref for a bare repo.
-// Tries HEAD, then falls back to "main", then "master".
+// getRemoteDefaultBranch returns the best ref to use for a new worktree.
+// It prefers remote-tracking refs so fetches never need to update checked-out
+// local branches in the shared bare cache.
 func getRemoteDefaultBranch(barePath string) string {
 	// In a bare repo, HEAD points to the default branch.
 	cmd := exec.Command("git", "-C", barePath, "symbolic-ref", "HEAD")
 	if out, err := cmd.Output(); err == nil {
 		ref := strings.TrimSpace(string(out))
-		// ref looks like "refs/heads/main" — return just the branch name.
 		if strings.HasPrefix(ref, "refs/heads/") {
-			return strings.TrimPrefix(ref, "refs/heads/")
+			branch := strings.TrimPrefix(ref, "refs/heads/")
+			remoteRef := "refs/remotes/origin/" + branch
+			if gitRefExists(barePath, remoteRef) {
+				return remoteRef
+			}
+			if gitRefExists(barePath, branch) {
+				return branch
+			}
 		}
-		return ref
+		if gitRefExists(barePath, ref) {
+			return ref
+		}
 	}
 
-	// Fallback: check if main branch exists.
-	cmd = exec.Command("git", "-C", barePath, "rev-parse", "--verify", "main")
-	if err := cmd.Run(); err == nil {
-		return "main"
-	}
-
-	cmd = exec.Command("git", "-C", barePath, "rev-parse", "--verify", "master")
-	if err := cmd.Run(); err == nil {
-		return "master"
+	for _, name := range []string{"main", "master"} {
+		remoteRef := "refs/remotes/origin/" + name
+		if gitRefExists(barePath, remoteRef) {
+			return remoteRef
+		}
+		if gitRefExists(barePath, name) {
+			return name
+		}
 	}
 
 	return "HEAD"
+}
+
+func gitRefExists(repoPath, ref string) bool {
+	return exec.Command("git", "-C", repoPath, "rev-parse", "--verify", ref).Run() == nil
 }
 
 // excludeFromGit adds a pattern to the worktree's .git/info/exclude file.
