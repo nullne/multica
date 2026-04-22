@@ -486,7 +486,8 @@ func (q *Queries) GetAgentTask(ctx context.Context, id pgtype.UUID) (AgentTaskQu
 
 const getLastTaskSession = `-- name: GetLastTaskSession :one
 SELECT session_id, work_dir FROM agent_task_queue
-WHERE agent_id = $1 AND issue_id = $2 AND status = 'completed' AND session_id IS NOT NULL
+WHERE agent_id = $1 AND issue_id = $2 AND status = 'completed'
+  AND (session_id IS NOT NULL OR work_dir IS NOT NULL)
 ORDER BY completed_at DESC
 LIMIT 1
 `

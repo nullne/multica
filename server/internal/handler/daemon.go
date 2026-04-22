@@ -399,8 +399,10 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	if prior, err := h.Queries.GetLastTaskSession(r.Context(), db.GetLastTaskSessionParams{
 		AgentID: task.AgentID,
 		IssueID: task.IssueID,
-	}); err == nil && prior.SessionID.Valid {
-		resp.PriorSessionID = prior.SessionID.String
+	}); err == nil {
+		if prior.SessionID.Valid {
+			resp.PriorSessionID = prior.SessionID.String
+		}
 		if prior.WorkDir.Valid {
 			resp.PriorWorkDir = prior.WorkDir.String
 		}

@@ -770,6 +770,92 @@ func TestResolveActor(t *testing.T) {
 	}
 }
 
+func TestClaimTaskByRuntimeIncludesPriorWorkDirWithoutSession(t *testing.T) {
+	ctx := context.Background()
+
+	var agentID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentID); err != nil {
+		t.Fatalf("failed to find test agent: %v", err)
+	}
+
+	var runtimeID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent_runtime WHERE workspace_id = $1 LIMIT 1`,
+		testWorkspaceID,
+	).Scan(&runtimeID); err != nil {
+		t.Fatalf("failed to get runtime_id: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
+		 VALUES ($1, 'claim task prior workdir test', 'todo', 'none', 'member', $2, 10001, 0)
+		 RETURNING id`,
+		testWorkspaceID, testUserID,
+	).Scan(&issueID); err != nil {
+		t.Fatalf("failed to create test issue: %v", err)
+	}
+
+	priorWorkDir := "/tmp/multica-prior-workdir"
+
+	var completedTaskID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, completed_at, work_dir)
+		 VALUES ($1, $2, $3, 'completed', 0, now(), $4)
+		 RETURNING id`,
+		agentID, runtimeID, issueID, priorWorkDir,
+	).Scan(&completedTaskID); err != nil {
+		t.Fatalf("failed to create completed task: %v", err)
+	}
+
+	var queuedTaskID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
+		 VALUES ($1, $2, $3, 'queued', 0)
+		 RETURNING id`,
+		agentID, runtimeID, issueID,
+	).Scan(&queuedTaskID); err != nil {
+		t.Fatalf("failed to create queued task: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, queuedTaskID)
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, completedTaskID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	req := newRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil)
+	req = withURLParam(req, "runtimeId", runtimeID)
+
+	w := httptest.NewRecorder()
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *AgentTaskResponse `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected claimed task in response")
+	}
+	if resp.Task.ID != queuedTaskID {
+		t.Fatalf("expected queued task %s to be claimed, got %s", queuedTaskID, resp.Task.ID)
+	}
+	if resp.Task.PriorWorkDir != priorWorkDir {
+		t.Fatalf("expected prior_work_dir %q, got %q", priorWorkDir, resp.Task.PriorWorkDir)
+	}
+	if resp.Task.PriorSessionID != "" {
+		t.Fatalf("expected empty prior_session_id, got %q", resp.Task.PriorSessionID)
+	}
+}
+
 func TestDaemonRegisterMissingWorkspaceReturns404(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/daemon/register", bytes.NewBufferString(`{
