@@ -20,6 +20,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { IssuesHeader } from "./issues-header";
 import { BoardView } from "./board-view";
 import { ListView } from "./list-view";
+import { SplitView } from "./split-view";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 
 export function IssuesPage() {
@@ -162,6 +163,8 @@ export function IssuesPage() {
                 hiddenStatuses={hiddenStatuses}
                 onMoveIssue={handleMoveIssue}
               />
+            ) : viewMode === "split" ? (
+              <SplitView issues={issues} />
             ) : (
               <ListView issues={issues} visibleStatuses={visibleStatuses} />
             )}

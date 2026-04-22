@@ -8,6 +8,7 @@ import {
   ChevronDown,
   CircleDot,
   Columns3,
+  Columns2,
   Filter,
   List,
   SignalHigh,
@@ -619,6 +620,8 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
                       <Button variant="outline" size="icon-sm" className="text-muted-foreground">
                         {viewMode === "board" ? (
                           <Columns3 className="size-4" />
+                        ) : viewMode === "split" ? (
+                          <Columns2 className="size-4" />
                         ) : (
                           <List className="size-4" />
                         )}
@@ -628,7 +631,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
                 }
               />
               <TooltipContent side="bottom">
-                {viewMode === "board" ? "Board view" : "List view"}
+                {viewMode === "board" ? "Board view" : viewMode === "split" ? "Split view" : "List view"}
               </TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="w-auto">
@@ -641,6 +644,10 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
                 <DropdownMenuItem onClick={() => act.setViewMode("list")}>
                   <List />
                   List
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => act.setViewMode("split")}>
+                  <Columns2 />
+                  Split
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
