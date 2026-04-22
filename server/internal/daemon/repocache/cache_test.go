@@ -78,6 +78,24 @@ func gitHead(t *testing.T, repoPath string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func gitEnv() []string {
+	return append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+}
+
+func gitRun(t *testing.T, repoPath string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repoPath}, args...)...)
+	cmd.Env = gitEnv()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed in %s: %s: %v", strings.Join(args, " "), repoPath, out, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // TestCreateWorktree exercises the happy path: bare cache does not exist, so
 // CreateWorktree lazily clones, then materializes a worktree on the agent
 // branch.
@@ -182,20 +200,67 @@ func TestCreateWorktreeFetchesLatest(t *testing.T) {
 		t.Fatal("source HEAD should differ after new commit")
 	}
 
-	// Second CreateWorktree should fetch the new commit.
-	if _, err := cache.CreateWorktree(WorktreeParams{
+	// Second CreateWorktree should fetch the new commit and base the new
+	// worktree on the refreshed remote-tracking branch.
+	result, err := cache.CreateWorktree(WorktreeParams{
 		WorkspaceID: "ws-1",
 		RepoURL:     sourceRepo,
 		WorkDir:     t.TempDir(),
 		AgentName:   "agent",
 		TaskID:      "task-2",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("second CreateWorktree failed: %v", err)
 	}
 
-	newHead := gitHead(t, barePath)
+	newHead := gitHead(t, result.Path)
 	if newHead != sourceHead {
-		t.Fatalf("expected cache HEAD %s to match source HEAD %s after fetch", newHead, sourceHead)
+		t.Fatalf("expected worktree HEAD %s to match source HEAD %s after fetch", newHead, sourceHead)
+	}
+}
+
+// TestCreateWorktreeFetchesWithCheckedOutAgentBranches reproduces the stale
+// checkout bug: older caches fetched remote heads directly into local branches,
+// which breaks once a matching branch is already checked out in another
+// worktree. The cache must fetch into remote-tracking refs instead.
+func TestCreateWorktreeFetchesWithCheckedOutAgentBranches(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+
+	first, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     t.TempDir(),
+		AgentName:   "agent",
+		TaskID:      "task-1",
+	})
+	if err != nil {
+		t.Fatalf("first CreateWorktree failed: %v", err)
+	}
+
+	// Simulate the remote also having the previously checked out agent branch.
+	gitRun(t, sourceRepo, "checkout", "-b", first.BranchName)
+	gitRun(t, sourceRepo, "commit", "--allow-empty", "-m", "agent branch moved on remote")
+	gitRun(t, sourceRepo, "checkout", "-")
+
+	// Advance the default branch too, so the next checkout must pick up new code.
+	gitRun(t, sourceRepo, "commit", "--allow-empty", "-m", "main moved on remote")
+	sourceHead := gitHead(t, sourceRepo)
+
+	second, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     t.TempDir(),
+		AgentName:   "agent",
+		TaskID:      "task-2",
+	})
+	if err != nil {
+		t.Fatalf("second CreateWorktree failed: %v", err)
+	}
+
+	if got := gitHead(t, second.Path); got != sourceHead {
+		t.Fatalf("expected second worktree HEAD %s to match source HEAD %s", got, sourceHead)
 	}
 }
 
