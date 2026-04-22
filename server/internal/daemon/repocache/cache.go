@@ -149,6 +149,9 @@ type WorktreeResult struct {
 // fall back to stale cache state, because the resulting worktree (and any PR
 // derived from it) would silently be based on outdated code.
 func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
+	if err := validateWorktreeParams(params); err != nil {
+		return nil, err
+	}
 	if err := c.ensureBareCache(params.WorkspaceID, params.RepoURL, params.Token); err != nil {
 		return nil, err
 	}
@@ -185,6 +188,25 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		Path:       worktreePath,
 		BranchName: branchName,
 	}, nil
+}
+
+func validateWorktreeParams(params WorktreeParams) error {
+	if strings.TrimSpace(params.WorkspaceID) == "" {
+		return fmt.Errorf("workspace ID is required")
+	}
+	if strings.TrimSpace(params.RepoURL) == "" {
+		return fmt.Errorf("repo URL is required")
+	}
+	if strings.TrimSpace(params.WorkDir) == "" {
+		return fmt.Errorf("workdir is required")
+	}
+	if strings.TrimSpace(params.AgentName) == "" {
+		return fmt.Errorf("agent name is required")
+	}
+	if strings.TrimSpace(params.TaskID) == "" {
+		return fmt.Errorf("task ID is required")
+	}
+	return nil
 }
 
 // ensureBareCache makes sure a bare clone for (workspaceID, url) exists and is

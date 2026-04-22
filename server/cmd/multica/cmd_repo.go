@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -40,6 +41,9 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	workspaceID := os.Getenv("MULTICA_WORKSPACE_ID")
 	agentName := os.Getenv("MULTICA_AGENT_NAME")
 	taskID := os.Getenv("MULTICA_TASK_ID")
+	if err := validateRepoCheckoutContext(workspaceID, agentName, taskID); err != nil {
+		return err
+	}
 
 	// Use current working directory as the checkout target.
 	workDir, err := os.Getwd()
@@ -89,4 +93,24 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Checked out %s → %s (branch: %s)\n", repoURL, result.Path, result.BranchName)
 
 	return nil
+}
+
+func validateRepoCheckoutContext(workspaceID, agentName, taskID string) error {
+	missing := make([]string, 0, 3)
+	if workspaceID == "" {
+		missing = append(missing, "MULTICA_WORKSPACE_ID")
+	}
+	if agentName == "" {
+		missing = append(missing, "MULTICA_AGENT_NAME")
+	}
+	if taskID == "" {
+		missing = append(missing, "MULTICA_TASK_ID")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s not set (this command must run inside a daemon task; setting only MULTICA_DAEMON_PORT is not enough)",
+		strings.Join(missing, ", "),
+	)
 }

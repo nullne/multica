@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/nullne/multica/server/internal/daemon/repocache"
@@ -103,6 +104,10 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			http.Error(w, "workdir is required", http.StatusBadRequest)
 			return
 		}
+		if err := validateRepoCheckoutRequest(req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
 		if d.repoCache == nil {
 			http.Error(w, "repo cache not initialized", http.StatusInternalServerError)
@@ -139,4 +144,28 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		d.logger.Warn("health server error", "error", err)
 	}
+}
+
+func validateRepoCheckoutRequest(req repoCheckoutRequest) error {
+	missing := make([]string, 0, 3)
+	if req.WorkspaceID == "" {
+		missing = append(missing, "workspace_id")
+	}
+	if req.AgentName == "" {
+		missing = append(missing, "agent_name")
+	}
+	if req.TaskID == "" {
+		missing = append(missing, "task_id")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s %s required", strings.Join(missing, ", "), pluralVerb(len(missing)))
+}
+
+func pluralVerb(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }

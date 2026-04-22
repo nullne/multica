@@ -246,6 +246,25 @@ func TestCreateWorktreeFetchFailureHardErrors(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeRejectsMissingTaskContext(t *testing.T) {
+	t.Parallel()
+
+	cache := New(t.TempDir(), testLogger())
+	_, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     createTestRepo(t),
+		WorkDir:     t.TempDir(),
+		AgentName:   "",
+		TaskID:      "",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing task context")
+	}
+	if got, want := err.Error(), "agent name is required"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
 // TestCreateWorktreeLazyCloneFailure verifies that a non-existent source URL
 // fails the lazy clone with a clear error (and does not leave a half-baked
 // cache directory).
