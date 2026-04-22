@@ -6,7 +6,7 @@ import { persist } from "zustand/middleware";
 import type { IssueStatus, IssuePriority } from "@/shared/types";
 import { ALL_STATUSES } from "@/features/issues/config";
 
-export type ViewMode = "board" | "list";
+export type ViewMode = "board" | "list" | "split";
 export type SortField = "position" | "priority" | "due_date" | "created_at" | "title";
 export type SortDirection = "asc" | "desc";
 
