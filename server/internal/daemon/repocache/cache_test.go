@@ -199,6 +199,59 @@ func TestCreateWorktreeFetchesLatest(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeTracksRemoteDefaultBranchChanges(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+
+	if _, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     t.TempDir(),
+		AgentName:   "agent",
+		TaskID:      "task-1",
+	}); err != nil {
+		t.Fatalf("first CreateWorktree failed: %v", err)
+	}
+
+	cmd := exec.Command("git", "-C", sourceRepo, "checkout", "-b", "develop")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create develop branch failed: %s: %v", out, err)
+	}
+
+	cmd = exec.Command("git", "-C", sourceRepo, "commit", "--allow-empty", "-m", "develop")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("add develop commit failed: %s: %v", out, err)
+	}
+
+	cmd = exec.Command("git", "-C", sourceRepo, "symbolic-ref", "HEAD", "refs/heads/develop")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("switch default branch failed: %s: %v", out, err)
+	}
+
+	workDir := t.TempDir()
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     workDir,
+		AgentName:   "agent",
+		TaskID:      "task-2",
+	})
+	if err != nil {
+		t.Fatalf("second CreateWorktree failed: %v", err)
+	}
+
+	sourceHead := gitHead(t, sourceRepo)
+	worktreeHead := gitHead(t, result.Path)
+	if worktreeHead != sourceHead {
+		t.Fatalf("expected worktree HEAD %s to match new default branch HEAD %s", worktreeHead, sourceHead)
+	}
+}
+
 // TestCreateWorktreeFetchFailureHardErrors is the key regression guard for
 // this fix: when fetch fails (origin gone, network error, bad token, ...),
 // CreateWorktree must NOT silently fall back to the stale cached state and

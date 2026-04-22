@@ -155,7 +155,7 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 	barePath := c.barePathFor(params.WorkspaceID, params.RepoURL)
 
 	// Determine the default branch to base the worktree on.
-	baseRef := getRemoteDefaultBranch(barePath)
+	baseRef := getRemoteDefaultBranch(barePath, params.Token)
 
 	// Build branch name: agent/{sanitized-name}/{short-task-id}
 	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), shortID(params.TaskID))
@@ -237,8 +237,14 @@ func runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef string) error {
 }
 
 // getRemoteDefaultBranch returns the default branch ref for a bare repo.
-// Tries HEAD, then falls back to "main", then "master".
-func getRemoteDefaultBranch(barePath string) string {
+// It prefers the current remote HEAD, then falls back to the cached local
+// HEAD, then "main", then "master".
+func getRemoteDefaultBranch(barePath, token string) string {
+	if branch, err := getOriginHEADBranch(barePath, token); err == nil && branch != "" {
+		_ = setBareHEADBranch(barePath, branch)
+		return branch
+	}
+
 	// In a bare repo, HEAD points to the default branch.
 	cmd := exec.Command("git", "-C", barePath, "symbolic-ref", "HEAD")
 	if out, err := cmd.Output(); err == nil {
@@ -262,6 +268,45 @@ func getRemoteDefaultBranch(barePath string) string {
 	}
 
 	return "HEAD"
+}
+
+func getOriginHEADBranch(barePath, token string) (string, error) {
+	args := []string{"-C", barePath}
+	if token != "" {
+		args = append(args,
+			"-c", fmt.Sprintf("http.extraHeader=Authorization: Basic %s", basicAuth(token)),
+		)
+	}
+	args = append(args, "ls-remote", "--symref", "origin", "HEAD")
+
+	cmd := exec.Command("git", args...)
+	if token != "" {
+		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	}
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ref: refs/heads/") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[1] != "HEAD" {
+			continue
+		}
+		return strings.TrimPrefix(fields[0], "ref: refs/heads/"), nil
+	}
+
+	return "", fmt.Errorf("origin HEAD symref not found")
+}
+
+func setBareHEADBranch(barePath, branch string) error {
+	cmd := exec.Command("git", "-C", barePath, "symbolic-ref", "HEAD", "refs/heads/"+branch)
+	return cmd.Run()
 }
 
 // excludeFromGit adds a pattern to the worktree's .git/info/exclude file.
