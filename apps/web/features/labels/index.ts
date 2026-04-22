@@ -1,0 +1,1 @@
+export { useLabelStore } from "./store";

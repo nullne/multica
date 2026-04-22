@@ -115,12 +115,14 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			WorkDir:     req.WorkDir,
 			AgentName:   req.AgentName,
 			TaskID:      req.TaskID,
+			Token:       d.lookupTaskToken(req.TaskID),
 		})
 		if err != nil {
 			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		d.rememberTaskBranch(req.TaskID, result.BranchName)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)

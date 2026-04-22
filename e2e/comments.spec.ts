@@ -8,7 +8,7 @@ test.describe("Comments", () => {
   test.beforeEach(async ({ page }) => {
     api = await createTestApi();
     await api.createIssue("E2E Comment Test " + Date.now());
-    await loginAsDefault(page);
+    await loginAsDefault(page, api);
   });
 
   test.afterEach(async () => {

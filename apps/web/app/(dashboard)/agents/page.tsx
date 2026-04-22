@@ -4,8 +4,6 @@ import { useState, useEffect, useRef } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
 import {
   Bot,
-  Cloud,
-  Monitor,
   Plus,
   ListTodo,
   Wrench,
@@ -30,6 +28,8 @@ import {
   Lock,
   Settings,
   Camera,
+  Monitor,
+  X,
 } from "lucide-react";
 import type {
   Agent,
@@ -39,7 +39,6 @@ import type {
   AgentTrigger,
   AgentTriggerType,
   AgentTask,
-  RuntimeDevice,
   CreateAgentRequest,
   UpdateAgentRequest,
 } from "@/shared/types";
@@ -76,10 +75,11 @@ import { api } from "@/shared/api";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
-import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueStore } from "@/features/issues";
+import { useRuntimeStore } from "@/features/runtimes";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
+import { cn } from "@/lib/utils";
 
 
 // ---------------------------------------------------------------------------
@@ -108,46 +108,39 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function getRuntimeDevice(agent: Agent, runtimes: RuntimeDevice[]): RuntimeDevice | undefined {
-  return runtimes.find((runtime) => runtime.id === agent.runtime_id);
-}
 
 // ---------------------------------------------------------------------------
 // Create Agent Dialog
 // ---------------------------------------------------------------------------
 
+const SUPPORTED_PROVIDERS = [
+  { key: "claude", label: "Claude Code" },
+  { key: "codex", label: "Codex" },
+  { key: "opencode", label: "OpenCode" },
+  { key: "cursor", label: "Cursor" },
+] as const;
+
 function CreateAgentDialog({
-  runtimes,
   onClose,
   onCreate,
 }: {
-  runtimes: RuntimeDevice[];
   onClose: () => void;
   onCreate: (data: CreateAgentRequest) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [selectedRuntimeId, setSelectedRuntimeId] = useState(runtimes[0]?.id ?? "");
+  const [selectedProviders, setSelectedProviders] = useState<string[]>([SUPPORTED_PROVIDERS[0].key]);
   const [visibility, setVisibility] = useState<AgentVisibility>("private");
   const [creating, setCreating] = useState(false);
-  const [runtimeOpen, setRuntimeOpen] = useState(false);
-
-  useEffect(() => {
-    if (!selectedRuntimeId && runtimes[0]) {
-      setSelectedRuntimeId(runtimes[0].id);
-    }
-  }, [runtimes, selectedRuntimeId]);
-
-  const selectedRuntime = runtimes.find((d) => d.id === selectedRuntimeId) ?? null;
 
   const handleSubmit = async () => {
-    if (!name.trim() || !selectedRuntime) return;
+    if (!name.trim() || selectedProviders.length === 0) return;
     setCreating(true);
     try {
       await onCreate({
         name: name.trim(),
         description: description.trim(),
-        runtime_id: selectedRuntime.id,
+        providers: selectedProviders,
         visibility,
         triggers: [
           { id: generateId(), type: "on_assign", enabled: true, config: {} },
@@ -197,6 +190,38 @@ function CreateAgentDialog({
           </div>
 
           <div>
+            <Label className="text-xs text-muted-foreground">Provider</Label>
+            <div className="mt-1.5 flex gap-2 flex-wrap">
+              {SUPPORTED_PROVIDERS.map((p) => {
+                const selected = selectedProviders.includes(p.key);
+                return (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() =>
+                      setSelectedProviders((prev) =>
+                        selected
+                          ? prev.filter((k) => k !== p.key)
+                          : [...prev, p.key],
+                      )
+                    }
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      selected
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    <span className="font-medium">{p.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Select one or more providers. Tasks will be dispatched to any online environment.
+            </p>
+          </div>
+
+          <div>
             <Label className="text-xs text-muted-foreground">Visibility</Label>
             <div className="mt-1.5 flex gap-2">
               <button
@@ -231,74 +256,6 @@ function CreateAgentDialog({
               </button>
             </div>
           </div>
-
-          <div>
-            <Label className="text-xs text-muted-foreground">Runtime</Label>
-            <Popover open={runtimeOpen} onOpenChange={setRuntimeOpen}>
-              <PopoverTrigger
-                disabled={runtimes.length === 0}
-                className="flex w-full items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 mt-1.5 text-left text-sm transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
-              >
-                {selectedRuntime?.runtime_mode === "cloud" ? (
-                  <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-medium">
-                      {selectedRuntime?.name ?? "No runtime available"}
-                    </span>
-                    {selectedRuntime?.runtime_mode === "cloud" && (
-                      <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
-                        Cloud
-                      </span>
-                    )}
-                  </div>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {selectedRuntime?.device_info ?? "Register a runtime before creating an agent"}
-                  </div>
-                </div>
-                <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${runtimeOpen ? "rotate-180" : ""}`} />
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-[var(--anchor-width)] p-1 max-h-60 overflow-y-auto">
-                {runtimes.map((device) => (
-                  <button
-                    key={device.id}
-                    onClick={() => {
-                      setSelectedRuntimeId(device.id);
-                      setRuntimeOpen(false);
-                    }}
-                    className={`flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors ${
-                      device.id === selectedRuntimeId ? "bg-accent" : "hover:bg-accent/50"
-                    }`}
-                  >
-                    {device.runtime_mode === "cloud" ? (
-                      <Cloud className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate font-medium">{device.name}</span>
-                        {device.runtime_mode === "cloud" && (
-                          <span className="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-xs font-medium text-info">
-                            Cloud
-                          </span>
-                        )}
-                      </div>
-                      <div className="truncate text-xs text-muted-foreground">{device.device_info}</div>
-                    </div>
-                    <span
-                      className={`h-2 w-2 shrink-0 rounded-full ${
-                        device.status === "online" ? "bg-success" : "bg-muted-foreground/40"
-                      }`}
-                    />
-                  </button>
-                ))}
-              </PopoverContent>
-            </Popover>
-          </div>
         </div>
 
         <DialogFooter>
@@ -307,7 +264,7 @@ function CreateAgentDialog({
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={creating || !name.trim() || !selectedRuntime}
+            disabled={creating || !name.trim() || selectedProviders.length === 0}
           >
             {creating ? "Creating..." : "Create"}
           </Button>
@@ -345,11 +302,6 @@ function AgentListItem({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className={`truncate text-sm font-medium ${isArchived ? "text-muted-foreground" : ""}`}>{agent.name}</span>
-          {agent.runtime_mode === "cloud" ? (
-            <Cloud className="h-3 w-3 text-muted-foreground" />
-          ) : (
-            <Monitor className="h-3 w-3 text-muted-foreground" />
-          )}
         </div>
         <div className="flex items-center gap-1.5 mt-0.5">
           {isArchived ? (
@@ -358,6 +310,12 @@ function AgentListItem({
             <>
               <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
               <span className={`text-xs ${st.color}`}>{st.label}</span>
+              {agent.providers?.length > 0 && (
+                <>
+                  <span className="text-xs text-muted-foreground/40">&middot;</span>
+                  <span className="text-xs text-muted-foreground">{agent.providers.join(", ")}</span>
+                </>
+              )}
             </>
           )}
         </div>
@@ -365,6 +323,7 @@ function AgentListItem({
     </button>
   );
 }
+
 
 // ---------------------------------------------------------------------------
 // Instructions Tab
@@ -948,7 +907,7 @@ function TriggersTab({
                     ? "Runs when an issue is assigned to this agent"
                     : trigger.type === "on_comment"
                       ? "Runs when a member comments on the agent's issue"
-                      : `Cron: ${(trigger.config as { cron?: string }).cron ?? "Not set"}`}
+                      : `Cron: ${(trigger.config as { cron?: string } | null)?.cron ?? "Not set"}`}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -1183,21 +1142,24 @@ function TasksTab({ agent }: { agent: Agent }) {
 
 function SettingsTab({
   agent,
-  runtimes,
   onSave,
 }: {
   agent: Agent;
-  runtimes: RuntimeDevice[];
   onSave: (updates: Partial<Agent>) => Promise<void>;
 }) {
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
-  const [maxTasks, setMaxTasks] = useState(agent.max_concurrent_tasks);
-  const [codeAccess, setCodeAccess] = useState(agent.github_code_access ?? "write");
+  const [codeAccess, setCodeAccess] = useState(agent.github_code_access ?? "read");
+  const [providers, setProviders] = useState<string[]>(agent.providers ?? []);
+  const [defaultDaemonId, setDefaultDaemonId] = useState<string | null>(agent.default_daemon_id ?? null);
   const [saving, setSaving] = useState(false);
   const { upload, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
+  useEffect(() => { fetchAllRuntimes(); }, [fetchAllRuntimes]);
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1217,8 +1179,9 @@ function SettingsTab({
     name !== agent.name ||
     description !== (agent.description ?? "") ||
     visibility !== agent.visibility ||
-    maxTasks !== agent.max_concurrent_tasks ||
-    codeAccess !== (agent.github_code_access ?? "write");
+    codeAccess !== (agent.github_code_access ?? "read") ||
+    JSON.stringify(providers) !== JSON.stringify(agent.providers ?? []) ||
+    defaultDaemonId !== (agent.default_daemon_id ?? null);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -1227,7 +1190,7 @@ function SettingsTab({
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, max_concurrent_tasks: maxTasks, github_code_access: codeAccess as Agent["github_code_access"] });
+      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_daemon_id: defaultDaemonId });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1235,8 +1198,6 @@ function SettingsTab({
       setSaving(false);
     }
   };
-
-  const runtimeDevice = runtimes.find((r) => r.id === agent.runtime_id);
 
   return (
     <div className="max-w-lg space-y-6">
@@ -1326,17 +1287,6 @@ function SettingsTab({
         </div>
       </div>
 
-      <div>
-        <Label className="text-xs text-muted-foreground">Max Concurrent Tasks</Label>
-        <Input
-          type="number"
-          min={1}
-          max={50}
-          value={maxTasks}
-          onChange={(e) => setMaxTasks(Number(e.target.value))}
-          className="mt-1 w-24"
-        />
-      </div>
 
       <div>
         <Label className="text-xs text-muted-foreground">GitHub Code Access</Label>
@@ -1346,8 +1296,8 @@ function SettingsTab({
         <div className="mt-1.5 flex gap-2">
           {([
             { value: "read", label: "Read", desc: "Read-only code access" },
-            { value: "write", label: "Write", desc: "Push code, create PRs" },
-            { value: "admin", label: "Admin", desc: "Push, create & merge PRs" },
+            { value: "write", label: "Write", desc: "Push branches (PRs opened by reviewer)" },
+            { value: "admin", label: "Admin", desc: "Push, open & merge PRs" },
           ] as const).map((opt) => (
             <button
               key={opt.value}
@@ -1369,14 +1319,90 @@ function SettingsTab({
       </div>
 
       <div>
-        <Label className="text-xs text-muted-foreground">Runtime</Label>
-        <div className="mt-1 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm text-muted-foreground">
-          {agent.runtime_mode === "cloud" ? (
-            <Cloud className="h-4 w-4" />
+        <Label className="text-xs text-muted-foreground">Providers</Label>
+        <div className="mt-1.5 flex gap-2 flex-wrap">
+          {SUPPORTED_PROVIDERS.map((p) => {
+            const selected = providers.includes(p.key);
+            return (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => {
+                  const next = selected
+                    ? providers.filter((k) => k !== p.key)
+                    : [...providers, p.key];
+                  if (next.length === 0) return;
+                  setProviders(next);
+                }}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                  selected
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:bg-muted"
+                }`}
+              >
+                <span className="font-medium">{p.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Select one or more. Tasks will be dispatched to any online environment with a matching provider.
+        </p>
+      </div>
+
+      <div>
+        <Label className="text-xs text-muted-foreground">Default Environment</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+          Bind this agent to a specific daemon. When assigned to issues, this environment will be used automatically.
+        </p>
+        <div className="mt-1.5">
+          {defaultDaemonId ? (
+            <div className="flex items-center gap-2 rounded-lg border border-primary bg-primary/5 px-3 py-2 text-sm">
+              <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="font-medium">
+                {daemons.find((d) => d.id === defaultDaemonId)?.device_name ?? "Unknown daemon"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDefaultDaemonId(null)}
+                className="ml-auto rounded-sm p-0.5 hover:bg-accent transition-colors"
+              >
+                <X className="h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            </div>
           ) : (
-            <Monitor className="h-4 w-4" />
+            <Popover>
+              <PopoverTrigger
+                render={
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-muted transition-colors"
+                  >
+                    <Monitor className="h-4 w-4" />
+                    <span>Select environment...</span>
+                  </button>
+                }
+              />
+              <PopoverContent align="start" className="w-52 p-1">
+                {daemons.length === 0 && (
+                  <div className="px-2 py-3 text-center text-sm text-muted-foreground">No daemons registered</div>
+                )}
+                {daemons.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => setDefaultDaemonId(d.id)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                    />
+                    <span>{d.device_name || d.daemon_id}</span>
+                  </button>
+                ))}
+              </PopoverContent>
+            </Popover>
           )}
-          {runtimeDevice?.name ?? (agent.runtime_mode === "cloud" ? "Cloud" : "Local")}
         </div>
       </div>
 
@@ -1405,26 +1431,22 @@ const detailTabs: { id: DetailTab; label: string; icon: typeof FileText }[] = [
 
 function AgentDetail({
   agent,
-  runtimes,
   onUpdate,
   onArchive,
   onRestore,
 }: {
   agent: Agent;
-  runtimes: RuntimeDevice[];
   onUpdate: (id: string, data: Partial<Agent>) => Promise<void>;
   onArchive: (id: string) => Promise<void>;
   onRestore: (id: string) => Promise<void>;
 }) {
   const st = statusConfig[agent.status];
-  const runtimeDevice = getRuntimeDevice(agent, runtimes);
   const [activeTab, setActiveTab] = useState<DetailTab>("instructions");
   const [confirmArchive, setConfirmArchive] = useState(false);
   const isArchived = !!agent.archived_at;
 
   return (
     <div className="flex h-full flex-col">
-      {/* Archive Banner */}
       {isArchived && (
         <div className="flex items-center gap-2 bg-muted/50 px-4 py-2 text-xs text-muted-foreground border-b">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
@@ -1435,7 +1457,6 @@ function AgentDetail({
         </div>
       )}
 
-      {/* Header */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
         <ActorAvatar actorType="agent" actorId={agent.id} size={28} className={`rounded-md ${isArchived ? "opacity-50" : ""}`} />
         <div className="min-w-0 flex-1">
@@ -1451,14 +1472,11 @@ function AgentDetail({
                 {st.label}
               </span>
             )}
-            <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
-              {agent.runtime_mode === "cloud" ? (
-                <Cloud className="h-3 w-3" />
-              ) : (
-                <Monitor className="h-3 w-3" />
-              )}
-              {runtimeDevice?.name ?? (agent.runtime_mode === "cloud" ? "Cloud" : "Local")}
-            </span>
+            {agent.providers?.length > 0 && (
+              <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                {agent.providers.join(", ")}
+              </span>
+            )}
           </div>
         </div>
         {!isArchived && (
@@ -1528,7 +1546,6 @@ function AgentDetail({
         {activeTab === "settings" && (
           <SettingsTab
             agent={agent}
-            runtimes={runtimes}
             onSave={(updates) => onUpdate(agent.id, updates)}
           />
         )}
@@ -1578,26 +1595,24 @@ export default function AgentsPage() {
   const isMobile = useIsMobile();
   const isLoading = useAuthStore((s) => s.isLoading);
   const workspace = useWorkspaceStore((s) => s.workspace);
-  const agents = useWorkspaceStore((s) => s.agents);
+  const allAgents = useWorkspaceStore((s) => s.agents);
   const refreshAgents = useWorkspaceStore((s) => s.refreshAgents);
   const [selectedId, setSelectedId] = useState<string>("");
   const [showCreate, setShowCreate] = useState(false);
-  const runtimes = useRuntimeStore((s) => s.runtimes);
-  const fetchRuntimes = useRuntimeStore((s) => s.fetchRuntimes);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const activeAgents = allAgents.filter((a) => !a.archived_at);
+  const archivedAgents = allAgents.filter((a) => !!a.archived_at);
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_agents_layout",
   });
 
-  useEffect(() => {
-    if (workspace) fetchRuntimes();
-  }, [workspace, fetchRuntimes]);
-
   // Select first agent on initial load
   useEffect(() => {
-    if (agents.length > 0 && !selectedId) {
-      setSelectedId(agents[0]!.id);
+    if (activeAgents.length > 0 && !selectedId) {
+      setSelectedId(activeAgents[0]!.id);
     }
-  }, [agents, selectedId]);
+  }, [activeAgents, selectedId]);
 
   const handleCreate = async (data: CreateAgentRequest) => {
     const agent = await api.createAgent(data);
@@ -1636,7 +1651,7 @@ export default function AgentsPage() {
     }
   };
 
-  const selected = agents.find((a) => a.id === selectedId) ?? null;
+  const selected = allAgents.find((a) => a.id === selectedId) ?? null;
 
   if (isLoading) {
     return (
@@ -1690,7 +1705,7 @@ export default function AgentsPage() {
           <Plus className="h-4 w-4 text-muted-foreground" />
         </Button>
       </div>
-      {agents.length === 0 ? (
+      {activeAgents.length === 0 && archivedAgents.length === 0 ? (
         <div className="flex flex-col items-center justify-center px-4 py-12">
           <Bot className="h-8 w-8 text-muted-foreground/40" />
           <p className="mt-3 text-sm text-muted-foreground">No agents yet</p>
@@ -1704,16 +1719,42 @@ export default function AgentsPage() {
           </Button>
         </div>
       ) : (
-        <div className="divide-y">
-          {agents.map((agent) => (
-            <AgentListItem
-              key={agent.id}
-              agent={agent}
-              isSelected={agent.id === selectedId}
-              onClick={() => setSelectedId(agent.id)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="divide-y">
+            {activeAgents.map((agent) => (
+              <AgentListItem
+                key={agent.id}
+                agent={agent}
+                isSelected={agent.id === selectedId}
+                onClick={() => setSelectedId(agent.id)}
+              />
+            ))}
+          </div>
+          {archivedAgents.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowArchived(!showArchived)}
+                className="flex w-full items-center gap-1.5 px-4 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors border-t"
+              >
+                <ChevronDown className={cn("h-3 w-3 transition-transform", !showArchived && "-rotate-90")} />
+                <span>Archived ({archivedAgents.length})</span>
+              </button>
+              {showArchived && (
+                <div className="divide-y">
+                  {archivedAgents.map((agent) => (
+                    <AgentListItem
+                      key={agent.id}
+                      agent={agent}
+                      isSelected={agent.id === selectedId}
+                      onClick={() => setSelectedId(agent.id)}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   );
@@ -1722,7 +1763,6 @@ export default function AgentsPage() {
     <AgentDetail
       key={selected.id}
       agent={selected}
-      runtimes={runtimes}
       onUpdate={handleUpdate}
       onArchive={handleArchive}
       onRestore={handleRestore}
@@ -1762,7 +1802,6 @@ export default function AgentsPage() {
         )}
         {showCreate && (
           <CreateAgentDialog
-            runtimes={runtimes}
             onClose={() => setShowCreate(false)}
             onCreate={handleCreate}
           />
@@ -1790,7 +1829,6 @@ export default function AgentsPage() {
 
       {showCreate && (
         <CreateAgentDialog
-          runtimes={runtimes}
           onClose={() => setShowCreate(false)}
           onCreate={handleCreate}
         />

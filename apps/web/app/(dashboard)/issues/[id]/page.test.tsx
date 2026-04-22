@@ -37,14 +37,17 @@ vi.mock("@/features/auth", () => ({
 }));
 
 // Mock workspace feature
+const workspaceState = {
+  workspace: { id: "ws-1", name: "Test WS" },
+  workspaces: [{ id: "ws-1", name: "Test WS" }],
+  members: [{ user_id: "user-1", name: "Test User", email: "test@multica.ai" }],
+  agents: [{ id: "agent-1", name: "Claude Agent" }],
+};
 vi.mock("@/features/workspace", () => ({
-  useWorkspaceStore: (selector: (s: any) => any) =>
-    selector({
-      workspace: { id: "ws-1", name: "Test WS" },
-      workspaces: [{ id: "ws-1", name: "Test WS" }],
-      members: [{ user_id: "user-1", name: "Test User", email: "test@multica.ai" }],
-      agents: [{ id: "agent-1", name: "Claude Agent" }],
-    }),
+  useWorkspaceStore: Object.assign(
+    (selector: (s: any) => any) => selector(workspaceState),
+    { getState: () => workspaceState },
+  ),
   useActorName: () => ({
     getMemberName: (id: string) => (id === "user-1" ? "Test User" : "Unknown"),
     getAgentName: (id: string) => (id === "agent-1" ? "Claude Agent" : "Unknown Agent"),
@@ -82,6 +85,9 @@ const stableStoreIssues = vi.hoisted(() => [
     parent_issue_id: null,
     position: 0,
     due_date: "2026-06-01T00:00:00Z",
+    dispatch_provider: null,
+    dispatch_daemon_id: null,
+    dispatch_daemon_label: null,
     created_at: "2026-01-15T00:00:00Z",
     updated_at: "2026-01-20T00:00:00Z",
   },
@@ -178,11 +184,19 @@ const mockIssue: Issue = {
   priority: "high",
   assignee_type: "member",
   assignee_id: "user-1",
+  verifier_agent_id: null,
+  max_verification_rounds: null,
   creator_type: "member",
   creator_id: "user-1",
   parent_issue_id: null,
+  acceptance_criteria: [],
+  criteria_status: null,
   position: 0,
   due_date: "2026-06-01T00:00:00Z",
+  dispatch_provider: null,
+  dispatch_daemon_id: null,
+  dispatch_daemon_label: null,
+  labels: [],
   created_at: "2026-01-15T00:00:00Z",
   updated_at: "2026-01-20T00:00:00Z",
 };

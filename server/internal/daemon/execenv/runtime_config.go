@@ -64,6 +64,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue comment add <issue-id> --content \"...\" [--parent <comment-id>]` — Post a comment (use --parent to reply to a specific comment)\n")
 	b.WriteString("- `multica issue status <id> <status>` — Update issue status (todo, in_progress, in_review, done, blocked)\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X] [--priority X]` — Update issue fields\n\n")
+	b.WriteString("### Escaping\n\n")
+	b.WriteString("When comment or description text contains special characters (`$`, backticks, quotes, backslashes), pass `--content -` or `--description -` to read from stdin via a heredoc to avoid shell escaping issues:\n\n")
+	b.WriteString("```\ncat <<'CONTENT_EOF' | multica issue comment add <issue-id> --content -\nYour content here — no escaping needed.\nCONTENT_EOF\n```\n\n")
 
 	// Inject available repositories section.
 	if len(ctx.Repos) > 0 {
@@ -97,6 +100,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		// Assignment-triggered: full workflow
 		b.WriteString("You are responsible for managing the issue status throughout your work.\n\n")
 		fmt.Fprintf(&b, "1. Run `multica issue get %s --output json` to understand your task\n", ctx.IssueID)
+		b.WriteString("   - If the issue title is just the identifier (e.g. `MUL-77`, matching `[A-Z]+-\\d+`), generate a concise descriptive title from the description and update it: `multica issue update <id> --title 'Your Title'`\n")
 		fmt.Fprintf(&b, "2. Run `multica issue status %s in_progress`\n", ctx.IssueID)
 		b.WriteString("3. Read comments for additional context or human instructions\n")
 		b.WriteString("4. If the task requires code changes:\n")
@@ -150,8 +154,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			b.WriteString("Do not attempt to push commits or merge pull requests. ")
 			b.WriteString("You can create issues and comment on issues/PRs.\n\n")
 		case "write":
-			b.WriteString("You can push code and create pull requests. ")
-			b.WriteString("You **MUST NOT** merge pull requests — create PRs for review only.\n\n")
+			b.WriteString("You can push branches and create pull requests. ")
+			b.WriteString("You **MUST NOT** merge or close pull requests — merging is reserved for admin agents after review.\n\n")
 		case "admin":
 			b.WriteString("You have full access: push code, create pull requests, and merge them.\n\n")
 		}

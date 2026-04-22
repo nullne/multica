@@ -59,9 +59,8 @@ cd multica
 cp .env.example .env
 # 编辑 .env — 至少修改 JWT_SECRET
 
-docker compose up -d                              # 启动 PostgreSQL
-cd server && go run ./cmd/migrate up && cd ..     # 运行数据库迁移
-make start                                         # 启动应用
+make setup                                        # 安装依赖、启动 PostgreSQL 并执行迁移
+make dev                                          # 启动开发环境
 ```
 
 完整部署文档请参阅 [自部署指南](SELF_HOSTING.md)。
@@ -145,7 +144,7 @@ daemon 在后台运行，保持你的机器与 Multica 的连接。它会自动�
 pnpm install
 cp .env.example .env
 make setup
-make start
+make dev
 ```
 
 完整的开发流程、worktree 支持、测试和问题排查请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。

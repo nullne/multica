@@ -20,26 +20,24 @@ type ActivityLog struct {
 }
 
 type Agent struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Name               string             `json:"name"`
-	AvatarUrl          pgtype.Text        `json:"avatar_url"`
-	RuntimeMode        string             `json:"runtime_mode"`
-	RuntimeConfig      []byte             `json:"runtime_config"`
-	Visibility         string             `json:"visibility"`
-	Status             string             `json:"status"`
-	MaxConcurrentTasks int32              `json:"max_concurrent_tasks"`
-	OwnerID            pgtype.UUID        `json:"owner_id"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	Description        string             `json:"description"`
-	Tools              []byte             `json:"tools"`
-	Triggers           []byte             `json:"triggers"`
-	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	Instructions       string             `json:"instructions"`
-	ArchivedAt         pgtype.Timestamptz `json:"archived_at"`
-	ArchivedBy         pgtype.UUID        `json:"archived_by"`
-	GithubCodeAccess   string             `json:"github_code_access"`
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	Name             string             `json:"name"`
+	AvatarUrl        pgtype.Text        `json:"avatar_url"`
+	Visibility       string             `json:"visibility"`
+	Status           string             `json:"status"`
+	OwnerID          pgtype.UUID        `json:"owner_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	Description      string             `json:"description"`
+	Tools            []byte             `json:"tools"`
+	Triggers         []byte             `json:"triggers"`
+	Instructions     string             `json:"instructions"`
+	ArchivedAt       pgtype.Timestamptz `json:"archived_at"`
+	ArchivedBy       pgtype.UUID        `json:"archived_by"`
+	GithubCodeAccess string             `json:"github_code_access"`
+	Providers        []string           `json:"providers"`
+	DefaultDaemonID  pgtype.UUID        `json:"default_daemon_id"`
 }
 
 type AgentRuntime struct {
@@ -55,6 +53,8 @@ type AgentRuntime struct {
 	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	DaemonRef   pgtype.UUID        `json:"daemon_ref"`
+	AuthStatus  string             `json:"auth_status"`
 }
 
 type AgentSkill struct {
@@ -119,6 +119,22 @@ type CommentReaction struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type Daemon struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	DaemonID    string             `json:"daemon_id"`
+	Status      string             `json:"status"`
+	CliVersion  string             `json:"cli_version"`
+	DeviceName  string             `json:"device_name"`
+	DeviceInfo  string             `json:"device_info"`
+	Metadata    []byte             `json:"metadata"`
+	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Labels      []string           `json:"labels"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+}
+
 type DaemonConnection struct {
 	ID              pgtype.UUID        `json:"id"`
 	AgentID         pgtype.UUID        `json:"agent_id"`
@@ -137,6 +153,22 @@ type DaemonToken struct {
 	DaemonID    string             `json:"daemon_id"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type GithubEventRule struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	EventType           string             `json:"event_type"`
+	AgentID             pgtype.UUID        `json:"agent_id"`
+	Enabled             bool               `json:"enabled"`
+	TitleTemplate       string             `json:"title_template"`
+	DescriptionTemplate string             `json:"description_template"`
+	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
+	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	RepoFullName        string             `json:"repo_full_name"`
 }
 
 type InboxItem struct {
@@ -158,25 +190,32 @@ type InboxItem struct {
 }
 
 type Issue struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Title              string             `json:"title"`
-	Description        pgtype.Text        `json:"description"`
-	Status             string             `json:"status"`
-	Priority           string             `json:"priority"`
-	AssigneeType       pgtype.Text        `json:"assignee_type"`
-	AssigneeID         pgtype.UUID        `json:"assignee_id"`
-	CreatorType        string             `json:"creator_type"`
-	CreatorID          pgtype.UUID        `json:"creator_id"`
-	ParentIssueID      pgtype.UUID        `json:"parent_issue_id"`
-	AcceptanceCriteria []byte             `json:"acceptance_criteria"`
-	ContextRefs        []byte             `json:"context_refs"`
-	Position           float64            `json:"position"`
-	DueDate            pgtype.Timestamptz `json:"due_date"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	Number             int32              `json:"number"`
-	VerifierAgentID    pgtype.UUID        `json:"verifier_agent_id"`
+	ID                    pgtype.UUID        `json:"id"`
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	Title                 string             `json:"title"`
+	Description           pgtype.Text        `json:"description"`
+	Status                string             `json:"status"`
+	Priority              string             `json:"priority"`
+	AssigneeType          pgtype.Text        `json:"assignee_type"`
+	AssigneeID            pgtype.UUID        `json:"assignee_id"`
+	CreatorType           string             `json:"creator_type"`
+	CreatorID             pgtype.UUID        `json:"creator_id"`
+	ParentIssueID         pgtype.UUID        `json:"parent_issue_id"`
+	AcceptanceCriteria    []byte             `json:"acceptance_criteria"`
+	ContextRefs           []byte             `json:"context_refs"`
+	Position              float64            `json:"position"`
+	DueDate               pgtype.Timestamptz `json:"due_date"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	Number                int32              `json:"number"`
+	VerifierAgentID       pgtype.UUID        `json:"verifier_agent_id"`
+	LinkedBranch          pgtype.Text        `json:"linked_branch"`
+	LinkedPrUrl           pgtype.Text        `json:"linked_pr_url"`
+	MaxVerificationRounds pgtype.Int4        `json:"max_verification_rounds"`
+	CriteriaStatus        pgtype.Text        `json:"criteria_status"`
+	DispatchProvider      pgtype.Text        `json:"dispatch_provider"`
+	DispatchDaemonID      pgtype.UUID        `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   pgtype.Text        `json:"dispatch_daemon_label"`
 }
 
 type IssueDependency struct {
@@ -300,6 +339,42 @@ type VerificationCode struct {
 	Used      bool               `json:"used"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	Attempts  int32              `json:"attempts"`
+}
+
+type Webhook struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Name               string             `json:"name"`
+	SourceType         string             `json:"source_type"`
+	TokenHash          string             `json:"token_hash"`
+	TokenPrefix        string             `json:"token_prefix"`
+	Status             string             `json:"status"`
+	DedupWindowSeconds int32              `json:"dedup_window_seconds"`
+	CreatedBy          pgtype.UUID        `json:"created_by"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WebhookAction struct {
+	ID         pgtype.UUID        `json:"id"`
+	WebhookID  pgtype.UUID        `json:"webhook_id"`
+	ActionType string             `json:"action_type"`
+	Config     []byte             `json:"config"`
+	Enabled    bool               `json:"enabled"`
+	Position   int32              `json:"position"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WebhookEventLog struct {
+	ID           pgtype.UUID        `json:"id"`
+	WebhookID    pgtype.UUID        `json:"webhook_id"`
+	DedupKey     string             `json:"dedup_key"`
+	Payload      []byte             `json:"payload"`
+	Status       string             `json:"status"`
+	IssueID      pgtype.UUID        `json:"issue_id"`
+	ErrorMessage pgtype.Text        `json:"error_message"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type Workspace struct {

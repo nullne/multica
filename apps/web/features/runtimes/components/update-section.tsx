@@ -66,7 +66,7 @@ const statusConfig: Record<
     color: "text-info",
   },
   completed: {
-    label: "Update complete. Daemon is restarting...",
+    label: "Update complete. Environment is restarting...",
     icon: CheckCircle2,
     color: "text-success",
   },

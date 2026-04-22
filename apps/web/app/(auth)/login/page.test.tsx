@@ -2,22 +2,43 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+const mockRouterPush = vi.fn();
+const mockRouterReplace = vi.fn();
+
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: mockRouterPush, replace: mockRouterReplace }),
   usePathname: () => "/login",
   useSearchParams: () => new URLSearchParams(),
 }));
 
 // Mock auth store
-const mockSendCode = vi.fn();
-const mockVerifyCode = vi.fn();
+const mockSignInWithGoogle = vi.fn();
+const mockCompleteGoogleRedirectSignIn = vi.fn();
+const mockSignInAsDev = vi.fn();
+const mockSendEmailSignInLink = vi.fn();
+const mockSignInWithEmailLink = vi.fn();
 vi.mock("@/features/auth", () => ({
   useAuthStore: (selector: (s: any) => any) =>
     selector({
-      sendCode: mockSendCode,
-      verifyCode: mockVerifyCode,
+      user: null,
+      isLoading: false,
+      signInWithGoogle: mockSignInWithGoogle,
+      completeGoogleRedirectSignIn: mockCompleteGoogleRedirectSignIn,
+      signInAsDev: mockSignInAsDev,
+      sendEmailSignInLink: mockSendEmailSignInLink,
+      signInWithEmailLink: mockSignInWithEmailLink,
     }),
+}));
+
+// Mock firebase helpers used by the login page directly. The tests do not
+// exercise the actual email-link callback flow.
+vi.mock("@/features/auth/firebase", () => ({
+  hasPendingFirebaseGoogleRedirectSignIn: vi.fn(
+    () => localStorage.getItem("multica_google_redirect_pending") === "1"
+  ),
+  isFirebaseEmailLink: vi.fn().mockReturnValue(false),
+  getStoredEmailLinkEmail: vi.fn().mockReturnValue(null),
 }));
 
 // Mock workspace store
@@ -33,7 +54,6 @@ vi.mock("@/features/workspace", () => ({
 vi.mock("@/shared/api", () => ({
   api: {
     listWorkspaces: vi.fn().mockResolvedValue([]),
-    verifyCode: vi.fn(),
     setToken: vi.fn(),
     getMe: vi.fn(),
   },
@@ -44,6 +64,8 @@ import LoginPage from "./page";
 describe("LoginPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.removeItem("multica_google_redirect_pending");
+    mockCompleteGoogleRedirectSignIn.mockResolvedValue(null);
   });
 
   it("renders login form with email input and continue button", () => {
@@ -51,69 +73,109 @@ describe("LoginPage", () => {
 
     expect(screen.getByText("Multica")).toBeInTheDocument();
     expect(screen.getByText("Turn coding agents into real teammates")).toBeInTheDocument();
-    expect(screen.getByLabelText("Email")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Continue" })
+      screen.getByRole("button", { name: "Continue with Google" })
     ).toBeInTheDocument();
   });
 
-  it("does not call sendCode when email is empty", async () => {
+  it("calls signInWithGoogle when clicking continue", async () => {
+    mockSignInWithGoogle.mockResolvedValueOnce({
+      token: "token",
+      user: { id: "u1", email: "test@multica.ai" },
+    });
     const user = userEvent.setup();
     render(<LoginPage />);
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(mockSendCode).not.toHaveBeenCalled();
-  });
-
-  it("calls sendCode with email on submit", async () => {
-    mockSendCode.mockResolvedValueOnce(undefined);
-    const user = userEvent.setup();
-    render(<LoginPage />);
-
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
 
     await waitFor(() => {
-      expect(mockSendCode).toHaveBeenCalledWith("test@multica.ai");
+      expect(mockSignInWithGoogle).toHaveBeenCalled();
     });
   });
 
-  it("shows 'Sending code...' while submitting", async () => {
-    mockSendCode.mockReturnValueOnce(new Promise(() => {}));
-    const user = userEvent.setup();
+  it("completes redirect sign-in when a pending redirect is present", async () => {
+    localStorage.setItem("multica_google_redirect_pending", "1");
+    mockCompleteGoogleRedirectSignIn.mockResolvedValueOnce({
+      token: "token",
+      user: { id: "u1", email: "test@multica.ai" },
+    });
+
     render(<LoginPage />);
 
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
     await waitFor(() => {
-      expect(screen.getByText("Sending code...")).toBeInTheDocument();
+      expect(mockCompleteGoogleRedirectSignIn).toHaveBeenCalled();
     });
   });
 
-  it("shows verification code step after sending code", async () => {
-    mockSendCode.mockResolvedValueOnce(undefined);
+  it("shows 'Signing in...' while submitting", async () => {
+    mockSignInWithGoogle.mockReturnValueOnce(new Promise(() => {}));
     const user = userEvent.setup();
     render(<LoginPage />);
 
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Check your email")).toBeInTheDocument();
+      expect(screen.getByText("Signing in...")).toBeInTheDocument();
     });
   });
 
-  it("shows error when sendCode fails", async () => {
-    mockSendCode.mockRejectedValueOnce(new Error("Network error"));
+  it("shows helper copy for Firebase auth", () => {
+    render(<LoginPage />);
+
+    expect(
+      screen.getByText("Sign in with Google or get a one-time link by email.")
+    ).toBeInTheDocument();
+  });
+
+  it("shows error when Google sign-in fails", async () => {
+    mockSignInWithGoogle.mockRejectedValueOnce(new Error("Network error"));
     const user = userEvent.setup();
     render(<LoginPage />);
 
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
 
     await waitFor(() => {
       expect(screen.getByText("Network error")).toBeInTheDocument();
+    });
+  });
+
+  it("sends a passwordless email link and shows the inbox screen", async () => {
+    mockSendEmailSignInLink.mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    render(<LoginPage />);
+
+    await user.type(
+      screen.getByPlaceholderText("you@example.com"),
+      "alice@example.com"
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Email me a sign-in link" })
+    );
+
+    await waitFor(() => {
+      expect(mockSendEmailSignInLink).toHaveBeenCalledWith(
+        "alice@example.com",
+        expect.stringMatching(/\/login$/)
+      );
+      expect(screen.getByText("Check your inbox")).toBeInTheDocument();
+    });
+  });
+
+  it("shows error when sending the email link fails", async () => {
+    mockSendEmailSignInLink.mockRejectedValueOnce(new Error("Quota exceeded"));
+    const user = userEvent.setup();
+    render(<LoginPage />);
+
+    await user.type(
+      screen.getByPlaceholderText("you@example.com"),
+      "alice@example.com"
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Email me a sign-in link" })
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Quota exceeded")).toBeInTheDocument();
     });
   });
 });

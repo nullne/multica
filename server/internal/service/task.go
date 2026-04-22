@@ -90,7 +90,9 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 		issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" &&
 		issue.VerifierAgentID.Valid &&
 		util.UUIDToString(issue.VerifierAgentID) != util.UUIDToString(issue.AssigneeID) {
-		if criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria); len(criteria) == 0 {
+		criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria)
+		if len(criteria) == 0 || !issue.CriteriaStatus.Valid {
+			// No criteria yet — enqueue criteria generation to verifier.
 			contextData := buildVerificationTaskContext(verificationTaskContext{
 				Flow:            verificationFlowName,
 				Role:            taskRoleCriteria,
@@ -100,19 +102,43 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 			})
 			return s.enqueueTaskToAgent(ctx, issue, issue.VerifierAgentID, commentID, contextData, "criteria task enqueued")
 		}
+		if issue.CriteriaStatus.String == "pending" {
+			// Criteria exist but not yet approved — wait for human approval.
+			slog.Info("criteria pending approval, not enqueueing executor", "issue_id", util.UUIDToString(issue.ID))
+			return db.AgentTaskQueue{}, nil
+		}
 
+		// Criteria approved — enqueue executor.
 		contextData := buildVerificationTaskContext(verificationTaskContext{
 			Flow:               verificationFlowName,
 			Role:               taskRoleExecutor,
 			Round:              1,
 			ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
 			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
-			AcceptanceCriteria: decodeAcceptanceCriteria(issue.AcceptanceCriteria),
+			AcceptanceCriteria: criteria,
 		})
 		return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, contextData, "executor task enqueued")
 	}
 
 	return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, nil, "task enqueued")
+}
+
+// EnqueueExecutorForApprovedCriteria enqueues the executor task after criteria
+// have been approved by a human. Called from the criteria approve handler.
+func (s *TaskService) EnqueueExecutorForApprovedCriteria(ctx context.Context, issue db.Issue) (db.AgentTaskQueue, error) {
+	if !issue.AssigneeID.Valid || !issue.VerifierAgentID.Valid {
+		return db.AgentTaskQueue{}, fmt.Errorf("issue must have both assignee and verifier")
+	}
+	criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria)
+	contextData := buildVerificationTaskContext(verificationTaskContext{
+		Flow:               verificationFlowName,
+		Role:               taskRoleExecutor,
+		Round:              1,
+		ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
+		VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
+		AcceptanceCriteria: criteria,
+	})
+	return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, pgtype.UUID{}, contextData, "executor task enqueued")
 }
 
 // EnqueueTaskForMention creates a queued task for a mentioned agent on an issue.
@@ -132,14 +158,41 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 		slog.Debug("mention task enqueue skipped: agent is archived", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
 		return db.AgentTaskQueue{}, fmt.Errorf("agent is archived")
 	}
-	if !agent.RuntimeID.Valid {
-		slog.Error("mention task enqueue failed: agent has no runtime", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
-		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
+	if len(agent.Providers) == 0 {
+		slog.Error("task enqueue failed: agent has no providers", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID))
+		return db.AgentTaskQueue{}, fmt.Errorf("agent has no providers configured")
 	}
+
+	// Use issue-level dispatch hints to constrain runtime selection.
+	params := db.FindAvailableRuntimeConstrainedParams{
+		WorkspaceID: issue.WorkspaceID,
+		Providers:   agent.Providers,
+	}
+	if issue.DispatchProvider.Valid {
+		params.Provider = issue.DispatchProvider
+	}
+	if issue.DispatchDaemonID.Valid {
+		params.DaemonID = issue.DispatchDaemonID
+	}
+	if issue.DispatchDaemonLabel.Valid {
+		params.DaemonLabel = issue.DispatchDaemonLabel
+	}
+
+	runtime, err := s.Queries.FindAvailableRuntimeConstrained(ctx, params)
+	if err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("no online runtime for providers %v (dispatch hints: provider=%q valid=%v, daemon_id=%s valid=%v, daemon_label=%q valid=%v)",
+			agent.Providers,
+			issue.DispatchProvider.String, issue.DispatchProvider.Valid,
+			util.UUIDToString(issue.DispatchDaemonID), issue.DispatchDaemonID.Valid,
+			issue.DispatchDaemonLabel.String, issue.DispatchDaemonLabel.Valid,
+		)
+	}
+
+	runtimeID := runtime.ID
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:          agentID,
-		RuntimeID:        agent.RuntimeID,
+		RuntimeID:        runtimeID,
 		IssueID:          issue.ID,
 		Priority:         priorityToInt(issue.Priority),
 		TriggerCommentID: triggerCommentID,
@@ -181,20 +234,6 @@ func (s *TaskService) CancelTask(ctx context.Context, taskID pgtype.UUID) (*db.A
 // ClaimTask atomically claims the next queued task for an agent,
 // respecting max_concurrent_tasks.
 func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.AgentTaskQueue, error) {
-	agent, err := s.Queries.GetAgent(ctx, agentID)
-	if err != nil {
-		return nil, fmt.Errorf("agent not found: %w", err)
-	}
-
-	running, err := s.Queries.CountRunningTasks(ctx, agentID)
-	if err != nil {
-		return nil, fmt.Errorf("count running tasks: %w", err)
-	}
-	if running >= int64(agent.MaxConcurrentTasks) {
-		slog.Debug("task claim: no capacity", "agent_id", util.UUIDToString(agentID), "running", running, "max", agent.MaxConcurrentTasks)
-		return nil, nil // No capacity
-	}
-
 	task, err := s.Queries.ClaimAgentTask(ctx, agentID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -288,6 +327,23 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	if err := json.Unmarshal(result, &payload); err != nil {
 		slog.Debug("task completion payload parse failed", "task_id", util.UUIDToString(task.ID), "error", err)
 	}
+	if payload.BranchName != "" || payload.PRURL != "" {
+		issue, updateErr := s.Queries.UpdateIssueDevLinks(ctx, db.UpdateIssueDevLinksParams{
+			ID:           task.IssueID,
+			LinkedBranch: pgtype.Text{String: payload.BranchName, Valid: payload.BranchName != ""},
+			LinkedPrUrl:  pgtype.Text{String: payload.PRURL, Valid: payload.PRURL != ""},
+		})
+		if updateErr != nil {
+			slog.Warn("update issue dev links failed",
+				"issue_id", util.UUIDToString(task.IssueID),
+				"task_id", util.UUIDToString(task.ID),
+				"error", updateErr,
+			)
+		} else {
+			s.broadcastIssueUpdated(issue)
+		}
+	}
+
 	output := redact.Text(payload.Output)
 
 	taskCtx := parseVerificationTaskContext(task.Context)
@@ -332,6 +388,7 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 		issue, err := s.Queries.UpdateIssueAcceptanceCriteria(ctx, db.UpdateIssueAcceptanceCriteriaParams{
 			ID:                 task.IssueID,
 			AcceptanceCriteria: criteriaJSON,
+			CriteriaStatus:     pgtype.Text{String: "pending", Valid: true},
 		})
 		if err != nil {
 			return fmt.Errorf("save acceptance criteria: %w", err)
@@ -339,23 +396,13 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 
 		comment := stripMachineBlocks(output)
 		if comment == "" {
-			comment = "验收标准已确认。"
+			comment = "验收标准已起草，等待确认。"
 		}
 		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), "comment", task.TriggerCommentID)
+		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("验收标准已生成，请在 issue 详情页确认后继续。"), "system", task.TriggerCommentID)
 
-		if !issue.AssigneeID.Valid {
-			return nil
-		}
-		nextCtx := buildVerificationTaskContext(verificationTaskContext{
-			Flow:               verificationFlowName,
-			Role:               taskRoleExecutor,
-			Round:              maxRound(taskCtx.Round),
-			ExecutorAgentID:    util.UUIDToString(issue.AssigneeID),
-			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
-			AcceptanceCriteria: criteria,
-		})
-		_, err = s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, pgtype.UUID{}, nextCtx, "executor task enqueued")
-		return err
+		s.broadcastIssueUpdated(issue)
+		return nil
 
 	case taskRoleExecutor, taskRoleRework:
 		issue, err := s.Queries.GetIssue(ctx, task.IssueID)
@@ -429,8 +476,12 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(feedback), "comment", task.TriggerCommentID)
 
 			round := maxRound(taskCtx.Round)
-			if round >= defaultVerificationRounds {
-				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(fmt.Sprintf("自动修复达到最大轮次（%d），已停止自动回流。", defaultVerificationRounds)), "system", task.TriggerCommentID)
+			maxRounds := defaultVerificationRounds
+			if issue.MaxVerificationRounds.Valid && issue.MaxVerificationRounds.Int32 > 0 {
+				maxRounds = int(issue.MaxVerificationRounds.Int32)
+			}
+			if round >= maxRounds {
+				s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(fmt.Sprintf("自动修复达到最大轮次（%d），已停止自动回流。", maxRounds)), "system", task.TriggerCommentID)
 				return nil
 			}
 
@@ -785,6 +836,8 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		"identifier":          issuePrefix + "-" + strconv.Itoa(int(issue.Number)),
 		"title":               issue.Title,
 		"description":         util.TextToPtr(issue.Description),
+		"linked_branch":       util.TextToPtr(issue.LinkedBranch),
+		"linked_pr_url":       util.TextToPtr(issue.LinkedPrUrl),
 		"status":              issue.Status,
 		"priority":            issue.Priority,
 		"assignee_type":       util.TextToPtr(issue.AssigneeType),
@@ -803,10 +856,6 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 
 // agentToMap builds a simple map for broadcasting agent status updates.
 func agentToMap(a db.Agent) map[string]any {
-	var rc any
-	if a.RuntimeConfig != nil {
-		json.Unmarshal(a.RuntimeConfig, &rc)
-	}
 	var tools any
 	if a.Tools != nil {
 		json.Unmarshal(a.Tools, &tools)
@@ -816,24 +865,21 @@ func agentToMap(a db.Agent) map[string]any {
 		json.Unmarshal(a.Triggers, &triggers)
 	}
 	return map[string]any{
-		"id":                   util.UUIDToString(a.ID),
-		"workspace_id":         util.UUIDToString(a.WorkspaceID),
-		"runtime_id":           util.UUIDToString(a.RuntimeID),
-		"name":                 a.Name,
-		"description":          a.Description,
-		"avatar_url":           util.TextToPtr(a.AvatarUrl),
-		"runtime_mode":         a.RuntimeMode,
-		"runtime_config":       rc,
-		"visibility":           a.Visibility,
-		"status":               a.Status,
-		"max_concurrent_tasks": a.MaxConcurrentTasks,
-		"owner_id":             util.UUIDToPtr(a.OwnerID),
-		"skills":               []any{},
-		"tools":                tools,
-		"triggers":             triggers,
-		"created_at":           util.TimestampToString(a.CreatedAt),
-		"updated_at":           util.TimestampToString(a.UpdatedAt),
-		"archived_at":          util.TimestampToPtr(a.ArchivedAt),
-		"archived_by":          util.UUIDToPtr(a.ArchivedBy),
+		"id":           util.UUIDToString(a.ID),
+		"workspace_id": util.UUIDToString(a.WorkspaceID),
+		"providers":    a.Providers,
+		"name":         a.Name,
+		"description":  a.Description,
+		"avatar_url":   util.TextToPtr(a.AvatarUrl),
+		"visibility":   a.Visibility,
+		"status":       a.Status,
+		"owner_id":     util.UUIDToPtr(a.OwnerID),
+		"skills":       []any{},
+		"tools":        tools,
+		"triggers":     triggers,
+		"created_at":   util.TimestampToString(a.CreatedAt),
+		"updated_at":   util.TimestampToString(a.UpdatedAt),
+		"archived_at":  util.TimestampToPtr(a.ArchivedAt),
+		"archived_by":  util.UUIDToPtr(a.ArchivedBy),
 	}
 }

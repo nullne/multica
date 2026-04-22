@@ -25,8 +25,10 @@ func registerSubscriberListeners(bus *events.Bus, queries *db.Queries) {
 			return
 		}
 
-		// Subscribe the creator
-		addSubscriber(bus, queries, e.WorkspaceID, issue.ID, issue.CreatorType, issue.CreatorID, "creator")
+		// Subscribe the creator (skip non-user/agent creators like webhooks)
+		if issue.CreatorType == "member" || issue.CreatorType == "agent" {
+			addSubscriber(bus, queries, e.WorkspaceID, issue.ID, issue.CreatorType, issue.CreatorID, "creator")
+		}
 
 		// Subscribe the assignee if exists and different from creator
 		if issue.AssigneeType != nil && issue.AssigneeID != nil &&

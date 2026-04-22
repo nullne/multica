@@ -2,11 +2,7 @@ package handler
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -45,13 +41,24 @@ type LoginResponse struct {
 	User  UserResponse `json:"user"`
 }
 
-type SendCodeRequest struct {
-	Email string `json:"email"`
+type FirebaseLoginRequest struct {
+	IDToken string `json:"id_token"`
 }
 
-type VerifyCodeRequest struct {
+type DevLoginRequest struct {
 	Email string `json:"email"`
-	Code  string `json:"code"`
+	Name  string `json:"name"`
+}
+
+// devAuthBypassEnabled reports whether the DEV_AUTH_BYPASS env flag is set to a
+// truthy value. The dev login endpoint is only accepted when this is true so
+// production builds can never use it.
+func devAuthBypassEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEV_AUTH_BYPASS"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func defaultWorkspaceName(user db.User) string {
@@ -158,16 +165,11 @@ func (h *Handler) ensureUserWorkspace(ctx context.Context, user db.User) error {
 		return err
 	}
 
-	return tx.Commit(ctx)
-}
-
-func generateCode() (string, error) {
-	var buf [4]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return "", err
+	if _, err := qtx.UpdateWorkspace(ctx, updateSettingsOnly(workspace.ID, defaultProviderSettings())); err != nil {
+		return err
 	}
-	n := binary.BigEndian.Uint32(buf[:]) % 1000000
-	return fmt.Sprintf("%06d", n), nil
+
+	return tx.Commit(ctx)
 }
 
 func (h *Handler) issueJWT(user db.User) (string, error) {
@@ -181,19 +183,23 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 	return token.SignedString(auth.JWTSecret())
 }
 
-func (h *Handler) findOrCreateUser(ctx context.Context, email string) (db.User, error) {
+func (h *Handler) findOrCreateUser(ctx context.Context, email, name string, avatarURL *string) (db.User, error) {
 	user, err := h.Queries.GetUserByEmail(ctx, email)
 	if err != nil {
 		if !isNotFound(err) {
 			return db.User{}, err
 		}
-		name := email
-		if at := strings.Index(email, "@"); at > 0 {
-			name = email[:at]
+		displayName := strings.TrimSpace(name)
+		if displayName == "" {
+			displayName = email
+			if at := strings.Index(email, "@"); at > 0 {
+				displayName = email[:at]
+			}
 		}
 		user, err = h.Queries.CreateUser(ctx, db.CreateUserParams{
-			Name:  name,
-			Email: email,
+			Name:      displayName,
+			Email:     email,
+			AvatarUrl: ptrToText(avatarURL),
 		})
 		if err != nil {
 			return db.User{}, err
@@ -232,92 +238,38 @@ func isEmailAllowed(email string) bool {
 	return false
 }
 
-func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
-	var req SendCodeRequest
+func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
+	if h.FirebaseVerifier == nil {
+		writeError(w, http.StatusServiceUnavailable, "firebase auth is not configured")
+		return
+	}
+
+	var req FirebaseLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "email is required")
+	idToken := strings.TrimSpace(req.IDToken)
+	if idToken == "" {
+		writeError(w, http.StatusBadRequest, "id_token is required")
 		return
 	}
 
+	identity, err := h.FirebaseVerifier.VerifyIDToken(r.Context(), idToken)
+	if err != nil {
+		slog.Warn("firebase login rejected", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusUnauthorized, "invalid firebase token")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(identity.Email))
 	if !isEmailAllowed(email) {
 		writeError(w, http.StatusForbidden, "email not allowed")
 		return
 	}
 
-	// Rate limit: max 1 code per 10 seconds per email
-	latest, err := h.Queries.GetLatestCodeByEmail(r.Context(), email)
-	if err == nil && time.Since(latest.CreatedAt.Time) < 10*time.Second {
-		writeError(w, http.StatusTooManyRequests, "please wait before requesting another code")
-		return
-	}
-
-	code, err := generateCode()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate code")
-		return
-	}
-
-	_, err = h.Queries.CreateVerificationCode(r.Context(), db.CreateVerificationCodeParams{
-		Email:     email,
-		Code:      code,
-		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(10 * time.Minute), Valid: true},
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to store verification code")
-		return
-	}
-
-	if err := h.EmailService.SendVerificationCode(email, code); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to send verification code")
-		return
-	}
-
-	// Best-effort cleanup of expired codes
-	_ = h.Queries.DeleteExpiredVerificationCodes(r.Context())
-
-	writeJSON(w, http.StatusOK, map[string]string{"message": "Verification code sent"})
-}
-
-func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
-	var req VerifyCodeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	code := strings.TrimSpace(req.Code)
-
-	if email == "" || code == "" {
-		writeError(w, http.StatusBadRequest, "email and code are required")
-		return
-	}
-
-	dbCode, err := h.Queries.GetLatestVerificationCode(r.Context(), email)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid or expired code")
-		return
-	}
-
-	isMasterCode := code == "888888" && os.Getenv("APP_ENV") != "production"
-	if !isMasterCode && subtle.ConstantTimeCompare([]byte(code), []byte(dbCode.Code)) != 1 {
-		_ = h.Queries.IncrementVerificationCodeAttempts(r.Context(), dbCode.ID)
-		writeError(w, http.StatusBadRequest, "invalid or expired code")
-		return
-	}
-
-	if err := h.Queries.MarkVerificationCodeUsed(r.Context(), dbCode.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to verify code")
-		return
-	}
-
-	user, err := h.findOrCreateUser(r.Context(), email)
+	user, err := h.findOrCreateUser(r.Context(), email, identity.Name, identity.PictureURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create user")
 		return
@@ -330,7 +282,7 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 
 	tokenString, err := h.issueJWT(user)
 	if err != nil {
-		slog.Warn("login failed", append(logger.RequestAttrs(r), "error", err, "email", req.Email)...)
+		slog.Warn("login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
@@ -343,6 +295,53 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("user logged in", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	writeJSON(w, http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  userToResponse(user),
+	})
+}
+
+// LoginDev issues a JWT for an arbitrary email/name without verifying any
+// identity provider. It is gated by the DEV_AUTH_BYPASS env flag so it cannot
+// be enabled in production. Used by the docker-compose dev seed script and the
+// E2E test suite to bootstrap a local user without provisioning Firebase.
+func (h *Handler) LoginDev(w http.ResponseWriter, r *http.Request) {
+	if !devAuthBypassEnabled() {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	var req DevLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	user, err := h.findOrCreateUser(r.Context(), email, strings.TrimSpace(req.Name), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	if err := h.ensureUserWorkspace(r.Context(), user); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to provision workspace")
+		return
+	}
+
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		slog.Warn("dev login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	slog.Info("dev login", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
 		User:  userToResponse(user),

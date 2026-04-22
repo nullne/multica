@@ -99,8 +99,11 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, branchName, sessionID, workDir string) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branchName, sessionID, workDir string) error {
 	body := map[string]any{"output": output}
+	if prURL != "" {
+		body["pr_url"] = prURL
+	}
 	if branchName != "" {
 		body["branch_name"] = branchName
 	}
@@ -139,9 +142,11 @@ func (c *Client) ReportUsage(ctx context.Context, runtimeID string, entries []ma
 
 // HeartbeatResponse contains the server's response to a heartbeat, including any pending actions.
 type HeartbeatResponse struct {
-	Status        string         `json:"status"`
-	PendingPing   *PendingPing   `json:"pending_ping,omitempty"`
-	PendingUpdate *PendingUpdate `json:"pending_update,omitempty"`
+	Status         string                       `json:"status"`
+	PendingPing    *PendingPing                 `json:"pending_ping,omitempty"`
+	PendingUpdate  *PendingUpdate               `json:"pending_update,omitempty"`    // legacy single update
+	PendingUpdates []PendingUpdate              `json:"pending_updates,omitempty"`   // daemon-level batch
+	ProviderConfig map[string]ProviderConfig    `json:"provider_config,omitempty"`
 }
 
 // PendingPing represents a ping test request from the server.
@@ -152,9 +157,24 @@ type PendingPing struct {
 // PendingUpdate represents a CLI update request from the server.
 type PendingUpdate struct {
 	ID            string `json:"id"`
+	Target        string `json:"target"`         // "multica", "claude", "codex", etc.
 	TargetVersion string `json:"target_version"`
 }
 
+// SendDaemonHeartbeat sends a single heartbeat for the daemon (covers all runtimes).
+func (c *Client) SendDaemonHeartbeat(ctx context.Context, daemonUUID string, authStatuses map[string]string) (*HeartbeatResponse, error) {
+	var resp HeartbeatResponse
+	body := map[string]any{"daemon_id": daemonUUID}
+	if len(authStatuses) > 0 {
+		body["auth_statuses"] = authStatuses
+	}
+	if err := c.postJSON(ctx, "/api/daemon/heartbeat", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// SendHeartbeat sends a per-runtime heartbeat (legacy).
 func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
 	var resp HeartbeatResponse
 	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]string{
@@ -189,16 +209,42 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
 	return workspaces, nil
 }
 
+// DeregisterDaemon marks a daemon and all its runtimes as offline.
+func (c *Client) DeregisterDaemon(ctx context.Context, daemonUUID string) error {
+	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
+		"daemon_id": daemonUUID,
+	}, nil)
+}
+
+// Deregister marks runtimes as offline (legacy per-runtime path).
 func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
 	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
 		"runtime_ids": runtimeIDs,
 	}, nil)
 }
 
+// ProviderConfig holds workspace-level provider configuration from the server.
+type ProviderConfig struct {
+	Enabled       bool   `json:"enabled"`
+	APIKey        string `json:"api_key,omitempty"`
+	TargetVersion string `json:"target_version,omitempty"`
+}
+
+// DaemonInfo holds the server-assigned daemon entity returned on registration.
+type DaemonInfo struct {
+	ID         string `json:"id"`
+	DaemonID   string `json:"daemon_id"`
+	Status     string `json:"status"`
+	CLIVersion string `json:"cli_version"`
+}
+
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
-	Runtimes []Runtime  `json:"runtimes"`
-	Repos    []RepoData `json:"repos"`
+	Daemon               *DaemonInfo                `json:"daemon,omitempty"`
+	Runtimes             []Runtime                  `json:"runtimes"`
+	Repos                []RepoData                 `json:"repos"`
+	ProviderConfig       map[string]ProviderConfig  `json:"provider_config,omitempty"`
+	MulticaTargetVersion string                     `json:"multica_target_version,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {

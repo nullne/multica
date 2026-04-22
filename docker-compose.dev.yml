@@ -1,0 +1,137 @@
+name: multica-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: multica_dev
+      POSTGRES_USER: multica
+      POSTGRES_PASSWORD: multica
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U multica -d multica_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  migrate:
+    image: golang:1.26-alpine
+    working_dir: /app/server
+    command: ["go", "run", "./cmd/migrate", "up"]
+    environment:
+      DATABASE_URL: postgres://multica:multica@postgres:5432/multica_dev?sslmode=disable
+    volumes:
+      - ./server:/app/server
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    image: golang:1.26-alpine
+    working_dir: /app/server
+    command: ["sh", "-c", "go install github.com/air-verse/air@latest && air"]
+    environment:
+      DATABASE_URL: postgres://multica:multica@postgres:5432/multica_dev?sslmode=disable
+      PORT: "8080"
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      FRONTEND_ORIGIN: http://localhost:${FRONTEND_PORT:-3000}
+      CORS_ALLOWED_ORIGINS: http://localhost:${FRONTEND_PORT:-3000}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      # Enables the /auth/dev bypass used by seed-dev.sh and E2E tests.
+      DEV_AUTH_BYPASS: "1"
+      # Optional: set FIREBASE_PROJECT_ID in .env to also enable Google login
+      # in dev. Leave empty to use only the /auth/dev bypass.
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+      ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
+    ports:
+      - "${PORT:-8080}:8080"
+    volumes:
+      - ./server:/app/server
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8080"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+      start_period: 60s
+
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev:web"]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:${PORT:-8080}
+      NEXT_PUBLIC_WS_URL: ws://localhost:${PORT:-8080}/ws
+      NEXT_PUBLIC_DEV_EMAIL: ${SEED_EMAIL:-dev@multica.local}
+      # Optional: set NEXT_PUBLIC_FIREBASE_* in .env to also enable Google
+      # login in dev. The login page shows both buttons when both are set.
+      NEXT_PUBLIC_FIREBASE_API_KEY: ${NEXT_PUBLIC_FIREBASE_API_KEY:-}
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-}
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}
+      NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:-}
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:-}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+      - web_next:/app/apps/web/.next
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  seed:
+    image: alpine:3.21
+    command: ["sh", "/scripts/seed-dev.sh"]
+    environment:
+      API_URL: http://backend:8080
+      SEED_EMAIL: ${SEED_EMAIL:-dev@multica.local}
+      no_proxy: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+      NO_PROXY: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+    volumes:
+      - ./scripts:/scripts:ro
+      - daemon-config:/root/.multica
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  daemon:
+    image: golang:1.26-bookworm
+    working_dir: /app/server
+    command: >
+      sh -c "apt-get update && apt-get install -y --no-install-recommends nodejs npm bubblewrap curl > /dev/null 2>&1 &&
+             export PATH=\"$$HOME/.local/bin:$$PATH\" &&
+             go build -o /usr/local/bin/multica ./cmd/multica &&
+             multica daemon start --foreground"
+    environment:
+      MULTICA_SERVER_URL: http://backend:8080
+      MULTICA_DAEMON_ID: dev-daemon
+      IS_SANDBOX: "1"
+      CLAUDE_CODE_BUBBLEWRAP: "1"
+      CURSOR_API_KEY: ${CURSOR_API_KEY:-}
+      no_proxy: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+      NO_PROXY: backend,postgres,migrate,seed,daemon,frontend,localhost,127.0.0.1
+    volumes:
+      - ./server:/app/server
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - daemon-config:/root/.multica
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  go-mod-cache:
+  go-build-cache:
+  node_modules:
+  web_next:
+  daemon-config:

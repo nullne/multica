@@ -68,22 +68,42 @@ All configuration is done via environment variables. Copy `.env.example` as a st
 | `JWT_SECRET` | **Must change from default.** Secret key for signing JWT tokens. Use a long random string. | `openssl rand -hex 32` |
 | `FRONTEND_ORIGIN` | URL where the frontend is served (used for CORS) | `https://app.example.com` |
 
-### Email (Required for Authentication)
+### Firebase Google Auth
 
-Multica uses email-based magic link authentication via [Resend](https://resend.com).
-
-| Variable | Description |
-|----------|-------------|
-| `RESEND_API_KEY` | Your Resend API key |
-| `RESEND_FROM_EMAIL` | Sender email address (default: `noreply@multica.ai`) |
-
-### Google OAuth (Optional)
+Multica signs users in with Firebase Google authentication. Configure both the
+server-side project ID and the public Firebase app settings used by the web UI.
 
 | Variable | Description |
 |----------|-------------|
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `GOOGLE_REDIRECT_URI` | OAuth callback URL (e.g. `https://app.example.com/auth/callback`) |
+| `FIREBASE_PROJECT_ID` | Firebase project ID used to verify Google ID tokens on the server |
+| `NEXT_PUBLIC_FIREBASE_API_KEY` | Firebase web app API key |
+| `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` | Firebase auth domain (for example `your-project.firebaseapp.com`) |
+| `NEXT_PUBLIC_FIREBASE_PROJECT_ID` | Firebase project ID exposed to the web app |
+| `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase web app ID |
+| `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Firebase sender ID for the web app |
+
+> **Important — `NEXT_PUBLIC_*` variables are baked in at build time.**
+> Next.js inlines `NEXT_PUBLIC_*` values into the client JavaScript bundle
+> when the frontend image is built. Setting them at runtime in
+> `docker-compose.prod.yml` has no effect on the browser code.
+>
+> The published `ghcr.io/nullne/multica/frontend` image is built with the
+> Multica Cloud Firebase project. To self-host with **your own** Firebase
+> project you must rebuild the frontend image locally:
+>
+> ```bash
+> docker build -f apps/web/Dockerfile -t my-multica-frontend:latest \
+>   --build-arg NEXT_PUBLIC_FIREBASE_API_KEY=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_PROJECT_ID=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_APP_ID=... \
+>   --build-arg NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=... \
+>   .
+> ```
+>
+> Then point `docker-compose.prod.yml` at your locally-built image. The
+> server-side `FIREBASE_PROJECT_ID` is read at runtime and does not require
+> a rebuild.
 
 ### File Storage (Optional)
 

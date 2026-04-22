@@ -71,6 +71,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		cfg:                  b.cfg,
 		stdin:                stdin,
 		pending:              make(map[int]*pendingRPC),
+		pendingCommands:      make(map[string]string),
 		notificationProtocol: "unknown",
 		onMessage: func(msg Message) {
 			if msg.Type == MessageText {
@@ -247,6 +248,10 @@ type codexClient struct {
 	notificationProtocol string // "unknown", "legacy", "raw"
 	turnStarted          bool
 	completedTurnIDs     map[string]bool
+	// pendingCommands maps itemId → command string captured from
+	// item/commandExecution/requestApproval, which is the only place
+	// Codex includes the raw command text in the raw v2 protocol.
+	pendingCommands map[string]string
 }
 
 type pendingRPC struct {
@@ -396,7 +401,23 @@ func (c *codexClient) handleServerRequest(raw map[string]json.RawMessage) {
 
 	// Auto-approve all exec/patch requests in daemon mode
 	switch method {
-	case "item/commandExecution/requestApproval", "execCommandApproval":
+	case "item/commandExecution/requestApproval":
+		// The raw v2 protocol only includes the command text in the approval
+		// request params, not in the subsequent item/started notification.
+		// Capture it here so we can attach it to the tool_use message later.
+		var params map[string]any
+		if p, ok := raw["params"]; ok {
+			_ = json.Unmarshal(p, &params)
+		}
+		if itemID, _ := params["itemId"].(string); itemID != "" {
+			if command, _ := params["command"].(string); command != "" {
+				c.mu.Lock()
+				c.pendingCommands[itemID] = command
+				c.mu.Unlock()
+			}
+		}
+		c.respond(id, map[string]any{"decision": "accept"})
+	case "execCommandApproval":
 		c.respond(id, map[string]any{"decision": "accept"})
 	case "item/fileChange/requestApproval", "applyPatchApproval":
 		c.respond(id, map[string]any{"decision": "accept"})
@@ -565,7 +586,15 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 
 	switch {
 	case method == "item/started" && itemType == "commandExecution":
-		command, _ := item["command"].(string)
+		// Prefer the command captured from the approval request; fall back to
+		// item["command"] for any Codex versions that do include it directly.
+		c.mu.Lock()
+		command := c.pendingCommands[itemID]
+		delete(c.pendingCommands, itemID)
+		c.mu.Unlock()
+		if command == "" {
+			command, _ = item["command"].(string)
+		}
 		if c.onMessage != nil {
 			c.onMessage(Message{
 				Type:   MessageToolUse,

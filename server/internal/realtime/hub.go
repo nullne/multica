@@ -209,6 +209,45 @@ func (h *Hub) SendToUser(userID string, message []byte, excludeWorkspace ...stri
 	}
 }
 
+// SendToUserInWorkspace sends a message to all connections belonging to a
+// specific user within a specific workspace room only.
+func (h *Hub) SendToUserInWorkspace(userID, workspaceID string, message []byte) {
+	h.mu.RLock()
+	clients := h.rooms[workspaceID]
+	var targets []*Client
+	for client := range clients {
+		if client.userID == userID {
+			targets = append(targets, client)
+		}
+	}
+	h.mu.RUnlock()
+
+	var slow []*Client
+	for _, client := range targets {
+		select {
+		case client.send <- message:
+		default:
+			slow = append(slow, client)
+		}
+	}
+
+	if len(slow) > 0 {
+		h.mu.Lock()
+		for _, client := range slow {
+			if room, ok := h.rooms[workspaceID]; ok {
+				if _, exists := room[client]; exists {
+					delete(room, client)
+					close(client.send)
+					if len(room) == 0 {
+						delete(h.rooms, workspaceID)
+					}
+				}
+			}
+		}
+		h.mu.Unlock()
+	}
+}
+
 // Broadcast sends a message to all connected clients (used for daemon events).
 func (h *Hub) Broadcast(message []byte) {
 	h.broadcast <- message

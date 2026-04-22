@@ -108,30 +108,40 @@ Assignees are polymorphic — can be a member or an agent. `assignee_type` + `as
 
 ## Commands
 
+Run `make` (no arguments) to see all available targets.
+
 ```bash
-# One-click setup & run
-make setup            # First-time: ensure shared DB, create app DB, migrate
-make start            # Start backend + frontend together
-make stop             # Stop app processes for the current checkout
-make db-down          # Stop the shared PostgreSQL container
+# Lifecycle
+make setup            # First-time: install deps, start DB, run migrations
+make dev              # Start full dev environment via Docker (no local toolchain needed)
+make dev-local        # Start dev locally (requires Go + Node)
+make up               # Start production-like services via Docker
+make down             # Stop all services
+make clean            # Stop services and destroy ALL local state
+make logs             # Stream production service logs
 
-# Frontend
-pnpm install
-pnpm dev:web          # Next.js dev server (port 3000)
-pnpm build            # Build frontend
-pnpm typecheck        # TypeScript check
-pnpm lint             # ESLint via Next.js
-pnpm test             # TS tests (Vitest)
+# Testing (all targets run inside Docker — no exposed ports, safe for parallel runs)
+make test             # Run full test suite (typecheck + TS + Go + E2E)
+make test-go          # Go tests only
+make test-ts          # TypeScript tests only (Vitest)
+make test-e2e         # E2E tests only
+make check            # TypeScript typecheck only
 
-# Backend (Go)
-make dev              # Run Go server (port 8080)
-make daemon           # Run local daemon
-make build            # Build server + CLI binaries to server/bin/
+# Build
+make build            # Build all services
+make build-backend    # Build Go server + CLI binaries to server/bin/
+make build-frontend   # Build frontend Docker image
+
+# CLI & Daemon
+make daemon           # Start local agent daemon
 make cli ARGS="..."   # Run multica CLI (e.g. make cli ARGS="config")
-make test             # Go tests
-make sqlc             # Regenerate sqlc code after editing SQL in server/pkg/db/queries/
+
+# Database
+make db-up            # Start shared PostgreSQL (pgvector/pg17 image)
+make db-down          # Stop shared PostgreSQL
 make migrate-up       # Run database migrations
 make migrate-down     # Rollback migrations
+make sqlc             # Regenerate sqlc code after editing SQL in server/pkg/db/queries/
 
 # Run a single Go test
 cd server && go test ./internal/handler/ -run TestName
@@ -141,25 +151,11 @@ pnpm --filter @multica/web exec vitest run src/path/to/file.test.ts
 
 # Run a single E2E test (requires backend + frontend running)
 pnpm exec playwright test e2e/tests/specific-test.spec.ts
-
-# Infrastructure
-make db-up            # Start shared PostgreSQL (pgvector/pg17 image)
-make db-down          # Stop shared PostgreSQL
 ```
 
 ### CI Requirements
 
 CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.
-
-### Worktree Support
-
-All checkouts share one PostgreSQL container. Isolation is at the database level — each worktree gets its own DB name and unique ports via `.env.worktree`. Main checkouts use `.env`.
-
-```bash
-make worktree-env       # Generate .env.worktree with unique DB/ports
-make setup-worktree     # Setup using .env.worktree
-make start-worktree     # Start using .env.worktree
-```
 
 ## Coding Rules
 
@@ -197,30 +193,36 @@ make start-worktree     # Start using .env.worktree
   - `test(scope): ...`
   - `chore(scope): ...`
 
-## CLI Release
+## Release & Production Deploy
 
-**Prerequisite:** A CLI release must accompany every Production deployment. When deploying to Production, always release a new CLI version as part of the process.
+Pushing a `v*` tag on `main` is the single action that ships a release **and** deploys it to production. There is no separate manual deploy step.
 
 1. Create a tag on the `main` branch: `git tag v0.x.x`
 2. Push the tag: `git push origin v0.x.x`
-3. GitHub Actions automatically triggers `release.yml`: runs Go tests → GoReleaser builds multi-platform binaries → publishes to GitHub Releases + Homebrew tap
+3. GitHub Actions runs `release.yml`, which:
+   - Runs Go tests
+   - GoReleaser builds multi-platform binaries → publishes to GitHub Releases + Homebrew tap
+   - Builds and pushes backend + frontend Docker images to ghcr.io
+   - Calls `deploy.yml` to deploy that exact tag to the `prod` environment
 
 By default, bump the patch version each release (e.g. `v0.1.12` → `v0.1.13`), unless the user specifies a specific version.
+
+`deploy.yml` is still runnable manually via "Run workflow" for one-off needs (rollback to an older tag, redeploy without rebuilding, or `clean: true` to wipe the database and start fresh).
 
 ## Minimum Pre-Push Checks
 
 ```bash
-make check    # Runs all checks: typecheck, unit tests, Go tests, E2E
+make test     # Runs all checks: typecheck, unit tests, Go tests, E2E
 ```
 
 Run verification only when the user explicitly asks for it.
 
 For targeted checks when requested:
 ```bash
-pnpm typecheck        # TypeScript type errors only
-pnpm test             # TS unit tests only (Vitest)
-make test             # Go tests only
-pnpm exec playwright test   # E2E only (requires backend + frontend running)
+make check            # TypeScript typecheck only
+make test-ts          # TS unit tests only (Vitest)
+make test-go          # Go tests only
+make test-e2e         # E2E only
 ```
 
 ## AI Agent Verification Loop
@@ -228,14 +230,14 @@ pnpm exec playwright test   # E2E only (requires backend + frontend running)
 After writing or modifying code, always run the full verification pipeline:
 
 ```bash
-make check
+make test
 ```
 
-This runs all checks in sequence:
-1. TypeScript typecheck (`pnpm typecheck`)
-2. TypeScript unit tests (`pnpm test`)
-3. Go tests (`go test ./...`)
-4. E2E tests (auto-starts backend + frontend if needed, runs Playwright)
+This runs all checks in sequence inside Docker (no exposed ports, safe for parallel runs):
+1. TypeScript typecheck
+2. TypeScript unit tests (Vitest)
+3. Go tests
+4. E2E tests (Playwright)
 
 **Workflow:**
 - Write code to satisfy the requirement

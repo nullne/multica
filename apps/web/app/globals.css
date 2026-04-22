@@ -157,8 +157,25 @@
   *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
   body {
     @apply bg-background text-foreground;
+    min-height: 100dvh;
+    overscroll-behavior: none;
   }
   html {
     @apply font-sans;
+    min-height: 100%;
+  }
+  body,
+  #__next {
+    min-height: 100%;
+  }
+}
+
+@media (display-mode: standalone) {
+  body {
+    overflow: hidden;
+    padding-top: env(safe-area-inset-top);
+    padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
   }
 }

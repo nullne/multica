@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -113,7 +115,7 @@ func runAgentList(cmd *cobra.Command, _ []string) error {
 		return cli.PrintJSON(os.Stdout, agents)
 	}
 
-	headers := []string{"ID", "NAME", "STATUS", "RUNTIME"}
+	headers := []string{"ID", "NAME", "STATUS", "RUNTIME", "SKILLS"}
 	rows := make([][]string, 0, len(agents))
 	for _, a := range agents {
 		rows = append(rows, []string{
@@ -121,10 +123,45 @@ func runAgentList(cmd *cobra.Command, _ []string) error {
 			strVal(a, "name"),
 			strVal(a, "status"),
 			strVal(a, "runtime_mode"),
+			formatSkillsSummary(a["skills"]),
 		})
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
 	return nil
+}
+
+// formatSkillsSummary renders the agent's skills column for the list table as
+// a comma-separated "name(idShort)" list, truncated to keep the row readable.
+func formatSkillsSummary(raw any) string {
+	skills, ok := raw.([]any)
+	if !ok || len(skills) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(skills))
+	for _, item := range skills {
+		s, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := strVal(s, "name")
+		id := strVal(s, "id")
+		switch {
+		case name != "" && id != "":
+			parts = append(parts, fmt.Sprintf("%s(%s)", name, truncateID(id)))
+		case name != "":
+			parts = append(parts, name)
+		case id != "":
+			parts = append(parts, truncateID(id))
+		}
+	}
+
+	out := strings.Join(parts, ", ")
+	if utf8.RuneCountInString(out) > 60 {
+		runes := []rune(out)
+		out = string(runes[:57]) + "..."
+	}
+	return out
 }
 
 func strVal(m map[string]any, key string) string {

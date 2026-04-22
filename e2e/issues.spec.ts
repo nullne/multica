@@ -7,7 +7,7 @@ test.describe("Issues", () => {
 
   test.beforeEach(async ({ page }) => {
     api = await createTestApi();
-    await loginAsDefault(page);
+    await loginAsDefault(page, api);
   });
 
   test.afterEach(async () => {

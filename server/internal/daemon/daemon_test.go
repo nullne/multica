@@ -125,3 +125,36 @@ func TestIsWorkspaceNotFoundError(t *testing.T) {
 		t.Fatal("did not expect 500 to be treated as workspace not found")
 	}
 }
+
+func TestExtractPRURL(t *testing.T) {
+	t.Parallel()
+
+	text := "Implemented the fix.\nPR: https://github.com/acme/demo/pull/42\nPlease review."
+	got := extractPRURL(text)
+	if got != "https://github.com/acme/demo/pull/42" {
+		t.Fatalf("unexpected PR URL: %q", got)
+	}
+
+	if url := extractPRURL("No pull request yet."); url != "" {
+		t.Fatalf("expected no PR URL, got %q", url)
+	}
+}
+
+func TestTaskBranchTracking(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{taskBranches: make(map[string]string)}
+	d.rememberTaskBranch("task-1", "agent/codex/abc12345")
+	if got := d.consumeTaskBranch("task-1"); got != "agent/codex/abc12345" {
+		t.Fatalf("unexpected consumed branch: %q", got)
+	}
+	if got := d.consumeTaskBranch("task-1"); got != "" {
+		t.Fatalf("expected branch to be cleared, got %q", got)
+	}
+
+	d.rememberTaskBranch("task-2", "agent/codex/def67890")
+	d.clearTaskBranch("task-2")
+	if got := d.consumeTaskBranch("task-2"); got != "" {
+		t.Fatalf("expected cleared branch, got %q", got)
+	}
+}

@@ -53,6 +53,11 @@ const (
 	// Activity events
 	EventActivityCreated = "activity:created"
 
+	// Label events
+	EventLabelCreated = "label:created"
+	EventLabelUpdated = "label:updated"
+	EventLabelDeleted = "label:deleted"
+
 	// Skill events
 	EventSkillCreated = "skill:created"
 	EventSkillUpdated = "skill:updated"

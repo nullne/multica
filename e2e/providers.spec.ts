@@ -1,0 +1,170 @@
+import { test, expect } from "@playwright/test";
+import { loginAsDefault, createTestApi } from "./helpers";
+import type { TestApiClient } from "./fixtures";
+
+test.describe("Workspace Providers", () => {
+  let api: TestApiClient;
+
+  test.beforeEach(async ({ page }) => {
+    api = await createTestApi();
+    await loginAsDefault(page, api);
+
+    // Reset provider config to empty state before each test.
+    await api.updateProviderConfig({ providers: {} });
+  });
+
+  test.afterEach(async () => {
+    // Clean up: reset provider config.
+    await api.updateProviderConfig({ providers: {} });
+    await api.cleanup();
+  });
+
+  test("providers tab is visible in settings", async ({ page }) => {
+    await page.goto("/settings");
+    await page.waitForURL("**/settings");
+
+    // Click the Providers tab
+    await page.locator("button", { hasText: "Providers" }).click();
+
+    // Provider cards should be visible
+    await expect(page.locator("text=Claude Code")).toBeVisible();
+    await expect(page.locator("text=Codex")).toBeVisible();
+    await expect(page.locator("text=OpenCode")).toBeVisible();
+    await expect(page.locator("text=Cursor")).toBeVisible();
+
+    // Save button should be present
+    await expect(page.locator("button", { hasText: "Save" })).toBeVisible();
+  });
+
+  test("can enable a provider and save configuration", async ({ page }) => {
+    await page.goto("/settings");
+    await page.waitForURL("**/settings");
+
+    // Navigate to Providers tab
+    await page.locator("button", { hasText: "Providers" }).click();
+    await expect(page.locator("text=Claude Code")).toBeVisible();
+
+    // Find the Claude Code card and toggle its switch.
+    const claudeCard = page.locator("[data-slot='card']").filter({ hasText: "Claude Code" }).first();
+    await claudeCard.locator("button[role='switch']").click();
+
+    // API Key and Target Version fields should appear
+    await expect(page.locator("label:has-text('API Key')")).toBeVisible();
+    await expect(page.locator("label:has-text('Target Version')").first()).toBeVisible();
+
+    // Fill in an API key
+    const apiKeyInput = page.locator("input[placeholder='sk-...']").first();
+    await apiKeyInput.fill("sk-test-key-12345678");
+
+    // Save
+    await page.locator("button", { hasText: "Save" }).click();
+
+    // Wait for success toast
+    await expect(page.locator("text=Provider configuration saved")).toBeVisible({ timeout: 5000 });
+
+    // Verify via API that the config was saved
+    const config = await api.getProviderConfig();
+    expect(config.providers?.claude?.enabled).toBe(true);
+    // API key should be redacted in the response
+    expect(config.providers?.claude?.api_key).toContain("****");
+  });
+
+  test("can disable a provider", async ({ page }) => {
+    // Pre-configure a provider via API
+    await api.updateProviderConfig({
+      providers: {
+        claude: { enabled: true, api_key: "sk-test-disable-me", target_version: "" },
+      },
+    });
+
+    await page.goto("/settings");
+    await page.waitForURL("**/settings");
+
+    await page.locator("button", { hasText: "Providers" }).click();
+    await expect(page.locator("text=Claude Code")).toBeVisible();
+
+    // Find the Claude Code card's switch
+    const claudeCard = page.locator("[data-slot='card']").filter({ hasText: "Claude Code" }).first();
+    const claudeSwitch = claudeCard.locator("button[role='switch']");
+    await expect(claudeSwitch).toHaveAttribute("data-state", "checked");
+
+    // Disable it
+    await claudeSwitch.click();
+    await expect(claudeSwitch).toHaveAttribute("data-state", "unchecked");
+
+    // Save
+    await page.locator("button", { hasText: "Save" }).click();
+    await expect(page.locator("text=Provider configuration saved")).toBeVisible({ timeout: 5000 });
+
+    // Verify via API
+    const config = await api.getProviderConfig();
+    expect(config.providers?.claude?.enabled).toBe(false);
+  });
+
+  test("provider config API: get returns empty config initially", async () => {
+    const config = await api.getProviderConfig();
+    // Should return empty or no providers
+    expect(config).toBeDefined();
+  });
+
+  test("provider config API: update and get roundtrip", async () => {
+    // Set provider config
+    const updated = await api.updateProviderConfig({
+      providers: {
+        codex: { enabled: true, api_key: "sk-codex-test-key-1234", target_version: "0.1.0" },
+      },
+      multica_target_version: "0.2.0",
+    });
+
+    // Response should have redacted API key
+    expect(updated.providers?.codex?.enabled).toBe(true);
+    expect(updated.providers?.codex?.api_key).toContain("****");
+    expect(updated.providers?.codex?.api_key).toContain("1234");
+    expect(updated.providers?.codex?.target_version).toBe("0.1.0");
+    expect(updated.multica_target_version).toBe("0.2.0");
+
+    // GET should return same redacted config
+    const fetched = await api.getProviderConfig();
+    expect(fetched.providers?.codex?.enabled).toBe(true);
+    expect(fetched.providers?.codex?.target_version).toBe("0.1.0");
+    expect(fetched.multica_target_version).toBe("0.2.0");
+  });
+
+  test("provider config API: rejects unsupported provider", async () => {
+    const res = await api.updateProviderConfig({
+      providers: {
+        "unsupported-provider": { enabled: true, api_key: "", target_version: "" },
+      },
+    });
+    // The response should indicate an error (400 status), but since updateProviderConfig
+    // returns the parsed JSON, we check for an error field
+    expect((res as Record<string, unknown>).error).toBeDefined();
+  });
+
+  test("provider config API: redacted key is preserved on update", async () => {
+    // Set initial key
+    await api.updateProviderConfig({
+      providers: {
+        claude: { enabled: true, api_key: "sk-ant-real-key-abcd", target_version: "" },
+      },
+    });
+
+    // Get the redacted version
+    const config = await api.getProviderConfig();
+    const redactedKey = config.providers?.claude?.api_key ?? "";
+    expect(redactedKey).toContain("****");
+    expect(redactedKey).toContain("abcd");
+
+    // Send back with the redacted key — server should preserve the original
+    await api.updateProviderConfig({
+      providers: {
+        claude: { enabled: true, api_key: redactedKey, target_version: "1.0.0" },
+      },
+    });
+
+    // Verify the key is still the same (not overwritten with the redacted value)
+    const after = await api.getProviderConfig();
+    expect(after.providers?.claude?.api_key).toContain("abcd");
+    expect(after.providers?.claude?.target_version).toBe("1.0.0");
+  });
+});

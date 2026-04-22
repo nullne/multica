@@ -18,27 +18,35 @@ import (
 
 // IssueResponse is the JSON response for an issue.
 type IssueResponse struct {
-	ID                 string                  `json:"id"`
-	WorkspaceID        string                  `json:"workspace_id"`
-	Number             int32                   `json:"number"`
-	Identifier         string                  `json:"identifier"`
-	Title              string                  `json:"title"`
-	Description        *string                 `json:"description"`
-	Status             string                  `json:"status"`
-	Priority           string                  `json:"priority"`
-	AssigneeType       *string                 `json:"assignee_type"`
-	AssigneeID         *string                 `json:"assignee_id"`
-	VerifierAgentID    *string                 `json:"verifier_agent_id"`
-	CreatorType        string                  `json:"creator_type"`
-	CreatorID          string                  `json:"creator_id"`
-	ParentIssueID      *string                 `json:"parent_issue_id"`
-	AcceptanceCriteria []any                   `json:"acceptance_criteria"`
-	Position           float64                 `json:"position"`
-	DueDate            *string                 `json:"due_date"`
-	CreatedAt          string                  `json:"created_at"`
-	UpdatedAt          string                  `json:"updated_at"`
-	Reactions          []IssueReactionResponse `json:"reactions,omitempty"`
-	Attachments        []AttachmentResponse    `json:"attachments,omitempty"`
+	ID                    string                  `json:"id"`
+	WorkspaceID           string                  `json:"workspace_id"`
+	Number                int32                   `json:"number"`
+	Identifier            string                  `json:"identifier"`
+	Title                 string                  `json:"title"`
+	Description           *string                 `json:"description"`
+	LinkedBranch          *string                 `json:"linked_branch"`
+	LinkedPRURL           *string                 `json:"linked_pr_url"`
+	Status                string                  `json:"status"`
+	Priority              string                  `json:"priority"`
+	AssigneeType          *string                 `json:"assignee_type"`
+	AssigneeID            *string                 `json:"assignee_id"`
+	VerifierAgentID       *string                 `json:"verifier_agent_id"`
+	MaxVerificationRounds *int32                  `json:"max_verification_rounds"`
+	CreatorType           string                  `json:"creator_type"`
+	CreatorID             string                  `json:"creator_id"`
+	ParentIssueID         *string                 `json:"parent_issue_id"`
+	AcceptanceCriteria    []any                   `json:"acceptance_criteria"`
+	CriteriaStatus        *string                 `json:"criteria_status"`
+	Position              float64                 `json:"position"`
+	DueDate               *string                 `json:"due_date"`
+	DispatchProvider      *string                 `json:"dispatch_provider"`
+	DispatchDaemonID      *string                 `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
+	CreatedAt             string                  `json:"created_at"`
+	UpdatedAt             string                  `json:"updated_at"`
+	Labels                []LabelResponse         `json:"labels"`
+	Reactions             []IssueReactionResponse `json:"reactions,omitempty"`
+	Attachments           []AttachmentResponse    `json:"attachments,omitempty"`
 }
 
 type agentTriggerSnapshot struct {
@@ -66,26 +74,38 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 			acceptanceCriteria = []any{}
 		}
 	}
+	var maxRounds *int32
+	if i.MaxVerificationRounds.Valid {
+		maxRounds = &i.MaxVerificationRounds.Int32
+	}
 	return IssueResponse{
-		ID:                 uuidToString(i.ID),
-		WorkspaceID:        uuidToString(i.WorkspaceID),
-		Number:             i.Number,
-		Identifier:         identifier,
-		Title:              i.Title,
-		Description:        textToPtr(i.Description),
-		Status:             i.Status,
-		Priority:           i.Priority,
-		AssigneeType:       textToPtr(i.AssigneeType),
-		AssigneeID:         uuidToPtr(i.AssigneeID),
-		VerifierAgentID:    uuidToPtr(i.VerifierAgentID),
-		CreatorType:        i.CreatorType,
-		CreatorID:          uuidToString(i.CreatorID),
-		ParentIssueID:      uuidToPtr(i.ParentIssueID),
-		AcceptanceCriteria: acceptanceCriteria,
-		Position:           i.Position,
-		DueDate:            timestampToPtr(i.DueDate),
-		CreatedAt:          timestampToString(i.CreatedAt),
-		UpdatedAt:          timestampToString(i.UpdatedAt),
+		ID:                    uuidToString(i.ID),
+		WorkspaceID:           uuidToString(i.WorkspaceID),
+		Number:                i.Number,
+		Identifier:            identifier,
+		Title:                 i.Title,
+		Description:           textToPtr(i.Description),
+		LinkedBranch:          textToPtr(i.LinkedBranch),
+		LinkedPRURL:           textToPtr(i.LinkedPrUrl),
+		Status:                i.Status,
+		Priority:              i.Priority,
+		AssigneeType:          textToPtr(i.AssigneeType),
+		AssigneeID:            uuidToPtr(i.AssigneeID),
+		VerifierAgentID:       uuidToPtr(i.VerifierAgentID),
+		MaxVerificationRounds: maxRounds,
+		CreatorType:           i.CreatorType,
+		CreatorID:             uuidToString(i.CreatorID),
+		ParentIssueID:         uuidToPtr(i.ParentIssueID),
+		AcceptanceCriteria:    acceptanceCriteria,
+		CriteriaStatus:        textToPtr(i.CriteriaStatus),
+		Position:              i.Position,
+		DueDate:               timestampToPtr(i.DueDate),
+		DispatchProvider:      textToPtr(i.DispatchProvider),
+		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
+		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
+		Labels:                []LabelResponse{},
+		CreatedAt:             timestampToString(i.CreatedAt),
+		UpdatedAt:             timestampToString(i.UpdatedAt),
 	}
 }
 
@@ -140,6 +160,32 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		resp[i] = issueToResponse(issue, prefix)
 	}
 
+	// Batch-fetch labels for all issues.
+	if len(issues) > 0 {
+		issueIDs := make([]pgtype.UUID, len(issues))
+		for i, issue := range issues {
+			issueIDs[i] = issue.ID
+		}
+		labelRows, err := h.Queries.ListLabelsForIssues(ctx, issueIDs)
+		if err == nil {
+			labelMap := make(map[string][]LabelResponse)
+			for _, row := range labelRows {
+				iid := uuidToString(row.IssueID)
+				labelMap[iid] = append(labelMap[iid], LabelResponse{
+					ID:          uuidToString(row.ID),
+					WorkspaceID: uuidToString(row.WorkspaceID),
+					Name:        row.Name,
+					Color:       row.Color,
+				})
+			}
+			for i := range resp {
+				if labels, ok := labelMap[resp[i].ID]; ok {
+					resp[i].Labels = labels
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issues": resp,
 		"total":  len(resp),
@@ -154,6 +200,15 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
+
+	// Fetch issue labels.
+	labels, err := h.Queries.ListLabelsForIssue(r.Context(), issue.ID)
+	if err == nil && len(labels) > 0 {
+		resp.Labels = make([]LabelResponse, len(labels))
+		for i, l := range labels {
+			resp.Labels[i] = labelToResponse(l)
+		}
+	}
 
 	// Fetch issue reactions.
 	reactions, err := h.Queries.ListIssueReactions(r.Context(), issue.ID)
@@ -180,26 +235,25 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateIssueRequest struct {
-	Title           string  `json:"title"`
-	Description     *string `json:"description"`
-	Status          string  `json:"status"`
-	Priority        string  `json:"priority"`
-	AssigneeType    *string `json:"assignee_type"`
-	AssigneeID      *string `json:"assignee_id"`
-	VerifierAgentID *string `json:"verifier_agent_id"`
-	ParentIssueID   *string `json:"parent_issue_id"`
-	DueDate         *string `json:"due_date"`
+	Title                 string            `json:"title"`
+	Description           *string           `json:"description"`
+	Status                string            `json:"status"`
+	Priority              string            `json:"priority"`
+	AssigneeType          *string           `json:"assignee_type"`
+	AssigneeID            *string           `json:"assignee_id"`
+	VerifierAgentID       *string           `json:"verifier_agent_id"`
+	MaxVerificationRounds *int32            `json:"max_verification_rounds"`
+	ParentIssueID         *string           `json:"parent_issue_id"`
+	DueDate               *string           `json:"due_date"`
+	DispatchProvider      *string           `json:"dispatch_provider"`
+	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	var req CreateIssueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.Title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
 		return
 	}
 
@@ -290,21 +344,37 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
+	// If no title provided, use the issue identifier (e.g. "DEV-51").
+	title := req.Title
+	if title == "" {
+		prefix := h.getIssuePrefix(r.Context(), parseUUID(workspaceID))
+		title = prefix + "-" + strconv.Itoa(int(issueNumber))
+	}
+
+	var maxVerificationRounds pgtype.Int4
+	if req.MaxVerificationRounds != nil {
+		maxVerificationRounds = pgtype.Int4{Int32: *req.MaxVerificationRounds, Valid: true}
+	}
+
 	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
-		WorkspaceID:     parseUUID(workspaceID),
-		Title:           req.Title,
-		Description:     ptrToText(req.Description),
-		Status:          status,
-		Priority:        priority,
-		AssigneeType:    assigneeType,
-		AssigneeID:      assigneeID,
-		CreatorType:     creatorType,
-		CreatorID:       parseUUID(actualCreatorID),
-		VerifierAgentID: verifierAgentID,
-		ParentIssueID:   parentIssueID,
-		Position:        0,
-		DueDate:         dueDate,
-		Number:          issueNumber,
+		WorkspaceID:           parseUUID(workspaceID),
+		Title:                 title,
+		Description:           ptrToText(req.Description),
+		Status:                status,
+		Priority:              priority,
+		AssigneeType:          assigneeType,
+		AssigneeID:            assigneeID,
+		CreatorType:           creatorType,
+		CreatorID:             parseUUID(actualCreatorID),
+		VerifierAgentID:       verifierAgentID,
+		ParentIssueID:         parentIssueID,
+		Position:              0,
+		DueDate:               dueDate,
+		Number:                issueNumber,
+		MaxVerificationRounds: maxVerificationRounds,
+		DispatchProvider:      ptrToText(req.DispatchProvider),
+		DispatchDaemonID:      parseOptionalUUID(req.DispatchDaemonID),
+		DispatchDaemonLabel:   ptrToText(req.DispatchDaemonLabel),
 	})
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -333,15 +403,19 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateIssueRequest struct {
-	Title           *string  `json:"title"`
-	Description     *string  `json:"description"`
-	Status          *string  `json:"status"`
-	Priority        *string  `json:"priority"`
-	AssigneeType    *string  `json:"assignee_type"`
-	AssigneeID      *string  `json:"assignee_id"`
-	VerifierAgentID *string  `json:"verifier_agent_id"`
-	Position        *float64 `json:"position"`
-	DueDate         *string  `json:"due_date"`
+	Title                 *string  `json:"title"`
+	Description           *string  `json:"description"`
+	Status                *string  `json:"status"`
+	Priority              *string  `json:"priority"`
+	AssigneeType          *string  `json:"assignee_type"`
+	AssigneeID            *string  `json:"assignee_id"`
+	VerifierAgentID       *string  `json:"verifier_agent_id"`
+	MaxVerificationRounds *int32   `json:"max_verification_rounds"`
+	Position              *float64 `json:"position"`
+	DueDate               *string  `json:"due_date"`
+	DispatchProvider      *string           `json:"dispatch_provider"`
+	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -372,11 +446,15 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Pre-fill nullable fields (bare sqlc.narg) with current values
 	params := db.UpdateIssueParams{
-		ID:              prevIssue.ID,
-		AssigneeType:    prevIssue.AssigneeType,
-		AssigneeID:      prevIssue.AssigneeID,
-		VerifierAgentID: prevIssue.VerifierAgentID,
-		DueDate:         prevIssue.DueDate,
+		ID:                    prevIssue.ID,
+		AssigneeType:          prevIssue.AssigneeType,
+		AssigneeID:            prevIssue.AssigneeID,
+		VerifierAgentID:       prevIssue.VerifierAgentID,
+		DueDate:               prevIssue.DueDate,
+		MaxVerificationRounds: prevIssue.MaxVerificationRounds,
+		DispatchProvider:      prevIssue.DispatchProvider,
+		DispatchDaemonID:      prevIssue.DispatchDaemonID,
+		DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
 	}
 
 	// COALESCE fields — only set when explicitly provided
@@ -428,6 +506,22 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		} else {
 			params.DueDate = pgtype.Timestamptz{Valid: false} // explicit null = clear date
 		}
+	}
+	if _, ok := rawFields["max_verification_rounds"]; ok {
+		if req.MaxVerificationRounds != nil {
+			params.MaxVerificationRounds = pgtype.Int4{Int32: *req.MaxVerificationRounds, Valid: true}
+		} else {
+			params.MaxVerificationRounds = pgtype.Int4{Valid: false}
+		}
+	}
+	if _, ok := rawFields["dispatch_provider"]; ok {
+		params.DispatchProvider = ptrToText(req.DispatchProvider)
+	}
+	if _, ok := rawFields["dispatch_daemon_id"]; ok {
+		params.DispatchDaemonID = parseOptionalUUID(req.DispatchDaemonID)
+	}
+	if _, ok := rawFields["dispatch_daemon_label"]; ok {
+		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
@@ -501,9 +595,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"creator_id":             uuidToString(prevIssue.CreatorID),
 	})
 
-	// Reconcile task queue when assignee changes (not on status changes —
-	// agents manage issue status themselves via the CLI).
-	if assigneeChanged || verifierChanged {
+	dispatchChanged := (prevIssue.DispatchProvider != issue.DispatchProvider ||
+		prevIssue.DispatchDaemonID != issue.DispatchDaemonID ||
+		prevIssue.DispatchDaemonLabel != issue.DispatchDaemonLabel)
+
+	// Reconcile task queue when assignee or dispatch hints change (not on
+	// status changes — agents manage issue status themselves via the CLI).
+	if assigneeChanged || verifierChanged || dispatchChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
@@ -583,7 +681,7 @@ func (h *Handler) isAgentTriggerEnabled(ctx context.Context, issue db.Issue, tri
 	}
 
 	agent, err := h.Queries.GetAgent(ctx, issue.AssigneeID)
-	if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+	if err != nil || len(agent.Providers) == 0 || agent.ArchivedAt.Valid {
 		return false
 	}
 
@@ -595,7 +693,7 @@ func (h *Handler) isAgentTriggerEnabled(ctx context.Context, issue db.Issue, tri
 // ID rather than deriving it from the issue assignee.
 func (h *Handler) isAgentMentionTriggerEnabled(ctx context.Context, agentID pgtype.UUID) bool {
 	agent, err := h.Queries.GetAgent(ctx, agentID)
-	if err != nil || !agent.RuntimeID.Valid {
+	if err != nil || len(agent.Providers) == 0 {
 		return false
 	}
 
@@ -624,6 +722,162 @@ func agentHasTriggerEnabled(raw []byte, triggerType string) bool {
 		}
 	}
 	return true // Trigger type not configured = enabled by default
+}
+
+// ---------------------------------------------------------------------------
+// Criteria CRUD + approval
+// ---------------------------------------------------------------------------
+
+type UpdateCriteriaRequest struct {
+	Criteria []any `json:"criteria"`
+}
+
+func (h *Handler) UpdateCriteria(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	var req UpdateCriteriaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	criteriaJSON, err := json.Marshal(req.Criteria)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid criteria format")
+		return
+	}
+
+	// Preserve current criteria_status (editing doesn't change approval state).
+	updated, err := h.Queries.UpdateIssueAcceptanceCriteria(r.Context(), db.UpdateIssueAcceptanceCriteriaParams{
+		ID:                 issue.ID,
+		AcceptanceCriteria: criteriaJSON,
+		CriteriaStatus:     issue.CriteriaStatus,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update criteria")
+		return
+	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := issueToResponse(updated, prefix)
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ApproveCriteria(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	if !issue.CriteriaStatus.Valid || issue.CriteriaStatus.String != "pending" {
+		writeError(w, http.StatusBadRequest, "criteria are not pending approval")
+		return
+	}
+	if len(decodeAcceptanceCriteria(issue.AcceptanceCriteria)) == 0 {
+		writeError(w, http.StatusBadRequest, "no acceptance criteria to approve")
+		return
+	}
+
+	updated, err := h.Queries.UpdateIssueCriteriaStatus(r.Context(), db.UpdateIssueCriteriaStatusParams{
+		ID:             issue.ID,
+		CriteriaStatus: pgtype.Text{String: "approved", Valid: true},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to approve criteria")
+		return
+	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := issueToResponse(updated, prefix)
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
+		"issue":             resp,
+		"criteria_approved": true,
+	})
+
+	if h.shouldEnqueueAgentTask(r.Context(), updated) {
+		h.TaskService.EnqueueExecutorForApprovedCriteria(r.Context(), updated)
+	}
+
+	slog.Info("criteria approved", "issue_id", id, "workspace_id", workspaceID)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+type RejectCriteriaRequest struct {
+	Feedback string `json:"feedback"`
+}
+
+func (h *Handler) RejectCriteria(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	if !issue.CriteriaStatus.Valid || issue.CriteriaStatus.String != "pending" {
+		writeError(w, http.StatusBadRequest, "criteria are not pending approval")
+		return
+	}
+
+	var req RejectCriteriaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Clear criteria and reset status so verifier can regenerate.
+	updated, err := h.Queries.UpdateIssueAcceptanceCriteria(r.Context(), db.UpdateIssueAcceptanceCriteriaParams{
+		ID:                 issue.ID,
+		AcceptanceCriteria: []byte("[]"),
+		CriteriaStatus:     pgtype.Text{Valid: false},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reject criteria")
+		return
+	}
+
+	userID := requestUserID(r)
+	workspaceID := uuidToString(issue.WorkspaceID)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := issueToResponse(updated, prefix)
+	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
+
+	feedback := req.Feedback
+	if feedback == "" {
+		feedback = "验收标准需要修改，请重新生成。"
+	}
+
+	// Re-enqueue criteria task to verifier with feedback.
+	if issue.VerifierAgentID.Valid && issue.AssigneeID.Valid {
+		h.TaskService.EnqueueTaskForIssue(r.Context(), updated)
+	}
+
+	slog.Info("criteria rejected", "issue_id", id, "workspace_id", workspaceID)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func decodeAcceptanceCriteria(raw []byte) []map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var criteria []map[string]any
+	if err := json.Unmarshal(raw, &criteria); err != nil {
+		return nil
+	}
+	return criteria
 }
 
 func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
@@ -704,11 +958,12 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		params := db.UpdateIssueParams{
-			ID:              prevIssue.ID,
-			AssigneeType:    prevIssue.AssigneeType,
-			AssigneeID:      prevIssue.AssigneeID,
-			VerifierAgentID: prevIssue.VerifierAgentID,
-			DueDate:         prevIssue.DueDate,
+			ID:                    prevIssue.ID,
+			AssigneeType:          prevIssue.AssigneeType,
+			AssigneeID:            prevIssue.AssigneeID,
+			VerifierAgentID:       prevIssue.VerifierAgentID,
+			DueDate:               prevIssue.DueDate,
+			MaxVerificationRounds: prevIssue.MaxVerificationRounds,
 		}
 
 		if req.Updates.Title != nil {

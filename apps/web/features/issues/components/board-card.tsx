@@ -11,6 +11,7 @@ import { ActorAvatar } from "@/components/common/actor-avatar";
 import { api } from "@/shared/api";
 import { useIssueStore } from "@/features/issues/store";
 import { PriorityIcon } from "./priority-icon";
+import { AgentDispatchBadge } from "./agent-dispatch-badge";
 import { PriorityPicker, AssigneePicker, DueDatePicker } from "./pickers";
 import { PRIORITY_CONFIG } from "@/features/issues/config";
 import type { CardProperties } from "@/features/issues/stores/view-store";
@@ -81,11 +82,51 @@ export const BoardCardContent = memo(function BoardCardContent({
         </p>
       )}
 
+      {/* Labels */}
+      {storeProperties.labels && issue.labels.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {issue.labels.slice(0, 4).map((l) => (
+            <span
+              key={l.id}
+              className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] border truncate max-w-[100px]"
+              style={{
+                borderColor: l.color + "40",
+                backgroundColor: l.color + "15",
+              }}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full shrink-0"
+                style={{ backgroundColor: l.color }}
+              />
+              <span className="truncate">{l.name}</span>
+            </span>
+          ))}
+          {issue.labels.length > 4 && (
+            <span className="text-[10px] text-muted-foreground py-0.5">
+              +{issue.labels.length - 4}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Row 3: Assignee, priority badge, due date */}
       {(showAssignee || showPriority || showDueDate) && (
         <div className="mt-3 flex items-center gap-2">
-          {showAssignee &&
-            (editable ? (
+          {showAssignee && issue.assignee_type === "agent" ? (
+            editable ? (
+              <PickerWrapper>
+                <AssigneePicker
+                  assigneeType={issue.assignee_type}
+                  assigneeId={issue.assignee_id}
+                  onUpdate={handleUpdate}
+                  trigger={<AgentDispatchBadge issue={issue} />}
+                />
+              </PickerWrapper>
+            ) : (
+              <AgentDispatchBadge issue={issue} />
+            )
+          ) : showAssignee ? (
+            editable ? (
               <PickerWrapper>
                 <AssigneePicker
                   assigneeType={issue.assignee_type}
@@ -106,7 +147,8 @@ export const BoardCardContent = memo(function BoardCardContent({
                 actorId={issue.assignee_id!}
                 size={22}
               />
-            ))}
+            )
+          ) : null}
           {showPriority &&
             (editable ? (
               <PickerWrapper>

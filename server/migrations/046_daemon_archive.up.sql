@@ -1,0 +1,1 @@
+ALTER TABLE daemon ADD COLUMN archived_at TIMESTAMPTZ;

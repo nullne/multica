@@ -16,40 +16,45 @@ import { useWorkspaceStore } from "@/features/workspace";
 import { useWSEvent } from "@/features/realtime";
 import { useRuntimeStore } from "../store";
 import { RuntimeList } from "./runtime-list";
-import { RuntimeDetail } from "./runtime-detail";
+import { DaemonDetail } from "./daemon-detail";
 
 export default function RuntimesPage() {
   const isMobile = useIsMobile();
   const isLoading = useAuthStore((s) => s.isLoading);
   const workspace = useWorkspaceStore((s) => s.workspace);
+  const daemons = useRuntimeStore((s) => s.daemons);
   const runtimes = useRuntimeStore((s) => s.runtimes);
-  const selectedId = useRuntimeStore((s) => s.selectedId);
+  const selectedDaemonId = useRuntimeStore((s) => s.selectedDaemonId);
   const fetching = useRuntimeStore((s) => s.fetching);
-  const fetchRuntimes = useRuntimeStore((s) => s.fetchRuntimes);
-  const setSelectedId = useRuntimeStore((s) => s.setSelectedId);
+  const fetchAll = useRuntimeStore((s) => s.fetchAll);
+  const setSelectedDaemonId = useRuntimeStore((s) => s.setSelectedDaemonId);
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: "multica_runtimes_layout",
   });
 
   useEffect(() => {
-    if (workspace) fetchRuntimes();
-  }, [workspace, fetchRuntimes]);
+    if (workspace) fetchAll();
+  }, [workspace, fetchAll]);
 
-  // Re-fetch on daemon register/deregister events.
-  // Heartbeat events are not broadcast over WS, so no handler needed.
+  // Refresh on daemon register/deregister events.
   const handleDaemonEvent = useCallback(() => {
-    fetchRuntimes();
-  }, [fetchRuntimes]);
-
+    fetchAll();
+  }, [fetchAll]);
   useWSEvent("daemon:register", handleDaemonEvent);
 
-  const selected = runtimes.find((r) => r.id === selectedId) ?? null;
+  // Poll periodically to pick up status & auth changes from heartbeats.
+  useEffect(() => {
+    if (!workspace) return;
+    const interval = setInterval(fetchAll, 30_000);
+    return () => clearInterval(interval);
+  }, [workspace, fetchAll]);
+
+  const selected = daemons.find((d) => d.id === selectedDaemonId) ?? null;
 
   if (isLoading || fetching) {
     return (
       <div className="flex flex-1 min-h-0">
-        {/* List skeleton */}
         <div className="w-72 border-r">
           <div className="flex h-12 items-center justify-between border-b px-4">
             <Skeleton className="h-4 w-20" />
@@ -57,7 +62,7 @@ export default function RuntimesPage() {
           <div className="divide-y">
             {Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="flex items-center gap-3 px-4 py-3">
-                <Skeleton className="h-5 w-5 rounded" />
+                <Skeleton className="h-8 w-8 rounded-lg" />
                 <div className="flex-1 space-y-1.5">
                   <Skeleton className="h-4 w-28" />
                   <Skeleton className="h-3 w-20" />
@@ -66,10 +71,9 @@ export default function RuntimesPage() {
             ))}
           </div>
         </div>
-        {/* Detail skeleton */}
         <div className="flex-1 p-6 space-y-6">
           <div className="flex items-center gap-3">
-            <Skeleton className="h-5 w-5 rounded" />
+            <Skeleton className="h-7 w-7 rounded-md" />
             <Skeleton className="h-5 w-32" />
           </div>
           <div className="space-y-3">
@@ -83,18 +87,17 @@ export default function RuntimesPage() {
   }
 
   if (isMobile) {
-    // Mobile: show list or detail, not both
     if (selected) {
       return (
         <div className="flex flex-1 min-h-0 flex-col">
           <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-            <Button variant="ghost" size="icon-xs" onClick={() => setSelectedId("")}>
+            <Button variant="ghost" size="icon-xs" onClick={() => setSelectedDaemonId("")}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className="text-sm font-medium truncate">Runtimes</span>
+            <span className="text-sm font-medium truncate">Daemons</span>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
-            <RuntimeDetail key={selected.id} runtime={selected} />
+            <DaemonDetail key={selected.id} daemon={selected} runtimes={runtimes} />
           </div>
         </div>
       );
@@ -102,9 +105,10 @@ export default function RuntimesPage() {
     return (
       <div className="flex flex-1 min-h-0 flex-col">
         <RuntimeList
+          daemons={daemons}
           runtimes={runtimes}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
+          selectedId={selectedDaemonId}
+          onSelect={setSelectedDaemonId}
         />
       </div>
     );
@@ -125,9 +129,10 @@ export default function RuntimesPage() {
         groupResizeBehavior="preserve-pixel-size"
       >
         <RuntimeList
+          daemons={daemons}
           runtimes={runtimes}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
+          selectedId={selectedDaemonId}
+          onSelect={setSelectedDaemonId}
         />
       </ResizablePanel>
 
@@ -135,11 +140,11 @@ export default function RuntimesPage() {
 
       <ResizablePanel id="detail" minSize="50%">
         {selected ? (
-          <RuntimeDetail key={selected.id} runtime={selected} />
+          <DaemonDetail key={selected.id} daemon={selected} runtimes={runtimes} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
             <Server className="h-10 w-10 text-muted-foreground/30" />
-            <p className="mt-3 text-sm">Select a runtime to view details</p>
+            <p className="mt-3 text-sm">Select a daemon to view details</p>
           </div>
         )}
       </ResizablePanel>

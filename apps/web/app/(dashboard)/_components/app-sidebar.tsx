@@ -53,7 +53,7 @@ const primaryNav = [
 
 const workspaceNav = [
   { href: "/agents", label: "Agents", icon: Bot },
-  { href: "/runtimes", label: "Runtimes", icon: Monitor },
+  { href: "/daemons", label: "Daemons", icon: Monitor },
   { href: "/skills", label: "Skills", icon: BookOpenText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
@@ -163,7 +163,7 @@ export function AppSidebar() {
                 <SquarePen className="size-3.5" />
                 <DraftDot />
               </TooltipTrigger>
-              <TooltipContent side="bottom">New issue</TooltipContent>
+              <TooltipContent side="bottom">New issue (⇧⌘O)</TooltipContent>
             </Tooltip>
           </div>
         </SidebarHeader>

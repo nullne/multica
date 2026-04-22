@@ -23,7 +23,7 @@ brew install multica-cli
 git clone https://github.com/nullne/multica.git
 cd multica
 make build
-cp server/bin/multica /usr/local/bin/multica
+cp server/bin/multica ~/.local/bin/multica
 ```
 
 ### Update

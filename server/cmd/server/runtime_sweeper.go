@@ -46,26 +46,39 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, bus *events.Bus
 	}
 }
 
-// sweepStaleRuntimes marks runtimes offline if they haven't heartbeated,
-// then fails any tasks belonging to those offline runtimes.
+// sweepStaleRuntimes marks runtimes and daemons offline if they haven't
+// heartbeated, then fails any tasks belonging to those offline runtimes.
 func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, bus *events.Bus) {
+	// Mark stale daemons offline first.
+	staleDaemons, err := queries.MarkStaleDaemonsOffline(ctx, staleThresholdSeconds)
+	if err != nil {
+		slog.Warn("runtime sweeper: failed to mark stale daemons offline", "error", err)
+	} else if len(staleDaemons) > 0 {
+		slog.Info("runtime sweeper: marked stale daemons offline", "count", len(staleDaemons))
+	}
+
 	staleRows, err := queries.MarkStaleRuntimesOffline(ctx, staleThresholdSeconds)
 	if err != nil {
 		slog.Warn("runtime sweeper: failed to mark stale runtimes offline", "error", err)
 		return
 	}
-	if len(staleRows) == 0 {
+
+	// Collect unique workspace IDs to notify (from both daemons and runtimes).
+	workspaces := make(map[string]bool)
+	for _, row := range staleDaemons {
+		workspaces[util.UUIDToString(row.WorkspaceID)] = true
+	}
+	for _, row := range staleRows {
+		workspaces[util.UUIDToString(row.WorkspaceID)] = true
+	}
+
+	if len(staleRows) > 0 {
+		slog.Info("runtime sweeper: marked stale runtimes offline", "count", len(staleRows), "workspaces", len(workspaces))
+	}
+
+	if len(staleRows) == 0 && len(staleDaemons) == 0 {
 		return
 	}
-
-	// Collect unique workspace IDs to notify.
-	workspaces := make(map[string]bool)
-	for _, row := range staleRows {
-		wsID := util.UUIDToString(row.WorkspaceID)
-		workspaces[wsID] = true
-	}
-
-	slog.Info("runtime sweeper: marked stale runtimes offline", "count", len(staleRows), "workspaces", len(workspaces))
 
 	// Fail orphaned tasks (dispatched/running) whose runtimes just went offline.
 	failedTasks, err := queries.FailTasksForOfflineRuntimes(ctx)

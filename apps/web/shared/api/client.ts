@@ -12,13 +12,16 @@ import type {
   UpdateAgentRequest,
   AgentTask,
   AgentRuntime,
+  Daemon,
   InboxItem,
   IssueSubscriber,
   Comment,
   Reaction,
   IssueReaction,
+  Label,
   Workspace,
   WorkspaceRepo,
+  WorkspaceProviderSettings,
   MemberWithUser,
   User,
   Skill,
@@ -35,6 +38,16 @@ import type {
   TimelineEntry,
   TaskMessagePayload,
   Attachment,
+  WebhookWithActions,
+  WebhookAction,
+  CreateWebhookRequest,
+  CreateWebhookResponse,
+  UpdateWebhookRequest,
+  UpdateWebhookActionRequest,
+  WebhookEvent,
+  AdapterInfo,
+  GitHubEventRule,
+  UpsertGitHubEventRuleRequest,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
 
@@ -129,17 +142,20 @@ export class ApiClient {
   }
 
   // Auth
-  async sendCode(email: string): Promise<void> {
-    await this.fetch("/auth/send-code", {
+  async loginWithFirebase(idToken: string): Promise<LoginResponse> {
+    return this.fetch("/auth/firebase", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ id_token: idToken }),
     });
   }
 
-  async verifyCode(email: string, code: string): Promise<LoginResponse> {
-    return this.fetch("/auth/verify-code", {
+  // Dev-only login bypass. Backend gates this behind DEV_AUTH_BYPASS=1, so it
+  // is a 404 in production. Used by the make dev login flow when
+  // NEXT_PUBLIC_DEV_EMAIL is set.
+  async loginAsDev(email: string, name?: string): Promise<LoginResponse> {
+    return this.fetch("/auth/dev", {
       method: "POST",
-      body: JSON.stringify({ email, code }),
+      body: JSON.stringify({ email, name: name ?? "" }),
     });
   }
 
@@ -325,6 +341,29 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
   }
 
+  async listDaemons(): Promise<Daemon[]> {
+    return this.fetch("/api/daemons");
+  }
+
+  async updateDaemon(daemonId: string, data: { device_name?: string; labels?: string[] }): Promise<Daemon> {
+    return this.fetch(`/api/daemons/${daemonId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async archiveDaemon(id: string): Promise<Daemon> {
+    return this.fetch(`/api/daemons/${id}/archive`, { method: "POST" });
+  }
+
+  async restoreDaemon(id: string): Promise<Daemon> {
+    return this.fetch(`/api/daemons/${id}/restore`, { method: "POST" });
+  }
+
+  async getDaemonEnv(id: string): Promise<Record<string, string>> {
+    return this.fetch(`/api/daemons/${id}/env`);
+  }
+
   async listRuntimes(params?: { workspace_id?: string }): Promise<AgentRuntime[]> {
     const search = new URLSearchParams();
     const wsId = params?.workspace_id ?? this.workspaceId;
@@ -389,6 +428,56 @@ export class ApiClient {
     });
   }
 
+  async updateCriteria(issueId: string, criteria: unknown[]): Promise<Issue> {
+    return this.fetch(`/api/issues/${issueId}/criteria`, {
+      method: "PUT",
+      body: JSON.stringify({ criteria }),
+    });
+  }
+
+  async approveCriteria(issueId: string): Promise<Issue> {
+    return this.fetch(`/api/issues/${issueId}/criteria/approve`, {
+      method: "POST",
+    });
+  }
+
+  async rejectCriteria(issueId: string, feedback: string): Promise<Issue> {
+    return this.fetch(`/api/issues/${issueId}/criteria/reject`, {
+      method: "POST",
+      body: JSON.stringify({ feedback }),
+    });
+  }
+
+  // Labels
+  async listLabels(): Promise<Label[]> {
+    return this.fetch("/api/labels");
+  }
+
+  async createLabel(data: { name: string; color: string }): Promise<Label> {
+    return this.fetch("/api/labels", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateLabel(id: string, data: { name: string; color: string }): Promise<Label> {
+    return this.fetch(`/api/labels/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteLabel(id: string): Promise<void> {
+    await this.fetch(`/api/labels/${id}`, { method: "DELETE" });
+  }
+
+  async setIssueLabels(issueId: string, labelIds: string[]): Promise<Label[]> {
+    return this.fetch(`/api/issues/${issueId}/labels`, {
+      method: "PUT",
+      body: JSON.stringify({ label_ids: labelIds }),
+    });
+  }
+
   // Inbox
   async listInbox(): Promise<InboxItem[]> {
     return this.fetch("/api/inbox");
@@ -445,6 +534,25 @@ export class ApiClient {
     });
   }
 
+  // Provider config
+  async getProviderConfig(workspaceId: string): Promise<WorkspaceProviderSettings> {
+    return this.fetch(`/api/workspaces/${workspaceId}/providers`);
+  }
+
+  async updateProviderConfig(workspaceId: string, data: WorkspaceProviderSettings): Promise<WorkspaceProviderSettings> {
+    return this.fetch(`/api/workspaces/${workspaceId}/providers`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateAllDaemons(workspaceId: string, targets: { target: string; version: string }[]): Promise<{ daemons_count: number; updates_queued: number }> {
+    return this.fetch(`/api/workspaces/${workspaceId}/update-all-daemons`, {
+      method: "POST",
+      body: JSON.stringify({ targets }),
+    });
+  }
+
   // GitHub App
   async getGitHubInstallURL(workspaceId: string): Promise<{ url: string }> {
     return this.fetch(`/api/workspaces/${workspaceId}/github/install-url`);
@@ -463,6 +571,24 @@ export class ApiClient {
 
   async disconnectGitHub(workspaceId: string): Promise<Workspace> {
     return this.fetch(`/api/workspaces/${workspaceId}/github`, {
+      method: "DELETE",
+    });
+  }
+
+  // GitHub Event Rules
+  async listGitHubEventRules(workspaceId: string): Promise<GitHubEventRule[]> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/event-rules`);
+  }
+
+  async upsertGitHubEventRule(workspaceId: string, data: UpsertGitHubEventRuleRequest): Promise<GitHubEventRule> {
+    return this.fetch(`/api/workspaces/${workspaceId}/github/event-rules`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteGitHubEventRule(workspaceId: string, ruleId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/github/event-rules/${ruleId}`, {
       method: "DELETE",
     });
   }
@@ -600,5 +726,51 @@ export class ApiClient {
 
   async deleteAttachment(id: string): Promise<void> {
     await this.fetch(`/api/attachments/${id}`, { method: "DELETE" });
+  }
+
+  // Webhooks
+  async listWebhooks(): Promise<WebhookWithActions[]> {
+    return this.fetch("/api/webhooks");
+  }
+
+  async getWebhook(id: string): Promise<WebhookWithActions> {
+    return this.fetch(`/api/webhooks/${id}`);
+  }
+
+  async createWebhook(data: CreateWebhookRequest): Promise<CreateWebhookResponse> {
+    return this.fetch("/api/webhooks", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateWebhook(id: string, data: UpdateWebhookRequest): Promise<WebhookWithActions> {
+    return this.fetch(`/api/webhooks/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteWebhook(id: string): Promise<void> {
+    await this.fetch(`/api/webhooks/${id}`, { method: "DELETE" });
+  }
+
+  async regenerateWebhookToken(id: string): Promise<CreateWebhookResponse> {
+    return this.fetch(`/api/webhooks/${id}/regenerate-token`, { method: "POST" });
+  }
+
+  async listWebhookEvents(id: string): Promise<WebhookEvent[]> {
+    return this.fetch(`/api/webhooks/${id}/events`);
+  }
+
+  async updateWebhookAction(webhookId: string, actionId: string, data: UpdateWebhookActionRequest): Promise<WebhookAction> {
+    return this.fetch(`/api/webhooks/${webhookId}/actions/${actionId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listWebhookAdapters(): Promise<AdapterInfo[]> {
+    return this.fetch("/api/webhook-adapters");
   }
 }

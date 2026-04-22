@@ -1,5 +1,9 @@
 // Package repocache manages bare git clone caches for workspace repositories.
 // The daemon uses these caches as the source for creating per-task worktrees.
+//
+// All cache population is lazy: the bare clone for a repo is created the first
+// time a task asks to check it out (CreateWorktree), using the GitHub token
+// scoped to that task. Subsequent tasks reuse the cache and only fetch.
 package repocache
 
 import (
@@ -15,19 +19,6 @@ import (
 	"time"
 )
 
-// RepoInfo describes a repository to cache.
-type RepoInfo struct {
-	URL         string
-	Description string
-}
-
-// CachedRepo describes a cached bare clone ready for worktree creation.
-type CachedRepo struct {
-	URL         string // remote URL
-	Description string // human-readable description
-	LocalPath   string // absolute path to the bare clone
-}
-
 // Cache manages bare git clones for workspace repositories.
 type Cache struct {
 	root   string // base directory for all caches (e.g. ~/multica_workspaces/.repos)
@@ -40,69 +31,20 @@ func New(root string, logger *slog.Logger) *Cache {
 	return &Cache{root: root, logger: logger}
 }
 
-// Sync ensures all repos for a workspace are cloned (or fetched if already cached).
-// Repos no longer in the list are left in place (cheap to keep, avoids re-cloning
-// if a repo is temporarily removed and re-added).
-func (c *Cache) Sync(workspaceID string, repos []RepoInfo) error {
-	return c.SyncWithToken(workspaceID, repos, "")
-}
-
-// SyncWithToken is like Sync but uses the given GitHub token for authentication.
-func (c *Cache) SyncWithToken(workspaceID string, repos []RepoInfo, token string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	wsDir := filepath.Join(c.root, workspaceID)
-	if err := os.MkdirAll(wsDir, 0o755); err != nil {
-		return fmt.Errorf("create workspace cache dir: %w", err)
-	}
-
-	var firstErr error
-	for _, repo := range repos {
-		if repo.URL == "" {
-			continue
-		}
-		barePath := filepath.Join(wsDir, bareDirName(repo.URL))
-
-		if isBareRepo(barePath) {
-			c.logger.Info("repo cache: fetching", "url", repo.URL, "path", barePath)
-			if err := gitFetchWithToken(barePath, token); err != nil {
-				c.logger.Warn("repo cache: fetch failed", "url", repo.URL, "error", err)
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-		} else {
-			c.logger.Info("repo cache: cloning", "url", repo.URL, "path", barePath)
-			if err := gitCloneBareWithToken(repo.URL, barePath, token); err != nil {
-				c.logger.Error("repo cache: clone failed", "url", repo.URL, "error", err)
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
-		}
-	}
-	return firstErr
-}
-
 // Lookup returns the local bare clone path for a repo URL within a workspace.
 // Returns "" if not cached.
 func (c *Cache) Lookup(workspaceID, url string) string {
-	barePath := filepath.Join(c.root, workspaceID, bareDirName(url))
+	barePath := c.barePathFor(workspaceID, url)
 	if isBareRepo(barePath) {
 		return barePath
 	}
 	return ""
 }
 
-// Fetch runs `git fetch origin` on a cached bare clone to get latest refs.
-func (c *Cache) Fetch(barePath string) error {
-	return gitFetch(barePath)
-}
-
-// FetchWithToken runs `git fetch origin` with a GitHub token for auth.
-func (c *Cache) FetchWithToken(barePath, token string) error {
-	return gitFetchWithToken(barePath, token)
+// barePathFor computes the on-disk path where a repo's bare clone would live.
+// It does not check whether the clone actually exists.
+func (c *Cache) barePathFor(workspaceID, url string) string {
+	return filepath.Join(c.root, workspaceID, bareDirName(url))
 }
 
 // bareDirName derives a directory name from a repo URL.
@@ -136,10 +78,6 @@ func isBareRepo(path string) bool {
 	return err == nil
 }
 
-func gitCloneBare(url, dest string) error {
-	return gitCloneBareWithToken(url, dest, "")
-}
-
 func gitCloneBareWithToken(url, dest, token string) error {
 	args := []string{"clone", "--bare"}
 	if token != "" {
@@ -161,10 +99,6 @@ func gitCloneBareWithToken(url, dest, token string) error {
 		return fmt.Errorf("configure fetch refspec: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
-}
-
-func gitFetch(barePath string) error {
-	return gitFetchWithToken(barePath, "")
 }
 
 func gitFetchWithToken(barePath, token string) error {
@@ -197,6 +131,7 @@ type WorktreeParams struct {
 	WorkDir     string // parent directory for the worktree (e.g. task workdir)
 	AgentName   string // for branch naming
 	TaskID      string // for branch naming uniqueness
+	Token       string // GitHub installation token (optional; required for private repos)
 }
 
 // WorktreeResult describes a successfully created worktree.
@@ -205,18 +140,19 @@ type WorktreeResult struct {
 	BranchName string `json:"branch_name"` // git branch created for this worktree
 }
 
-// CreateWorktree looks up the bare cache for a repo, fetches latest, and creates
-// a git worktree in the agent's working directory.
+// CreateWorktree ensures the bare cache for a repo is present and up-to-date,
+// then creates a git worktree in the agent's working directory.
+//
+// If the bare cache does not exist yet, it is cloned on the spot using
+// params.Token. If the cache already exists, a fetch is performed first to
+// pick up new commits. A fetch failure is treated as a hard error — we never
+// fall back to stale cache state, because the resulting worktree (and any PR
+// derived from it) would silently be based on outdated code.
 func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
-	barePath := c.Lookup(params.WorkspaceID, params.RepoURL)
-	if barePath == "" {
-		return nil, fmt.Errorf("repo not found in cache: %s (workspace: %s)", params.RepoURL, params.WorkspaceID)
+	if err := c.ensureBareCache(params.WorkspaceID, params.RepoURL, params.Token); err != nil {
+		return nil, err
 	}
-
-	// Fetch latest from origin.
-	if err := gitFetch(barePath); err != nil {
-		c.logger.Warn("repo checkout: fetch failed (continuing with cached state)", "url", params.RepoURL, "error", err)
-	}
+	barePath := c.barePathFor(params.WorkspaceID, params.RepoURL)
 
 	// Determine the default branch to base the worktree on.
 	baseRef := getRemoteDefaultBranch(barePath)
@@ -249,6 +185,36 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		Path:       worktreePath,
 		BranchName: branchName,
 	}, nil
+}
+
+// ensureBareCache makes sure a bare clone for (workspaceID, url) exists and is
+// up to date. The mutex serializes lazy clones / fetches across concurrent
+// CreateWorktree calls so two tasks racing on the same repo do not corrupt
+// each other's git state.
+func (c *Cache) ensureBareCache(workspaceID, url, token string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	wsDir := filepath.Join(c.root, workspaceID)
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		return fmt.Errorf("create workspace cache dir: %w", err)
+	}
+
+	barePath := filepath.Join(wsDir, bareDirName(url))
+
+	if !isBareRepo(barePath) {
+		c.logger.Info("repo cache: cloning", "url", url, "path", barePath, "with_token", token != "")
+		if err := gitCloneBareWithToken(url, barePath, token); err != nil {
+			return fmt.Errorf("clone bare cache: %w", err)
+		}
+		return nil
+	}
+
+	c.logger.Info("repo cache: fetching", "url", url, "path", barePath, "with_token", token != "")
+	if err := gitFetchWithToken(barePath, token); err != nil {
+		return fmt.Errorf("fetch latest: %w", err)
+	}
+	return nil
 }
 
 // createWorktree creates a git worktree at the given path with a new branch.

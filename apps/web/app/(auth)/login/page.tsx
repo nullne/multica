@@ -1,8 +1,13 @@
 "use client";
 
-import { Suspense, useState, useEffect, useCallback } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/features/auth";
+import {
+  getStoredEmailLinkEmail,
+  hasPendingFirebaseGoogleRedirectSignIn,
+  isFirebaseEmailLink,
+} from "@/features/auth/firebase";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
 import {
@@ -11,24 +16,18 @@ import {
   CardTitle,
   CardDescription,
   CardContent,
-  CardFooter,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import {
-  InputOTP,
-  InputOTPGroup,
-  InputOTPSlot,
-} from "@/components/ui/input-otp";
+import { Input } from "@/components/ui/input";
 import type { User } from "@/shared/types";
 
 function validateCliCallback(cliCallback: string): boolean {
   try {
     const cbUrl = new URL(cliCallback);
     if (cbUrl.protocol !== "http:") return false;
-    if (cbUrl.hostname !== "localhost" && cbUrl.hostname !== "127.0.0.1")
+    if (cbUrl.hostname !== "localhost" && cbUrl.hostname !== "127.0.0.1") {
       return false;
+    }
     return true;
   } catch {
     return false;
@@ -44,143 +43,211 @@ function redirectToCliCallback(
   window.location.href = `${cliCallback}${separator}token=${encodeURIComponent(token)}&state=${encodeURIComponent(cliState)}`;
 }
 
+// When set (only via docker-compose.dev.yml), the login page shows a
+// one-click dev login that calls /auth/dev. The backend gates that endpoint
+// behind DEV_AUTH_BYPASS=1, so this is inert in prod.
+const DEV_LOGIN_EMAIL = process.env.NEXT_PUBLIC_DEV_EMAIL ?? "";
+
+// When the Firebase web config is also present, the Firebase buttons stay
+// visible alongside the dev button so both flows can be exercised in dev.
+const FIREBASE_CONFIGURED = Boolean(process.env.NEXT_PUBLIC_FIREBASE_API_KEY);
+
 function LoginPageContent() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const isLoading = useAuthStore((s) => s.isLoading);
-  const sendCode = useAuthStore((s) => s.sendCode);
-  const verifyCode = useAuthStore((s) => s.verifyCode);
+  const signInWithGoogle = useAuthStore((s) => s.signInWithGoogle);
+  const completeGoogleRedirectSignIn = useAuthStore(
+    (s) => s.completeGoogleRedirectSignIn
+  );
+  const signInAsDev = useAuthStore((s) => s.signInAsDev);
+  const sendEmailSignInLink = useAuthStore((s) => s.sendEmailSignInLink);
+  const signInWithEmailLink = useAuthStore((s) => s.signInWithEmailLink);
   const hydrateWorkspace = useWorkspaceStore((s) => s.hydrateWorkspace);
   const searchParams = useSearchParams();
+  const cliCallback = searchParams.get("cli_callback");
+  const cliState = searchParams.get("cli_state") || "";
+  const nextPath = searchParams.get("next") || "/issues";
 
-  // Already authenticated — redirect to dashboard
-  useEffect(() => {
-    if (!isLoading && user && !searchParams.get("cli_callback")) {
-      router.replace(searchParams.get("next") || "/issues");
-    }
-  }, [isLoading, user, router, searchParams]);
-
-  const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
   const [existingUser, setExistingUser] = useState<User | null>(null);
+  const [email, setEmail] = useState("");
+  const [emailLinkSent, setEmailLinkSent] = useState(false);
+  const emailLinkProcessed = useRef(false);
 
-  // Check for existing session when CLI callback is present.
   useEffect(() => {
-    const cliCallback = searchParams.get("cli_callback");
+    if (!isLoading && user && !cliCallback) {
+      router.replace(nextPath);
+    }
+  }, [cliCallback, isLoading, nextPath, router, user]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const finishRedirectSignIn = async () => {
+      if (!hasPendingFirebaseGoogleRedirectSignIn()) {
+        return;
+      }
+
+      setSubmitting(true);
+
+      try {
+        const login = await completeGoogleRedirectSignIn();
+        if (!login || cancelled) {
+          return;
+        }
+
+        if (cliCallback) {
+          if (!validateCliCallback(cliCallback)) {
+            setError("Invalid callback URL");
+            return;
+          }
+          redirectToCliCallback(cliCallback, login.token, cliState);
+          return;
+        }
+
+        const wsList = await api.listWorkspaces();
+        if (cancelled) {
+          return;
+        }
+        await hydrateWorkspace(wsList);
+        router.push(nextPath);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to sign in with Google"
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setSubmitting(false);
+        }
+      }
+    };
+
+    void finishRedirectSignIn();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    cliCallback,
+    cliState,
+    completeGoogleRedirectSignIn,
+    hydrateWorkspace,
+    nextPath,
+    router,
+  ]);
+
+  useEffect(() => {
     if (!cliCallback) return;
 
     const token = localStorage.getItem("multica_token");
-    if (!token) return;
+    if (!token || !validateCliCallback(cliCallback)) return;
 
-    if (!validateCliCallback(cliCallback)) return;
-
-    // Verify the existing token is still valid.
     api.setToken(token);
     api
       .getMe()
-      .then((user) => {
-        setExistingUser(user);
-        setStep("cli_confirm");
+      .then((loggedInUser) => {
+        setExistingUser(loggedInUser);
       })
       .catch(() => {
-        // Token expired/invalid — clear and fall through to normal login.
         api.setToken(null);
         localStorage.removeItem("multica_token");
       });
-  }, [searchParams]);
-
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const timer = setTimeout(() => setCooldown((c) => c - 1), 1000);
-    return () => clearTimeout(timer);
-  }, [cooldown]);
+  }, [cliCallback]);
 
   const handleCliAuthorize = async () => {
-    const cliCallback = searchParams.get("cli_callback");
     const token = localStorage.getItem("multica_token");
     if (!cliCallback || !token) return;
-    const cliState = searchParams.get("cli_state") || "";
+
     setSubmitting(true);
     redirectToCliCallback(cliCallback, token, cliState);
   };
 
-  const handleSendCode = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!email) {
+  const handleSignIn = async (
+    signIn: () => Promise<{ token: string } | null>
+  ) => {
+    setError("");
+    setSubmitting(true);
+
+    try {
+      const login = await signIn();
+      if (!login) {
+        return;
+      }
+
+      if (cliCallback) {
+        if (!validateCliCallback(cliCallback)) {
+          setError("Invalid callback URL");
+          return;
+        }
+        redirectToCliCallback(cliCallback, login.token, cliState);
+        return;
+      }
+
+      const wsList = await api.listWorkspaces();
+      await hydrateWorkspace(wsList);
+      router.push(nextPath);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to sign in");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // When the user clicks the email link, Firebase appends an oobCode to the
+  // current URL. Detect it and complete the sign-in. Email is recovered from
+  // localStorage when on the same device, otherwise we prompt for it.
+  useEffect(() => {
+    if (!FIREBASE_CONFIGURED) return;
+    if (emailLinkProcessed.current) return;
+    if (typeof window === "undefined") return;
+    if (!isFirebaseEmailLink(window.location.href)) return;
+
+    emailLinkProcessed.current = true;
+    const url = window.location.href;
+    const stored = getStoredEmailLinkEmail();
+    const targetEmail =
+      stored ?? window.prompt("Please confirm the email you used to sign in")?.trim();
+    if (!targetEmail) {
+      setError("Email is required to complete sign-in");
+      return;
+    }
+
+    void handleSignIn(() => signInWithEmailLink(targetEmail, url));
+    // handleSignIn is intentionally not in deps - it changes on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signInWithEmailLink]);
+
+  const handleGoogleSignIn = () => handleSignIn(() => signInWithGoogle());
+  const handleDevSignIn = () =>
+    handleSignIn(() => signInAsDev(DEV_LOGIN_EMAIL, "Dev User"));
+
+  const handleSendEmailLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = email.trim();
+    if (!trimmed) {
       setError("Email is required");
       return;
     }
     setError("");
     setSubmitting(true);
     try {
-      await sendCode(email);
-      setStep("code");
-      setCode("");
-      setCooldown(10);
+      // Firebase requires an authorized return URL. We send the user back to
+      // /login so the email-link callback effect above can finish sign-in.
+      const returnUrl = `${window.location.origin}/login`;
+      await sendEmailSignInLink(trimmed, returnUrl);
+      setEmailLinkSent(true);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to send code. Make sure the server is running."
-      );
+      setError(err instanceof Error ? err.message : "Failed to send sign-in link");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleVerifyCode = useCallback(
-    async (value: string) => {
-      if (value.length !== 6) return;
-      setError("");
-      setSubmitting(true);
-      try {
-        const cliCallback = searchParams.get("cli_callback");
-        if (cliCallback) {
-          if (!validateCliCallback(cliCallback)) {
-            setError("Invalid callback URL");
-            setSubmitting(false);
-            return;
-          }
-          const { token } = await api.verifyCode(email, value);
-          const cliState = searchParams.get("cli_state") || "";
-          redirectToCliCallback(cliCallback, token, cliState);
-          return;
-        }
-
-        await verifyCode(email, value);
-        const wsList = await api.listWorkspaces();
-        await hydrateWorkspace(wsList);
-        router.push(searchParams.get("next") || "/issues");
-      } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Invalid or expired code"
-        );
-        setCode("");
-        setSubmitting(false);
-      }
-    },
-    [email, verifyCode, hydrateWorkspace, router, searchParams]
-  );
-
-  const handleResend = async () => {
-    if (cooldown > 0) return;
-    setError("");
-    try {
-      await sendCode(email);
-      setCooldown(10);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to resend code"
-      );
-    }
-  };
-
-  // CLI confirm step: user is already logged in, just authorize.
-  if (step === "cli_confirm" && existingUser) {
+  if (existingUser) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Card className="w-full max-w-sm">
@@ -208,7 +275,6 @@ function LoginPageContent() {
               className="w-full"
               onClick={() => {
                 setExistingUser(null);
-                setStep("email");
               }}
             >
               Use a different account
@@ -219,104 +285,108 @@ function LoginPageContent() {
     );
   }
 
-  if (step === "code") {
+  if (emailLinkSent) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <Card className="w-full max-w-sm">
           <CardHeader className="text-center">
-            <CardTitle className="text-2xl">Check your email</CardTitle>
+            <CardTitle className="text-2xl">Check your inbox</CardTitle>
             <CardDescription>
-              We sent a verification code to{" "}
-              <span className="font-medium text-foreground">{email}</span>
+              We sent a sign-in link to{" "}
+              <span className="font-medium text-foreground">{email}</span>. Open
+              it on this device to finish signing in.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex flex-col items-center gap-4">
-            <InputOTP
-              maxLength={6}
-              value={code}
-              onChange={(value) => {
-                setCode(value);
-                if (value.length === 6) handleVerifyCode(value);
-              }}
-              disabled={submitting}
-            >
-              <InputOTPGroup>
-                <InputOTPSlot index={0} />
-                <InputOTPSlot index={1} />
-                <InputOTPSlot index={2} />
-                <InputOTPSlot index={3} />
-                <InputOTPSlot index={4} />
-                <InputOTPSlot index={5} />
-              </InputOTPGroup>
-            </InputOTP>
-            {error && (
-              <p className="text-sm text-destructive">{error}</p>
-            )}
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <button
-                type="button"
-                onClick={handleResend}
-                disabled={cooldown > 0}
-                className="text-primary underline-offset-4 hover:underline disabled:text-muted-foreground disabled:no-underline disabled:cursor-not-allowed"
-              >
-                {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
-              </button>
-            </div>
-          </CardContent>
-          <CardFooter>
+          <CardContent className="flex flex-col gap-3">
             <Button
               variant="ghost"
               className="w-full"
               onClick={() => {
-                setStep("email");
-                setCode("");
+                setEmailLinkSent(false);
                 setError("");
               }}
             >
-              Back
+              Use a different email
             </Button>
-          </CardFooter>
+          </CardContent>
         </Card>
       </div>
     );
   }
+
+  const showFirebase = FIREBASE_CONFIGURED || !DEV_LOGIN_EMAIL;
 
   return (
     <div className="flex min-h-screen items-center justify-center">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">Multica</CardTitle>
-          <CardDescription>Turn coding agents into real teammates</CardDescription>
+          <CardDescription>
+            Turn coding agents into real teammates
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <form id="login-form" onSubmit={handleSendCode} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            {error && (
-              <p className="text-sm text-destructive">{error}</p>
-            )}
-          </form>
+        <CardContent className="space-y-4">
+          {DEV_LOGIN_EMAIL ? (
+            <Button
+              onClick={handleDevSignIn}
+              disabled={submitting}
+              className="w-full"
+              size="lg"
+            >
+              {submitting
+                ? "Signing in..."
+                : `Continue as ${DEV_LOGIN_EMAIL} (dev)`}
+            </Button>
+          ) : null}
+
+          {showFirebase ? (
+            <>
+              <Button
+                onClick={handleGoogleSignIn}
+                disabled={submitting}
+                variant={DEV_LOGIN_EMAIL ? "outline" : "default"}
+                className="w-full"
+                size="lg"
+              >
+                {submitting ? "Signing in..." : "Continue with Google"}
+              </Button>
+
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <div className="h-px flex-1 bg-border" />
+                <span>or</span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
+
+              <form onSubmit={handleSendEmailLink} className="space-y-2">
+                <Input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={submitting}
+                  autoComplete="email"
+                  required
+                />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={submitting}
+                  className="w-full"
+                  size="lg"
+                >
+                  {submitting ? "Sending..." : "Email me a sign-in link"}
+                </Button>
+              </form>
+            </>
+          ) : null}
+
+          <p className="text-center text-sm text-muted-foreground">
+            {DEV_LOGIN_EMAIL
+              ? "Dev auth bypass - only enabled when DEV_AUTH_BYPASS=1."
+              : "Sign in with Google or get a one-time link by email."}
+          </p>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </CardContent>
-        <CardFooter>
-          <Button
-            type="submit"
-            form="login-form"
-            disabled={submitting}
-            className="w-full"
-            size="lg"
-          >
-            {submitting ? "Sending code..." : "Continue"}
-          </Button>
-        </CardFooter>
       </Card>
     </div>
   );

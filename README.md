@@ -59,9 +59,8 @@ cd multica
 cp .env.example .env
 # Edit .env — at minimum, change JWT_SECRET
 
-docker compose up -d                              # Start PostgreSQL
-cd server && go run ./cmd/migrate up && cd ..     # Run migrations
-make start                                         # Start the app
+make setup                                        # Install deps, start PostgreSQL, run migrations
+make dev                                          # Start full dev environment
 ```
 
 See the [Self-Hosting Guide](SELF_HOSTING.md) for full instructions.
@@ -145,7 +144,7 @@ For contributors working on the Multica codebase, see the [Contributing Guide](C
 pnpm install
 cp .env.example .env
 make setup
-make start
+make dev
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow, worktree support, testing, and troubleshooting.

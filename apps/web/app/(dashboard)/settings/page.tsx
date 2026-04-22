@@ -1,6 +1,6 @@
 "use client";
 
-import { User, Palette, Key, Settings, Users, FolderGit2 } from "lucide-react";
+import { User, Palette, Key, Settings, Users, FolderGit2, Cpu, Tag, Webhook } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useWorkspaceStore } from "@/features/workspace";
 import { AccountTab } from "./_components/account-tab";
@@ -9,6 +9,9 @@ import { TokensTab } from "./_components/tokens-tab";
 import { WorkspaceTab } from "./_components/workspace-tab";
 import { MembersTab } from "./_components/members-tab";
 import { RepositoriesTab } from "./_components/repositories-tab";
+import { ProvidersTab } from "./_components/providers-tab";
+import { LabelsTab } from "./_components/labels-tab";
+import { WebhooksTab } from "./_components/webhooks-tab";
 
 const accountTabs = [
   { value: "profile", label: "Profile", icon: User },
@@ -18,8 +21,11 @@ const accountTabs = [
 
 const workspaceTabs = [
   { value: "workspace", label: "General", icon: Settings },
+  { value: "labels", label: "Labels", icon: Tag },
+  { value: "providers", label: "Providers", icon: Cpu },
   { value: "repositories", label: "Repositories", icon: FolderGit2 },
   { value: "members", label: "Members", icon: Users },
+  { value: "webhooks", label: "Webhooks", icon: Webhook },
 ];
 
 export default function SettingsPage() {
@@ -62,8 +68,11 @@ export default function SettingsPage() {
           <TabsContent value="appearance"><AppearanceTab /></TabsContent>
           <TabsContent value="tokens"><TokensTab /></TabsContent>
           <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
+          <TabsContent value="labels"><LabelsTab /></TabsContent>
+          <TabsContent value="providers"><ProvidersTab /></TabsContent>
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
+          <TabsContent value="webhooks"><WebhooksTab /></TabsContent>
         </div>
       </div>
     </Tabs>

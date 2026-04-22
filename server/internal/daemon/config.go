@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -59,6 +60,11 @@ type Overrides struct {
 // LoadConfig builds the daemon configuration from environment variables
 // and optional CLI flag overrides.
 func LoadConfig(overrides Overrides) (Config, error) {
+	// Inherit PATH from the user's login shell so that CLIs installed via
+	// bash_profile/zprofile (e.g. multica, ops-cli) are discoverable both
+	// during agent probing below and inside spawned agent subprocesses.
+	inheritLoginEnv()
+
 	// Server URL: override > env > default
 	rawServerURL := envOrDefault("MULTICA_SERVER_URL", DefaultServerURL)
 	if overrides.ServerURL != "" {
@@ -92,15 +98,17 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			Model: strings.TrimSpace(os.Getenv("MULTICA_OPENCODE_MODEL")),
 		}
 	}
-	cursorPath := envOrDefault("MULTICA_CURSOR_PATH", "cursor-agent")
+	cursorPath := envOrDefault("MULTICA_CURSOR_PATH", "agent")
 	if _, err := exec.LookPath(cursorPath); err == nil {
 		agents["cursor"] = AgentEntry{
 			Path:  cursorPath,
 			Model: strings.TrimSpace(os.Getenv("MULTICA_CURSOR_MODEL")),
 		}
 	}
+	// Allow starting with zero agents — workspace provider config may trigger
+	// auto-install after registration.
 	if len(agents) == 0 {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, opencode, or cursor-agent and ensure it is on PATH")
+		slog.Warn("no agent CLI found locally; will attempt auto-install from workspace config after registration")
 	}
 
 	// Host info

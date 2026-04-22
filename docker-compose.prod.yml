@@ -46,16 +46,23 @@ services:
       CLOUDFRONT_DOMAIN: ${CLOUDFRONT_DOMAIN:-}
       CLOUDFRONT_KEY_PAIR_ID: ${CLOUDFRONT_KEY_PAIR_ID:-}
       CLOUDFRONT_PRIVATE_KEY: ${CLOUDFRONT_PRIVATE_KEY:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-}
       MULTICA_GITHUB_APP_ID: ${MULTICA_GITHUB_APP_ID:-}
       MULTICA_GITHUB_APP_SLUG: ${MULTICA_GITHUB_APP_SLUG:-}
       MULTICA_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github-app-key.pem
-      HTTP_PROXY: ""
-      HTTPS_PROXY: ""
-      http_proxy: ""
-      https_proxy: ""
+      MULTICA_GITHUB_APP_WEBHOOK_SECRET: ${MULTICA_GITHUB_APP_WEBHOOK_SECRET:-}
+      # NOTE: HTTP_PROXY / HTTPS_PROXY / NO_PROXY are intentionally NOT set
+      # here. Docker daemon auto-injects them from ~/.docker/config.json on the
+      # host (see "proxies" key). Setting them in compose would override that
+      # injection — including overriding to empty when the host has a proxy
+      # configured, which broke Firebase cert verification on prod.
+      #
+      # If you need to override on a particular host, configure that host's
+      # ~/.docker/config.json instead. Make sure noProxy includes compose
+      # service names: localhost,127.0.0.1,postgres,backend,frontend,migrate
     volumes:
       - ./secrets/github-app-key.pem:/run/secrets/github-app-key.pem:ro
     depends_on:
@@ -68,6 +75,9 @@ services:
       retries: 5
 
   frontend:
+    # NEXT_PUBLIC_FIREBASE_* are baked into the client bundle at image build
+    # time (see apps/web/Dockerfile + .github/workflows/release.yml); they
+    # cannot be injected here at runtime.
     image: ghcr.io/${GHCR_REPO:-nullne/multica}/frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:

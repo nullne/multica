@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,9 @@ const (
 // UpdateRequest represents a pending or completed CLI update request.
 type UpdateRequest struct {
 	ID            string       `json:"id"`
-	RuntimeID     string       `json:"runtime_id"`
+	DaemonID      string       `json:"daemon_id"`
+	RuntimeID     string       `json:"runtime_id,omitempty"` // deprecated: use DaemonID
+	Target        string       `json:"target"`               // "multica", "claude", "codex", etc.
 	Status        UpdateStatus `json:"status"`
 	TargetVersion string       `json:"target_version"`
 	Output        string       `json:"output,omitempty"`
@@ -48,19 +51,51 @@ func NewUpdateStore() *UpdateStore {
 }
 
 func (s *UpdateStore) Create(runtimeID, targetVersion string) (*UpdateRequest, error) {
+	return s.CreateWithTarget(runtimeID, "multica", targetVersion)
+}
+
+// CreateForDaemon creates an update request keyed by daemon UUID.
+func (s *UpdateStore) CreateForDaemon(daemonID, target, targetVersion string) (*UpdateRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Clean up old requests (>5 minutes).
 	for id, req := range s.requests {
 		if time.Since(req.CreatedAt) > 5*time.Minute {
 			delete(s.requests, id)
 		}
 	}
 
-	// Reject if there is already a pending or running update for this runtime.
 	for _, req := range s.requests {
-		if req.RuntimeID == runtimeID && (req.Status == UpdatePending || req.Status == UpdateRunning) {
+		if req.DaemonID == daemonID && req.Target == target && (req.Status == UpdatePending || req.Status == UpdateRunning) {
+			return nil, errUpdateInProgress
+		}
+	}
+
+	req := &UpdateRequest{
+		ID:            randomID(),
+		DaemonID:      daemonID,
+		Target:        target,
+		Status:        UpdatePending,
+		TargetVersion: targetVersion,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+	s.requests[req.ID] = req
+	return req, nil
+}
+
+func (s *UpdateStore) CreateWithTarget(runtimeID, target, targetVersion string) (*UpdateRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, req := range s.requests {
+		if time.Since(req.CreatedAt) > 5*time.Minute {
+			delete(s.requests, id)
+		}
+	}
+
+	for _, req := range s.requests {
+		if req.RuntimeID == runtimeID && req.Target == target && (req.Status == UpdatePending || req.Status == UpdateRunning) {
 			return nil, errUpdateInProgress
 		}
 	}
@@ -68,6 +103,7 @@ func (s *UpdateStore) Create(runtimeID, targetVersion string) (*UpdateRequest, e
 	req := &UpdateRequest{
 		ID:            randomID(),
 		RuntimeID:     runtimeID,
+		Target:        target,
 		Status:        UpdatePending,
 		TargetVersion: targetVersion,
 		CreatedAt:     time.Now(),
@@ -100,19 +136,35 @@ func (s *UpdateStore) Get(id string) *UpdateRequest {
 	return req
 }
 
-// PopPending returns and marks as running the pending update for a runtime.
-func (s *UpdateStore) PopPending(runtimeID string) *UpdateRequest {
+// PopPending returns and marks as running the first pending update for a runtime or daemon.
+func (s *UpdateStore) PopPending(id string) *UpdateRequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, req := range s.requests {
-		if req.RuntimeID == runtimeID && req.Status == UpdatePending {
+		if (req.RuntimeID == id || req.DaemonID == id) && req.Status == UpdatePending {
 			req.Status = UpdateRunning
 			req.UpdatedAt = time.Now()
 			return req
 		}
 	}
 	return nil
+}
+
+// PopAllPending returns and marks as running all pending updates for a daemon or runtime.
+func (s *UpdateStore) PopAllPending(id string) []*UpdateRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var result []*UpdateRequest
+	for _, req := range s.requests {
+		if (req.DaemonID == id || req.RuntimeID == id) && req.Status == UpdatePending {
+			req.Status = UpdateRunning
+			req.UpdatedAt = time.Now()
+			result = append(result, req)
+		}
+	}
+	return result
 }
 
 func (s *UpdateStore) Complete(id string, output string) {
@@ -190,6 +242,7 @@ func (h *Handler) GetUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // ReportUpdateResult receives the update result from the daemon.
+// It also updates the daemon/runtime DB status to reflect the update lifecycle.
 func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 	updateID := chi.URLParam(r, "updateId")
 
@@ -203,18 +256,42 @@ func (h *Handler) ReportUpdateResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	update := h.UpdateStore.Get(updateID)
+
 	switch req.Status {
 	case "completed":
 		h.UpdateStore.Complete(updateID, req.Output)
 	case "failed":
 		h.UpdateStore.Fail(updateID, req.Error)
 	case "running":
-		// No-op: status is already "running" from PopPending. This call is
-		// just a progress signal from the daemon to confirm it received the
-		// update command and is executing it.
+		// Mark daemon/runtime as "updating" in DB.
+		if update != nil {
+			if update.DaemonID != "" {
+				if update.Target == "multica" {
+					h.Queries.SetDaemonAndRuntimesUpdating(r.Context(), parseUUID(update.DaemonID))
+				} else {
+					h.Queries.SetDaemonStatus(r.Context(), db.SetDaemonStatusParams{ID: parseUUID(update.DaemonID), Status: "updating"})
+				}
+			} else if update.RuntimeID != "" {
+				h.Queries.SetRuntimeStatus(r.Context(), db.SetRuntimeStatusParams{ID: parseUUID(update.RuntimeID), Status: "updating"})
+			}
+		}
 	default:
 		writeError(w, http.StatusBadRequest, "invalid status: "+req.Status)
 		return
+	}
+
+	// Restore status to "online" when update finishes (success or failure).
+	if (req.Status == "completed" || req.Status == "failed") && update != nil {
+		if update.DaemonID != "" {
+			h.Queries.SetDaemonStatus(r.Context(), db.SetDaemonStatusParams{ID: parseUUID(update.DaemonID), Status: "online"})
+			// For multica updates, also restore runtimes.
+			if update.Target == "multica" {
+				h.Queries.UpdateRuntimesHeartbeatByDaemon(r.Context(), parseUUID(update.DaemonID))
+			}
+		} else if update.RuntimeID != "" {
+			h.Queries.SetRuntimeStatus(r.Context(), db.SetRuntimeStatusParams{ID: parseUUID(update.RuntimeID), Status: "online"})
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

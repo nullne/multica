@@ -15,6 +15,7 @@ export interface CardProperties {
   description: boolean;
   assignee: boolean;
   dueDate: boolean;
+  labels: boolean;
 }
 
 export interface ActorFilterValue {
@@ -35,6 +36,7 @@ export const CARD_PROPERTY_OPTIONS: { key: keyof CardProperties; label: string }
   { key: "description", label: "Description" },
   { key: "assignee", label: "Assignee" },
   { key: "dueDate", label: "Due date" },
+  { key: "labels", label: "Labels" },
 ];
 
 export interface IssueViewState {
@@ -44,6 +46,7 @@ export interface IssueViewState {
   assigneeFilters: ActorFilterValue[];
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
+  labelFilters: string[];
   sortBy: SortField;
   sortDirection: SortDirection;
   cardProperties: CardProperties;
@@ -54,6 +57,7 @@ export interface IssueViewState {
   toggleAssigneeFilter: (value: ActorFilterValue) => void;
   toggleNoAssignee: () => void;
   toggleCreatorFilter: (value: ActorFilterValue) => void;
+  toggleLabelFilter: (labelId: string) => void;
   hideStatus: (status: IssueStatus) => void;
   showStatus: (status: IssueStatus) => void;
   clearFilters: () => void;
@@ -70,6 +74,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   assigneeFilters: [],
   includeNoAssignee: false,
   creatorFilters: [],
+  labelFilters: [],
   sortBy: "position",
   sortDirection: "asc",
   cardProperties: {
@@ -77,6 +82,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
     description: true,
     assignee: true,
     dueDate: true,
+    labels: true,
   },
   listCollapsedStatuses: [],
 
@@ -121,6 +127,12 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
           : [...state.creatorFilters, value],
       };
     }),
+  toggleLabelFilter: (labelId) =>
+    set((state) => ({
+      labelFilters: state.labelFilters.includes(labelId)
+        ? state.labelFilters.filter((id) => id !== labelId)
+        : [...state.labelFilters, labelId],
+    })),
   hideStatus: (status) =>
     set((state) => {
       // If no filter active, activate filter with all EXCEPT this one
@@ -144,6 +156,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
       assigneeFilters: [],
       includeNoAssignee: false,
       creatorFilters: [],
+      labelFilters: [],
     }),
   setSortBy: (field) => set({ sortBy: field }),
   setSortDirection: (dir) => set({ sortDirection: dir }),
@@ -171,6 +184,7 @@ export const viewStorePersistOptions = (name: string) => ({
     assigneeFilters: state.assigneeFilters,
     includeNoAssignee: state.includeNoAssignee,
     creatorFilters: state.creatorFilters,
+    labelFilters: state.labelFilters,
     sortBy: state.sortBy,
     sortDirection: state.sortDirection,
     cardProperties: state.cardProperties,
