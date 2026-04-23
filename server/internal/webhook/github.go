@@ -191,8 +191,6 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 		action = "merged"
 	}
 
-	prBody := truncate(pr.Body, 2000)
-
 	return map[string]string{
 		"action":      action,
 		"number":      fmt.Sprintf("%d", pr.Number),
@@ -205,7 +203,7 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 		"source_url":  pr.HTMLURL,
 		"source_kind": "pr",
 		"external_id": fmt.Sprintf("%s#%d", ev.Repository.FullName, pr.Number),
-		"body":        fmt.Sprintf("**PR [#%d](%s): %s**\n**Author:** %s\n**Branch:** `%s` → `%s`\n**Action:** %s\n\n%s", pr.Number, pr.HTMLURL, pr.Title, pr.User.Login, pr.Head.Ref, pr.Base.Ref, action, prBody),
+		"body":        fmt.Sprintf("**PR [#%d](%s): %s**\n**Author:** %s\n**Branch:** `%s` → `%s`\n**Action:** %s\n\n%s", pr.Number, pr.HTMLURL, pr.Title, pr.User.Login, pr.Head.Ref, pr.Base.Ref, action, pr.Body),
 	}
 }
 
@@ -236,8 +234,6 @@ func parseGitHubIssues(body []byte) map[string]string {
 		labelNames = append(labelNames, l.Name)
 	}
 
-	issueBody := truncate(issue.Body, 2000)
-
 	return map[string]string{
 		"action":      ev.Action,
 		"number":      fmt.Sprintf("%d", issue.Number),
@@ -249,7 +245,7 @@ func parseGitHubIssues(body []byte) map[string]string {
 		"source_url":  issue.HTMLURL,
 		"source_kind": "issue",
 		"external_id": fmt.Sprintf("%s#%d", ev.Repository.FullName, issue.Number),
-		"body":        fmt.Sprintf("**GitHub Issue [#%d](%s): %s**\n**Author:** %s\n**Action:** %s\n\n%s", issue.Number, issue.HTMLURL, issue.Title, issue.User.Login, ev.Action, issueBody),
+		"body":        fmt.Sprintf("**GitHub Issue [#%d](%s): %s**\n**Author:** %s\n**Action:** %s\n\n%s", issue.Number, issue.HTMLURL, issue.Title, issue.User.Login, ev.Action, issue.Body),
 	}
 }
 
@@ -277,8 +273,6 @@ func parseGitHubIssueComment(body []byte) map[string]string {
 	}
 	_ = json.Unmarshal(body, &ev)
 
-	commentBody := truncate(ev.Comment.Body, 2000)
-
 	// GitHub's "issue_comment" event is fired for both issues AND PR comments
 	// (PRs are issues under the hood). We point source_url at the parent
 	// resource (PR if present, else the issue) so reverse-lookup matches the
@@ -294,7 +288,7 @@ func parseGitHubIssueComment(body []byte) map[string]string {
 		"action":       ev.Action,
 		"number":       fmt.Sprintf("%d", ev.Issue.Number),
 		"issue_title":  ev.Issue.Title,
-		"comment_body": commentBody,
+		"comment_body": ev.Comment.Body,
 		"user":         ev.Comment.User.Login,
 		"repo":         ev.Repository.FullName,
 		"html_url":     ev.Comment.HTMLURL,
@@ -303,15 +297,8 @@ func parseGitHubIssueComment(body []byte) map[string]string {
 		"source_kind":  parentKind,
 		"external_id":  fmt.Sprintf("%s#%d", ev.Repository.FullName, ev.Issue.Number),
 		"title":        fmt.Sprintf("Comment on %s#%d", ev.Repository.FullName, ev.Issue.Number),
-		"body":         fmt.Sprintf("**Comment on [%s#%d](%s): %s**\n**By:** %s\n\n%s", ev.Repository.FullName, ev.Issue.Number, ev.Issue.HTMLURL, ev.Issue.Title, ev.Comment.User.Login, commentBody),
+		"body":         fmt.Sprintf("**Comment on [%s#%d](%s): %s**\n**By:** %s\n\n%s", ev.Repository.FullName, ev.Issue.Number, ev.Issue.HTMLURL, ev.Issue.Title, ev.Comment.User.Login, ev.Comment.Body),
 	}
-}
-
-func truncate(s string, max int) string {
-	if len(s) > max {
-		return s[:max] + "\n\n... (truncated)"
-	}
-	return s
 }
 
 func (a *githubAdapter) Keys() []AdapterKey {
@@ -329,7 +316,7 @@ func (a *githubAdapter) Keys() []AdapterKey {
 		{Key: "source_url", Description: "Stable URL of the parent resource — used by issue_link reverse lookup", Required: true},
 		{Key: "source_kind", Description: "'pr' | 'issue' | 'commit'", Required: true},
 		{Key: "external_id", Description: "Compact id like 'owner/repo#123'", Required: false},
-		{Key: "comment_body", Description: "Truncated comment body (issue_comment only)", Required: false},
+		{Key: "comment_body", Description: "Full comment body (issue_comment only)", Required: false},
 		{Key: "commits", Description: "Markdown list of commits (push only)", Required: false},
 	}
 }
