@@ -238,6 +238,63 @@ func TestGitHubAdapter_MissingHeader(t *testing.T) {
 	}
 }
 
+func TestGitHubAdapter_LongBodyPreserved(t *testing.T) {
+	// 8 KiB body — well above the old 2000-char truncation limit.
+	longBody := strings.Repeat("x", 8*1024)
+	a := &githubAdapter{}
+
+	t.Run("pull_request", func(t *testing.T) {
+		payload := []byte(`{"action":"opened","pull_request":{"number":1,"title":"T","body":"` + longBody + `","html_url":"https://github.com/o/r/pull/1","user":{"login":"u"},"head":{"ref":"h"},"base":{"ref":"main"}},"repository":{"full_name":"o/r"}}`)
+		headers := http.Header{}
+		headers.Set("X-GitHub-Event", "pull_request")
+		events, err := a.Parse(payload, headers)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		body := events[0].Data["body"]
+		if !strings.Contains(body, longBody) {
+			t.Errorf("PR body truncated: len=%d, want >=%d", len(body), len(longBody))
+		}
+		if strings.Contains(body, "truncated") {
+			t.Error("PR body contains truncation marker")
+		}
+	})
+
+	t.Run("issues", func(t *testing.T) {
+		payload := []byte(`{"action":"opened","issue":{"number":1,"title":"T","body":"` + longBody + `","html_url":"https://github.com/o/r/issues/1","user":{"login":"u"},"labels":[]},"repository":{"full_name":"o/r"}}`)
+		headers := http.Header{}
+		headers.Set("X-GitHub-Event", "issues")
+		events, err := a.Parse(payload, headers)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		body := events[0].Data["body"]
+		if !strings.Contains(body, longBody) {
+			t.Errorf("issue body truncated: len=%d, want >=%d", len(body), len(longBody))
+		}
+		if strings.Contains(body, "truncated") {
+			t.Error("issue body contains truncation marker")
+		}
+	})
+
+	t.Run("issue_comment", func(t *testing.T) {
+		payload := []byte(`{"action":"created","comment":{"body":"` + longBody + `","html_url":"https://github.com/o/r/issues/1#c1","user":{"login":"u"}},"issue":{"number":1,"title":"T","html_url":"https://github.com/o/r/issues/1"},"repository":{"full_name":"o/r"}}`)
+		headers := http.Header{}
+		headers.Set("X-GitHub-Event", "issue_comment")
+		events, err := a.Parse(payload, headers)
+		if err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		commentBody := events[0].Data["comment_body"]
+		if commentBody != longBody {
+			t.Errorf("comment_body truncated: len=%d, want %d", len(commentBody), len(longBody))
+		}
+		if strings.Contains(events[0].Data["body"], "truncated") {
+			t.Error("comment body field contains truncation marker")
+		}
+	})
+}
+
 func TestGitHubAdapter_RegisteredInList(t *testing.T) {
 	infos := ListAdapters()
 	for _, info := range infos {
