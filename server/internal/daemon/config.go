@@ -21,6 +21,7 @@ const (
 	DefaultWorkspaceSyncInterval = 30 * time.Second
 	DefaultHealthPort            = 19514
 	DefaultMaxConcurrentTasks    = 20
+	DefaultCodexModel            = "gpt-5.5-medium"
 )
 
 // Config holds all daemon configuration.
@@ -88,7 +89,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if _, err := exec.LookPath(codexPath); err == nil {
 		agents["codex"] = AgentEntry{
 			Path:  codexPath,
-			Model: strings.TrimSpace(os.Getenv("MULTICA_CODEX_MODEL")),
+			Model: envOrDefault("MULTICA_CODEX_MODEL", DefaultCodexModel),
 		}
 	}
 	opencodePath := envOrDefault("MULTICA_OPENCODE_PATH", "opencode")
