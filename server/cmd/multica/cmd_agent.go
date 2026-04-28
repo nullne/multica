@@ -26,10 +26,21 @@ var agentListCmd = &cobra.Command{
 	RunE:  runAgentList,
 }
 
+var agentUpdateCmd = &cobra.Command{
+	Use:   "update <id>",
+	Short: "Update an agent",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runAgentUpdate,
+}
+
 func init() {
 	agentCmd.AddCommand(agentListCmd)
+	agentCmd.AddCommand(agentUpdateCmd)
 
 	agentListCmd.Flags().String("output", "table", "Output format: table or json")
+
+	agentUpdateCmd.Flags().String("default-daemon", "", "Default daemon name or ID (use empty string to clear)")
+	agentUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 }
 
 // resolveProfile returns the --profile flag value (empty string means default profile).
@@ -170,4 +181,54 @@ func strVal(m map[string]any, key string) string {
 		return ""
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+func runAgentUpdate(cmd *cobra.Command, args []string) error {
+	agentID := args[0]
+
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	body := map[string]any{}
+
+	if cmd.Flags().Changed("default-daemon") {
+		daemonName, _ := cmd.Flags().GetString("default-daemon")
+		if daemonName == "" {
+			// Explicit empty string clears the default daemon.
+			body["default_daemon_id"] = nil
+		} else {
+			daemonID, resolveErr := resolveDaemonID(ctx, client, daemonName)
+			if resolveErr != nil {
+				return fmt.Errorf("resolve daemon: %w", resolveErr)
+			}
+			body["default_daemon_id"] = daemonID
+		}
+	}
+
+	if len(body) == 0 {
+		return fmt.Errorf("no fields to update; use flags like --default-daemon")
+	}
+
+	path := "/api/agents/" + agentID
+	if client.WorkspaceID != "" {
+		path += "?workspace_id=" + client.WorkspaceID
+	}
+
+	var result map[string]any
+	if err := client.PutJSON(ctx, path, body, &result); err != nil {
+		return fmt.Errorf("update agent: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Agent %s updated.\n", truncateID(agentID))
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "table" {
+		return nil
+	}
+	return cli.PrintJSON(os.Stdout, result)
 }

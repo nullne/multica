@@ -51,6 +51,19 @@ var daemonLogsCmd = &cobra.Command{
 	RunE:  runDaemonLogs,
 }
 
+var daemonListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List daemons registered in the workspace",
+	RunE:  runDaemonList,
+}
+
+var daemonGetCmd = &cobra.Command{
+	Use:   "get <name-or-id>",
+	Short: "Get daemon details",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDaemonGet,
+}
+
 func init() {
 	f := daemonStartCmd.Flags()
 	f.Bool("foreground", false, "Run in the foreground instead of background")
@@ -67,10 +80,15 @@ func init() {
 
 	daemonStatusCmd.Flags().String("output", "table", "Output format: table or json")
 
+	daemonListCmd.Flags().String("output", "table", "Output format: table or json")
+	daemonGetCmd.Flags().String("output", "json", "Output format: table or json")
+
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonLogsCmd)
+	daemonCmd.AddCommand(daemonListCmd)
+	daemonCmd.AddCommand(daemonGetCmd)
 }
 
 // daemonDirForProfile returns the state directory for the given profile.
@@ -459,4 +477,145 @@ func checkDaemonHealthOnPort(ctx context.Context, port int) map[string]any {
 func flagString(cmd *cobra.Command, name string) string {
 	val, _ := cmd.Flags().GetString(name)
 	return val
+}
+
+// ---------------------------------------------------------------------------
+// Server-side daemon list/get
+// ---------------------------------------------------------------------------
+
+func runDaemonList(cmd *cobra.Command, _ []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	path := "/api/daemons"
+	if client.WorkspaceID != "" {
+		path += "?workspace_id=" + client.WorkspaceID
+	}
+
+	var daemons []map[string]any
+	if err := client.GetJSON(ctx, path, &daemons); err != nil {
+		return fmt.Errorf("list daemons: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return cli.PrintJSON(os.Stdout, daemons)
+	}
+
+	headers := []string{"ID", "NAME", "STATUS", "CLI VERSION", "LAST SEEN"}
+	rows := make([][]string, 0, len(daemons))
+	for _, d := range daemons {
+		lastSeen := strVal(d, "last_seen_at")
+		if len(lastSeen) >= 16 {
+			lastSeen = lastSeen[:16]
+		}
+		rows = append(rows, []string{
+			truncateID(strVal(d, "id")),
+			strVal(d, "device_name"),
+			strVal(d, "status"),
+			strVal(d, "cli_version"),
+			lastSeen,
+		})
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	return nil
+}
+
+func runDaemonGet(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	daemonID, err := resolveDaemonID(ctx, client, args[0])
+	if err != nil {
+		return err
+	}
+
+	var d map[string]any
+	if err := client.GetJSON(ctx, "/api/daemons/"+daemonID, &d); err != nil {
+		return fmt.Errorf("get daemon: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "table" {
+		lastSeen := strVal(d, "last_seen_at")
+		if len(lastSeen) >= 16 {
+			lastSeen = lastSeen[:16]
+		}
+		headers := []string{"ID", "NAME", "STATUS", "CLI VERSION", "LAST SEEN"}
+		rows := [][]string{{
+			strVal(d, "id"),
+			strVal(d, "device_name"),
+			strVal(d, "status"),
+			strVal(d, "cli_version"),
+			lastSeen,
+		}}
+		cli.PrintTable(os.Stdout, headers, rows)
+		return nil
+	}
+
+	return cli.PrintJSON(os.Stdout, d)
+}
+
+// resolveDaemonID resolves a daemon name or ID prefix to a full daemon UUID.
+// Name match (case-insensitive, on device_name) takes priority; falls back to ID prefix match.
+func resolveDaemonID(ctx context.Context, client *cli.APIClient, nameOrID string) (string, error) {
+	path := "/api/daemons"
+	if client.WorkspaceID != "" {
+		path += "?workspace_id=" + client.WorkspaceID
+	}
+
+	var daemons []map[string]any
+	if err := client.GetJSON(ctx, path, &daemons); err != nil {
+		return "", fmt.Errorf("list daemons: %w", err)
+	}
+
+	needle := strings.ToLower(nameOrID)
+
+	// First pass: name match.
+	var nameMatches []map[string]any
+	for _, d := range daemons {
+		if strings.Contains(strings.ToLower(strVal(d, "device_name")), needle) {
+			nameMatches = append(nameMatches, d)
+		}
+	}
+	if len(nameMatches) == 1 {
+		return strVal(nameMatches[0], "id"), nil
+	}
+	if len(nameMatches) > 1 {
+		parts := make([]string, len(nameMatches))
+		for i, d := range nameMatches {
+			parts[i] = fmt.Sprintf("  %q (%s)", strVal(d, "device_name"), truncateID(strVal(d, "id")))
+		}
+		return "", fmt.Errorf("ambiguous daemon name %q; matches:\n%s", nameOrID, strings.Join(parts, "\n"))
+	}
+
+	// Second pass: ID prefix match.
+	var idMatches []map[string]any
+	for _, d := range daemons {
+		if strings.HasPrefix(strVal(d, "id"), nameOrID) {
+			idMatches = append(idMatches, d)
+		}
+	}
+	if len(idMatches) == 1 {
+		return strVal(idMatches[0], "id"), nil
+	}
+	if len(idMatches) > 1 {
+		parts := make([]string, len(idMatches))
+		for i, d := range idMatches {
+			parts[i] = fmt.Sprintf("  %q (%s)", strVal(d, "device_name"), strVal(d, "id"))
+		}
+		return "", fmt.Errorf("ambiguous daemon ID prefix %q; matches:\n%s", nameOrID, strings.Join(parts, "\n"))
+	}
+
+	return "", fmt.Errorf("no daemon found matching %q", nameOrID)
 }

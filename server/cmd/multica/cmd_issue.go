@@ -139,6 +139,7 @@ func init() {
 	issueCreateCmd.Flags().String("status", "", "Issue status")
 	issueCreateCmd.Flags().String("priority", "", "Issue priority")
 	issueCreateCmd.Flags().String("assignee", "", "Assignee name (member or agent)")
+	issueCreateCmd.Flags().String("daemon", "", "Daemon name or ID to run the task on (overrides agent default)")
 	issueCreateCmd.Flags().String("verifier", "", "Verifier agent name")
 	issueCreateCmd.Flags().String("parent", "", "Parent issue ID")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (RFC3339 format)")
@@ -162,6 +163,7 @@ func init() {
 	// issue assign
 	issueAssignCmd.Flags().String("to", "", "Assignee name (member or agent)")
 	issueAssignCmd.Flags().Bool("unassign", false, "Remove current assignee")
+	issueAssignCmd.Flags().String("daemon", "", "Daemon name or ID to run the task on (overrides agent default)")
 	issueAssignCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue comment list
@@ -348,6 +350,13 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 		}
 		body["verifier_agent_id"] = verifierID
 	}
+	if v, _ := cmd.Flags().GetString("daemon"); v != "" {
+		daemonID, resolveErr := resolveDaemonID(ctx, client, v)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve daemon: %w", resolveErr)
+		}
+		body["dispatch_daemon_id"] = daemonID
+	}
 
 	var result map[string]any
 	if err := client.PostJSON(ctx, "/api/issues", body, &result); err != nil {
@@ -468,6 +477,7 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 func runIssueAssign(cmd *cobra.Command, args []string) error {
 	toName, _ := cmd.Flags().GetString("to")
 	unassign, _ := cmd.Flags().GetBool("unassign")
+	daemonName, _ := cmd.Flags().GetString("daemon")
 
 	if toName == "" && !unassign {
 		return fmt.Errorf("provide --to <name> or --unassign")
@@ -495,6 +505,13 @@ func runIssueAssign(cmd *cobra.Command, args []string) error {
 		}
 		body["assignee_type"] = aType
 		body["assignee_id"] = aID
+	}
+	if daemonName != "" {
+		daemonID, resolveErr := resolveDaemonID(ctx, client, daemonName)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve daemon: %w", resolveErr)
+		}
+		body["dispatch_daemon_id"] = daemonID
 	}
 
 	var result map[string]any
