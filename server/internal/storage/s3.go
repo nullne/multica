@@ -16,9 +16,9 @@ import (
 )
 
 type S3Storage struct {
-	client    *s3.Client
-	bucket    string
-	cdnDomain string // if set, returned URLs use this instead of bucket name
+	client     *s3.Client
+	bucket     string
+	publicBase string // public URL prefix, always ends with "/"
 }
 
 // NewS3StorageFromEnv creates an S3Storage from environment variables.
@@ -27,7 +27,20 @@ type S3Storage struct {
 // Environment variables:
 //   - S3_BUCKET (required)
 //   - S3_REGION (default: us-west-2)
-//   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (optional; falls back to default credential chain)
+//   - S3_ENDPOINT (optional) — custom S3-compatible API endpoint
+//     (e.g. https://storage.googleapis.com for GCS,
+//     https://<account>.r2.cloudflarestorage.com for Cloudflare R2)
+//   - S3_USE_PATH_STYLE (optional) — "true"/"false". Defaults to true when
+//     S3_ENDPOINT is set (required by GCS / MinIO), false otherwise.
+//   - S3_PUBLIC_URL_BASE (optional) — explicit prefix used to build public
+//     URLs returned by Upload. Falls back to CLOUDFRONT_DOMAIN, then to a
+//     value derived from S3_ENDPOINT and the bucket name, then to the bucket
+//     name (legacy AWS behavior).
+//   - CLOUDFRONT_DOMAIN (optional) — used as the public URL host when
+//     S3_PUBLIC_URL_BASE is empty.
+//   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (optional; falls back to
+//     default credential chain). For GCS use HMAC keys; for R2 use the R2
+//     access key pair.
 func NewS3StorageFromEnv() *S3Storage {
 	bucket := os.Getenv("S3_BUCKET")
 	if bucket == "" {
@@ -58,14 +71,92 @@ func NewS3StorageFromEnv() *S3Storage {
 		return nil
 	}
 
-	cdnDomain := os.Getenv("CLOUDFRONT_DOMAIN")
+	endpoint := strings.TrimRight(os.Getenv("S3_ENDPOINT"), "/")
+	pathStyle := resolvePathStyle(endpoint, os.Getenv("S3_USE_PATH_STYLE"))
 
-	slog.Info("S3 storage initialized", "bucket", bucket, "region", region, "cdn_domain", cdnDomain)
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		if endpoint != "" {
+			o.BaseEndpoint = aws.String(endpoint)
+		}
+		o.UsePathStyle = pathStyle
+	})
+
+	publicBase := resolvePublicBase(
+		os.Getenv("S3_PUBLIC_URL_BASE"),
+		os.Getenv("CLOUDFRONT_DOMAIN"),
+		endpoint,
+		bucket,
+		pathStyle,
+	)
+
+	slog.Info("S3 storage initialized",
+		"bucket", bucket,
+		"region", region,
+		"endpoint", endpoint,
+		"path_style", pathStyle,
+		"public_base", publicBase,
+	)
 	return &S3Storage{
-		client:    s3.NewFromConfig(cfg),
-		bucket:    bucket,
-		cdnDomain: cdnDomain,
+		client:     client,
+		bucket:     bucket,
+		publicBase: publicBase,
 	}
+}
+
+// resolvePathStyle returns whether the S3 client should use path-style
+// addressing. When the user sets S3_USE_PATH_STYLE explicitly we honor it;
+// otherwise we default to true if a custom endpoint is configured (most
+// S3-compatible services require it) and false for AWS S3 itself.
+func resolvePathStyle(endpoint, raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true", "1", "yes":
+		return true
+	case "false", "0", "no":
+		return false
+	}
+	return endpoint != ""
+}
+
+// resolvePublicBase computes the URL prefix used to build object URLs.
+// The returned value always ends with "/" so callers can simply append the
+// object key.
+func resolvePublicBase(explicit, cdnDomain, endpoint, bucket string, pathStyle bool) string {
+	if explicit != "" {
+		return ensureTrailingSlash(explicit)
+	}
+	if cdnDomain != "" {
+		return ensureTrailingSlash("https://" + cdnDomain)
+	}
+	if endpoint != "" {
+		if pathStyle {
+			return ensureTrailingSlash(endpoint + "/" + bucket)
+		}
+		return ensureTrailingSlash(injectBucketIntoHost(endpoint, bucket))
+	}
+	return ensureTrailingSlash("https://" + bucket)
+}
+
+func ensureTrailingSlash(s string) string {
+	if strings.HasSuffix(s, "/") {
+		return s
+	}
+	return s + "/"
+}
+
+// injectBucketIntoHost rewrites "https://host[/path]" into
+// "https://bucket.host[/path]" for virtual-hosted addressing against a
+// custom endpoint.
+func injectBucketIntoHost(endpoint, bucket string) string {
+	scheme := "https://"
+	rest := endpoint
+	switch {
+	case strings.HasPrefix(rest, "https://"):
+		rest = strings.TrimPrefix(rest, "https://")
+	case strings.HasPrefix(rest, "http://"):
+		scheme = "http://"
+		rest = strings.TrimPrefix(rest, "http://")
+	}
+	return scheme + bucket + "." + rest
 }
 
 // sanitizeFilename removes characters that could cause header injection in Content-Disposition.
@@ -83,26 +174,20 @@ func sanitizeFilename(name string) string {
 	return b.String()
 }
 
-// KeyFromURL extracts the S3 object key from a CDN or bucket URL.
-// e.g. "https://multica-static.copilothub.ai/abc123.png" → "abc123.png"
+// KeyFromURL extracts the object key from a public URL produced by Upload.
+// Falls back to the substring after the last "/" when the prefix does not
+// match (e.g. URLs produced by an older configuration).
 func (s *S3Storage) KeyFromURL(rawURL string) string {
-	// Strip the "https://domain/" prefix.
-	for _, prefix := range []string{
-		"https://" + s.cdnDomain + "/",
-		"https://" + s.bucket + "/",
-	} {
-		if strings.HasPrefix(rawURL, prefix) {
-			return strings.TrimPrefix(rawURL, prefix)
-		}
+	if s.publicBase != "" && strings.HasPrefix(rawURL, s.publicBase) {
+		return strings.TrimPrefix(rawURL, s.publicBase)
 	}
-	// Fallback: take everything after the last "/".
 	if i := strings.LastIndex(rawURL, "/"); i >= 0 {
 		return rawURL[i+1:]
 	}
 	return rawURL
 }
 
-// Delete removes an object from S3. Errors are logged but not fatal.
+// Delete removes an object from the bucket. Errors are logged but not fatal.
 func (s *S3Storage) Delete(ctx context.Context, key string) {
 	if key == "" {
 		return
@@ -116,7 +201,7 @@ func (s *S3Storage) Delete(ctx context.Context, key string) {
 	}
 }
 
-// DeleteKeys removes multiple objects from S3. Best-effort, errors are logged.
+// DeleteKeys removes multiple objects. Best-effort, errors are logged.
 func (s *S3Storage) DeleteKeys(ctx context.Context, keys []string) {
 	for _, key := range keys {
 		s.Delete(ctx, key)
@@ -138,10 +223,5 @@ func (s *S3Storage) Upload(ctx context.Context, key string, data []byte, content
 		return "", fmt.Errorf("s3 PutObject: %w", err)
 	}
 
-	domain := s.bucket
-	if s.cdnDomain != "" {
-		domain = s.cdnDomain
-	}
-	link := fmt.Sprintf("https://%s/%s", domain, key)
-	return link, nil
+	return s.publicBase + key, nil
 }

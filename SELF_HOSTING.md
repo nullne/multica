@@ -107,16 +107,38 @@ server-side project ID and the public Firebase app settings used by the web UI.
 
 ### File Storage (Optional)
 
-For file uploads and attachments, configure S3 and CloudFront:
+For file uploads and attachments, configure an S3 (or S3-compatible) bucket.
+CloudFront-related variables only apply when fronting AWS S3 with CloudFront
+signed URLs/cookies; leave them empty for GCS, R2, MinIO, or a public bucket.
 
 | Variable | Description |
 |----------|-------------|
-| `S3_BUCKET` | S3 bucket name |
-| `S3_REGION` | AWS region (default: `us-west-2`) |
-| `CLOUDFRONT_DOMAIN` | CloudFront distribution domain |
-| `CLOUDFRONT_KEY_PAIR_ID` | CloudFront key pair ID for signed URLs |
-| `CLOUDFRONT_PRIVATE_KEY` | CloudFront private key (PEM format) |
-| `COOKIE_DOMAIN` | Domain for CloudFront auth cookies |
+| `S3_BUCKET` | Bucket name |
+| `S3_REGION` | Region (default: `us-west-2`) |
+| `S3_ENDPOINT` | S3-compatible API endpoint. Leave empty for AWS S3. |
+| `S3_USE_PATH_STYLE` | `true` / `false`. Defaults to `true` when `S3_ENDPOINT` is set, `false` otherwise. |
+| `S3_PUBLIC_URL_BASE` | Optional explicit prefix for public object URLs. Defaults to `CLOUDFRONT_DOMAIN`, then to `<S3_ENDPOINT>/<bucket>`, then to `https://<bucket>`. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Credentials. For GCS use HMAC keys; for R2 use the R2 access key pair. |
+| `CLOUDFRONT_DOMAIN` | CloudFront distribution domain (AWS only) |
+| `CLOUDFRONT_KEY_PAIR_ID` | CloudFront key pair ID for signed URLs (AWS only) |
+| `CLOUDFRONT_PRIVATE_KEY` | CloudFront private key in PEM format (AWS only) |
+| `COOKIE_DOMAIN` | Domain for CloudFront auth cookies (AWS only) |
+
+**Google Cloud Storage via S3 compatibility**
+
+```bash
+S3_BUCKET=my-multica-bucket
+S3_REGION=auto
+S3_ENDPOINT=https://storage.googleapis.com
+S3_PUBLIC_URL_BASE=https://storage.googleapis.com/my-multica-bucket
+AWS_ACCESS_KEY_ID=<HMAC access key>
+AWS_SECRET_ACCESS_KEY=<HMAC secret>
+```
+
+Generate the HMAC key pair from the GCP console
+(IAM & Admin → Service Accounts → *service account* → Keys → HMAC keys) and
+make sure the bucket grants public read on uploaded objects if you want the
+returned URLs to be directly accessible.
 
 ### Server
 
