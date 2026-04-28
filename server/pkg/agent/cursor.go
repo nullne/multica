@@ -204,33 +204,45 @@ func (b *cursorBackend) handleUser(msg cursorSDKMessage, ch chan<- Message) {
 }
 
 func (b *cursorBackend) handleToolCall(msg cursorSDKMessage, ch chan<- Message, output *strings.Builder) {
-	// Cursor emits tool_call events with subtype "started" and "completed".
-	var tc cursorToolCallEvent
-	if err := json.Unmarshal(msg.ToolCall, &tc); err != nil {
+	// Cursor stream-json format: call_id is top-level; tool_call is a map keyed
+	// by tool type (e.g. "shellToolCall") whose value is the tool-specific payload.
+	var toolCallMap map[string]json.RawMessage
+	if err := json.Unmarshal(msg.ToolCall, &toolCallMap); err != nil {
+		return
+	}
+
+	var toolName string
+	var toolPayload json.RawMessage
+	for k, v := range toolCallMap {
+		toolName = k
+		toolPayload = v
+		break
+	}
+	if toolName == "" {
 		return
 	}
 
 	switch msg.Subtype {
 	case "started":
 		var input map[string]any
-		if tc.Input != nil {
-			_ = json.Unmarshal(tc.Input, &input)
+		if toolPayload != nil {
+			_ = json.Unmarshal(toolPayload, &input)
 		}
 		trySend(ch, Message{
 			Type:   MessageToolUse,
-			Tool:   tc.ToolType,
-			CallID: tc.ID,
+			Tool:   toolName,
+			CallID: msg.CallID,
 			Input:  input,
 		})
 	case "completed":
 		resultStr := ""
-		if tc.Output != nil {
-			resultStr = string(tc.Output)
+		if toolPayload != nil {
+			resultStr = string(toolPayload)
 		}
 		trySend(ch, Message{
 			Type:   MessageToolResult,
-			Tool:   tc.ToolType,
-			CallID: tc.ID,
+			Tool:   toolName,
+			CallID: msg.CallID,
 			Output: resultStr,
 		})
 	}
@@ -246,13 +258,14 @@ type cursorSDKMessage struct {
 	Subtype   string          `json:"subtype,omitempty"`
 	Message   json.RawMessage `json:"message,omitempty"`
 	SessionID string          `json:"session_id,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
 
 	// result fields
 	ResultText string  `json:"result,omitempty"`
 	IsError    bool    `json:"is_error,omitempty"`
 	DurationMs float64 `json:"duration_ms,omitempty"`
 
-	// tool_call fields
+	// tool_call fields — map keyed by tool type (e.g. "shellToolCall")
 	ToolCall json.RawMessage `json:"tool_call,omitempty"`
 }
 
@@ -271,9 +284,3 @@ type cursorContentBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
-type cursorToolCallEvent struct {
-	ID       string          `json:"id,omitempty"`
-	ToolType string          `json:"tool_type,omitempty"`
-	Input    json.RawMessage `json:"input,omitempty"`
-	Output   json.RawMessage `json:"output,omitempty"`
-}
