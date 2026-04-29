@@ -14,6 +14,7 @@ import (
 	"github.com/nullne/multica/server/internal/events"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/internal/realtime"
+	"github.com/nullne/multica/server/internal/telegram"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -56,12 +57,13 @@ func main() {
 	registerListeners(bus, hub)
 
 	queries := db.New(pool)
+	telegramBot := telegram.NewBotFromEnv()
 	// Order matters: subscriber listeners must register BEFORE notification listeners.
 	// The notification listener queries the subscriber table to determine recipients,
 	// so subscribers must be written first within the same synchronous event dispatch.
 	registerSubscriberListeners(bus, queries)
 	registerActivityListeners(bus, queries)
-	registerNotificationListeners(bus, queries)
+	registerNotificationListeners(bus, queries, telegramBot)
 
 	r := NewRouter(pool, hub, bus)
 

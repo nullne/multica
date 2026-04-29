@@ -66,7 +66,7 @@ func TestMain(m *testing.M) {
 	hub := realtime.NewHub()
 	go hub.Run()
 	bus := events.New()
-	testHandler = New(queries, pool, hub, bus, nil, nil, nil)
+	testHandler = New(queries, pool, hub, bus, nil, nil, nil, nil)
 	testPool = pool
 
 	testUserID, testWorkspaceID, err = setupHandlerTestFixture(ctx, pool)
