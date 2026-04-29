@@ -19,6 +19,7 @@ import (
 	"github.com/nullne/multica/server/internal/middleware"
 	"github.com/nullne/multica/server/internal/realtime"
 	"github.com/nullne/multica/server/internal/storage"
+	"github.com/nullne/multica/server/internal/telegram"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -51,7 +52,8 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	s3 := storage.NewS3StorageFromEnv()
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
 	githubApp := gh.NewAppFromEnv()
-	h := handler.New(queries, pool, hub, bus, s3, cfSigner, githubApp)
+	telegramBot := telegram.NewBotFromEnv()
+	h := handler.New(queries, pool, hub, bus, s3, cfSigner, githubApp, telegramBot)
 
 	r := chi.NewRouter()
 
@@ -123,6 +125,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		r.Get("/api/me", h.GetMe)
 		r.Patch("/api/me", h.UpdateMe)
 		r.Post("/api/upload-file", h.UploadFile)
+		r.Get("/api/me/notification-channels", h.ListNotificationChannels)
+		r.Put("/api/me/notification-channels/telegram", h.UpsertTelegramChannel)
+		r.Delete("/api/me/notification-channels/telegram", h.DeleteTelegramChannel)
 
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)

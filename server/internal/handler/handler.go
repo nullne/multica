@@ -18,6 +18,7 @@ import (
 	"github.com/nullne/multica/server/internal/realtime"
 	"github.com/nullne/multica/server/internal/service"
 	"github.com/nullne/multica/server/internal/storage"
+	"github.com/nullne/multica/server/internal/telegram"
 	"github.com/nullne/multica/server/internal/util"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
@@ -45,9 +46,10 @@ type Handler struct {
 	CFSigner         *auth.CloudFrontSigner
 	FirebaseVerifier auth.FirebaseVerifier
 	GitHubApp        *gh.App
+	TelegramBot      *telegram.Bot
 }
 
-func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, s3 *storage.S3Storage, cfSigner *auth.CloudFrontSigner, githubApp *gh.App) *Handler {
+func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, s3 *storage.S3Storage, cfSigner *auth.CloudFrontSigner, githubApp *gh.App, telegramBot *telegram.Bot) *Handler {
 	var executor dbExecutor
 	if candidate, ok := txStarter.(dbExecutor); ok {
 		executor = candidate
@@ -66,6 +68,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		CFSigner:         cfSigner,
 		FirebaseVerifier: auth.NewFirebaseVerifierFromEnv(),
 		GitHubApp:        githubApp,
+		TelegramBot:      telegramBot,
 	}
 }
 

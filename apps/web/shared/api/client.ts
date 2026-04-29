@@ -4,6 +4,8 @@ import type {
   UpdateIssueRequest,
   ListIssuesResponse,
   UpdateMeRequest,
+  NotificationChannel,
+  UpsertTelegramChannelRequest,
   CreateMemberRequest,
   UpdateMemberRequest,
   ListIssuesParams,
@@ -189,6 +191,22 @@ export class ApiClient {
       method: "PATCH",
       body: JSON.stringify(data),
     });
+  }
+
+  // Notification channels
+  async listNotificationChannels(): Promise<NotificationChannel[]> {
+    return this.fetch("/api/me/notification-channels");
+  }
+
+  async upsertTelegramChannel(data: UpsertTelegramChannelRequest): Promise<NotificationChannel> {
+    return this.fetch("/api/me/notification-channels/telegram", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTelegramChannel(): Promise<void> {
+    await this.fetch("/api/me/notification-channels/telegram", { method: "DELETE" });
   }
 
   // Issues

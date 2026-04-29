@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/events"
 	"github.com/nullne/multica/server/internal/handler"
+	"github.com/nullne/multica/server/internal/telegram"
 	"github.com/nullne/multica/server/internal/util"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 	"github.com/nullne/multica/server/pkg/protocol"
@@ -69,10 +72,12 @@ func parseMentions(content string) []mention {
 // notifySubscribers queries the subscriber table for an issue, excludes the
 // actor and any extra IDs, and creates inbox items for each remaining member
 // subscriber. Publishes an inbox:new event for each notification.
+// When bot is non-nil, it also delivers the notification via Telegram.
 func notifySubscribers(
 	ctx context.Context,
 	queries *db.Queries,
 	bus *events.Bus,
+	bot *telegram.Bot,
 	issueID string,
 	issueStatus string,
 	workspaceID string,
@@ -90,6 +95,8 @@ func notifySubscribers(
 			"issue_id", issueID, "error", err)
 		return
 	}
+
+	var telegramRecipients []pgtype.UUID
 
 	for _, sub := range subs {
 		// Only notify member-type subscribers (not agents)
@@ -137,7 +144,11 @@ func notifySubscribers(
 			ActorID:     e.ActorID,
 			Payload:     map[string]any{"item": resp},
 		})
+
+		telegramRecipients = append(telegramRecipients, sub.UserID)
 	}
+
+	sendTelegramToSubscribers(ctx, queries, bot, telegramRecipients, telegramMessage(notifType, title, body))
 }
 
 // notifyDirect creates an inbox item for a specific recipient. Skips if the
@@ -266,6 +277,54 @@ func notifyMentionedMembers(
 	}
 }
 
+// sendTelegramToSubscribers looks up enabled Telegram channels for the given
+// member user IDs and delivers the message asynchronously. Delivery errors are
+// logged without affecting the caller.
+func sendTelegramToSubscribers(ctx context.Context, queries *db.Queries, bot *telegram.Bot, userIDs []pgtype.UUID, text string) {
+	if bot == nil || len(userIDs) == 0 {
+		return
+	}
+	channels, err := queries.ListEnabledTelegramChannelsForUsers(ctx, userIDs)
+	if err != nil {
+		slog.Error("telegram: failed to look up channels", "error", err)
+		return
+	}
+	for _, ch := range channels {
+		bot.SendMessageAsync(ch.ChannelID, text)
+	}
+}
+
+// telegramMessage builds a concise notification message for Telegram delivery.
+func telegramMessage(notifType, issueTitle, body string) string {
+	label := notifType
+	switch notifType {
+	case "new_comment":
+		label = "New comment"
+	case "issue_assigned":
+		label = "Assigned to you"
+	case "status_changed":
+		label = "Status changed"
+	case "priority_changed":
+		label = "Priority changed"
+	case "due_date_changed":
+		label = "Due date changed"
+	case "assignee_changed":
+		label = "Assignee changed"
+	case "mentioned":
+		label = "You were mentioned"
+	case "task_failed":
+		label = "Task failed"
+	case "unassigned":
+		label = "Unassigned"
+	case "reaction_added":
+		label = "Reaction added"
+	}
+	if body != "" {
+		return fmt.Sprintf("<b>%s</b>\n%s\n\n%s", label, issueTitle, body)
+	}
+	return fmt.Sprintf("<b>%s</b>\n%s", label, issueTitle)
+}
+
 // registerNotificationListeners wires up event bus listeners that create inbox
 // notifications using the subscriber table. This replaces the old hardcoded
 // notification logic from inbox_listeners.go.
@@ -273,7 +332,7 @@ func notifyMentionedMembers(
 // NOTE: uses context.Background() because the event bus dispatches synchronously
 // within the HTTP request goroutine. Adding per-handler timeouts is a bus-level
 // concern — see events.Bus for future improvements.
-func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
+func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *telegram.Bot) {
 	ctx := context.Background()
 
 	// issue:created — Direct notification to assignee if assignee != actor
@@ -291,7 +350,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		skip := map[string]bool{e.ActorID: true}
 
 		// Direct notification to assignee
-		if issue.AssigneeType != nil && issue.AssigneeID != nil {
+		if issue.AssigneeType != nil && issue.AssigneeID != nil && *issue.AssigneeType == "member" {
 			skip[*issue.AssigneeID] = true
 			notifyDirect(ctx, queries, bus,
 				*issue.AssigneeType, *issue.AssigneeID,
@@ -301,6 +360,9 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"",
 				emptyDetails,
 			)
+			sendTelegramToSubscribers(ctx, queries, bot,
+				[]pgtype.UUID{parseUUID(*issue.AssigneeID)},
+				telegramMessage("issue_assigned", issue.Title, ""))
 		}
 
 		// Notify @mentions in description
@@ -378,7 +440,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			if issue.AssigneeID != nil {
 				exclude[*issue.AssigneeID] = true
 			}
-			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
+			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				exclude, "assignee_changed", "info",
 				issue.Title, "",
 				assigneeDetails)
@@ -390,7 +452,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"from": prevStatus,
 				"to":   issue.Status,
 			})
-			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
+			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				nil, "status_changed", "info",
 				issue.Title, "",
 				statusDetails)
@@ -402,7 +464,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"from": prevPriority,
 				"to":   issue.Priority,
 			})
-			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
+			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				nil, "priority_changed", "info",
 				issue.Title, "",
 				priorityDetails)
@@ -421,7 +483,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"from": prevDueDateStr,
 				"to":   newDueDateStr,
 			})
-			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
+			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				nil, "due_date_changed", "info",
 				issue.Title, "",
 				dueDateDetails)
@@ -484,7 +546,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			})
 		}
 
-		notifySubscribers(ctx, queries, bus, issueID, issueStatus, e.WorkspaceID, e,
+		notifySubscribers(ctx, queries, bus, bot, issueID, issueStatus, e.WorkspaceID, e,
 			nil, "new_comment", "info",
 			issueTitle, commentContent,
 			commentDetails)
@@ -598,7 +660,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			exclude[agentID] = true
 		}
 
-		notifySubscribers(ctx, queries, bus, issueID, issue.Status, e.WorkspaceID,
+		notifySubscribers(ctx, queries, bus, bot, issueID, issue.Status, e.WorkspaceID,
 			events.Event{
 				Type:        e.Type,
 				WorkspaceID: e.WorkspaceID,

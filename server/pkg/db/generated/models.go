@@ -375,6 +375,15 @@ type WebhookEventLog struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
+type UserNotificationChannel struct {
+	UserID      pgtype.UUID        `json:"user_id"`
+	ChannelType string             `json:"channel_type"`
+	ChannelID   string             `json:"channel_id"`
+	Enabled     bool               `json:"enabled"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Workspace struct {
 	ID                   pgtype.UUID        `json:"id"`
 	Name                 string             `json:"name"`
