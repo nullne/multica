@@ -10,6 +10,7 @@ import { useWorkspaceStore } from "@/features/workspace";
 import { useAuthStore } from "@/features/auth";
 import { createLogger } from "@/shared/logger";
 import { api } from "@/shared/api";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 import type {
   MemberAddedPayload,
   WorkspaceDeletedPayload,
@@ -21,6 +22,10 @@ import type {
   LabelCreatedPayload,
   LabelUpdatedPayload,
   LabelDeletedPayload,
+  TaskDispatchPayload,
+  TaskCompletedPayload,
+  TaskFailedPayload,
+  TaskCancelledPayload,
 } from "@/shared/types";
 
 const logger = createLogger("realtime-sync");
@@ -45,6 +50,7 @@ export function useRealtimeSync(ws: WSClient | null) {
     const specificEvents = new Set([
       "issue:updated", "issue:created", "issue:deleted", "inbox:new",
       "label:created", "label:updated", "label:deleted",
+      "task:dispatch", "task:completed", "task:failed", "task:cancelled",
     ]);
 
     const refreshMap: Record<string, () => void> = {
@@ -136,6 +142,31 @@ export function useRealtimeSync(ws: WSClient | null) {
       useInboxStore.getState().addItem(item);
     });
 
+    // --- Active task tracking ---
+
+    const unsubTaskDispatch = ws.on("task:dispatch", (p) => {
+      const { task_id, issue_id } = p as TaskDispatchPayload;
+      if (!issue_id || !task_id) return;
+      api.getActiveTaskForIssue(issue_id).then(({ task }) => {
+        if (task) useActiveTaskStore.getState().setTask(issue_id, task);
+      }).catch(console.error);
+    });
+
+    const unsubTaskCompleted = ws.on("task:completed", (p) => {
+      const { issue_id } = p as TaskCompletedPayload;
+      if (issue_id) useActiveTaskStore.getState().clearTask(issue_id);
+    });
+
+    const unsubTaskFailed = ws.on("task:failed", (p) => {
+      const { issue_id } = p as TaskFailedPayload;
+      if (issue_id) useActiveTaskStore.getState().clearTask(issue_id);
+    });
+
+    const unsubTaskCancelled = ws.on("task:cancelled", (p) => {
+      const { issue_id } = p as TaskCancelledPayload;
+      if (issue_id) useActiveTaskStore.getState().clearTask(issue_id);
+    });
+
     // --- Side-effect handlers (toast, navigation) ---
 
     const unsubWsDeleted = ws.on("workspace:deleted", (p) => {
@@ -178,12 +209,22 @@ export function useRealtimeSync(ws: WSClient | null) {
       unsubLabelUpdated();
       unsubLabelDeleted();
       unsubInboxNew();
+      unsubTaskDispatch();
+      unsubTaskCompleted();
+      unsubTaskFailed();
+      unsubTaskCancelled();
       unsubWsDeleted();
       unsubMemberRemoved();
       unsubMemberAdded();
       timers.forEach(clearTimeout);
       timers.clear();
     };
+  }, [ws]);
+
+  // Initial fetch of active tasks so board/list views show the correct state on load
+  useEffect(() => {
+    if (!ws) return;
+    api.listActiveTasks().then((tasks) => useActiveTaskStore.getState().setTasks(tasks)).catch(console.error);
   }, [ws]);
 
   // Reconnect → refetch all data to recover missed events
@@ -200,6 +241,7 @@ export function useRealtimeSync(ws: WSClient | null) {
           useWorkspaceStore.getState().refreshAgents(),
           useWorkspaceStore.getState().refreshMembers(),
           useWorkspaceStore.getState().refreshSkills(),
+          api.listActiveTasks().then((tasks) => useActiveTaskStore.getState().setTasks(tasks)).catch(console.error),
         ]);
       } catch (e) {
         logger.error("reconnect refetch failed", e);

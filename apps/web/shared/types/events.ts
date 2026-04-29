@@ -173,6 +173,13 @@ export interface TaskMessagePayload {
   output?: string;
 }
 
+export interface TaskDispatchPayload {
+  task_id: string;
+  issue_id: string;
+  agent_id: string;
+  runtime_id: string;
+}
+
 export interface TaskCompletedPayload {
   task_id: string;
   agent_id: string;

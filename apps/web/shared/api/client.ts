@@ -435,6 +435,10 @@ export class ApiClient {
     return this.fetch(`/api/issues/${issueId}/active-task`);
   }
 
+  async listActiveTasks(): Promise<AgentTask[]> {
+    return this.fetch(`/api/tasks/active`);
+  }
+
   async listTaskMessages(taskId: string): Promise<TaskMessagePayload[]> {
     return this.fetch(`/api/daemon/tasks/${taskId}/messages`);
   }
