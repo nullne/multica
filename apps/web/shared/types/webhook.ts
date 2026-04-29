@@ -41,6 +41,7 @@ export interface CreateIssueActionConfig {
   dispatch_daemon_label?: string;
   event_types?: string[];
   repos?: string[];
+  subscriber_ids?: string[];
 }
 
 export interface CommentIssueActionConfig {
@@ -68,6 +69,7 @@ export interface CreateWebhookRequest {
   dispatch_provider?: string;
   dispatch_daemon_id?: string;
   dispatch_daemon_label?: string;
+  subscriber_ids?: string[];
 }
 
 export interface CreateWebhookResponse {
