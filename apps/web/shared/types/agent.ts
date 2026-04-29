@@ -96,6 +96,7 @@ export interface Agent {
   triggers: AgentTrigger[];
   github_code_access: GitHubCodeAccess;
   default_daemon_id: string | null;
+  max_concurrent_tasks: number;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -113,6 +114,7 @@ export interface CreateAgentRequest {
   triggers?: AgentTrigger[];
   github_code_access?: GitHubCodeAccess;
   default_daemon_id?: string | null;
+  max_concurrent_tasks?: number;
 }
 
 export interface UpdateAgentRequest {
@@ -127,6 +129,7 @@ export interface UpdateAgentRequest {
   triggers?: AgentTrigger[];
   github_code_access?: GitHubCodeAccess;
   default_daemon_id?: string | null;
+  max_concurrent_tasks?: number;
 }
 
 // Skills

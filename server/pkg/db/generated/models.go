@@ -20,24 +20,25 @@ type ActivityLog struct {
 }
 
 type Agent struct {
-	ID               pgtype.UUID        `json:"id"`
-	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
-	Name             string             `json:"name"`
-	AvatarUrl        pgtype.Text        `json:"avatar_url"`
-	Visibility       string             `json:"visibility"`
-	Status           string             `json:"status"`
-	OwnerID          pgtype.UUID        `json:"owner_id"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	Description      string             `json:"description"`
-	Tools            []byte             `json:"tools"`
-	Triggers         []byte             `json:"triggers"`
-	Instructions     string             `json:"instructions"`
-	ArchivedAt       pgtype.Timestamptz `json:"archived_at"`
-	ArchivedBy       pgtype.UUID        `json:"archived_by"`
-	GithubCodeAccess string             `json:"github_code_access"`
-	Providers        []string           `json:"providers"`
-	DefaultDaemonID  pgtype.UUID        `json:"default_daemon_id"`
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	Name               string             `json:"name"`
+	AvatarUrl          pgtype.Text        `json:"avatar_url"`
+	Visibility         string             `json:"visibility"`
+	Status             string             `json:"status"`
+	OwnerID            pgtype.UUID        `json:"owner_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	Description        string             `json:"description"`
+	Tools              []byte             `json:"tools"`
+	Triggers           []byte             `json:"triggers"`
+	Instructions       string             `json:"instructions"`
+	ArchivedAt         pgtype.Timestamptz `json:"archived_at"`
+	ArchivedBy         pgtype.UUID        `json:"archived_by"`
+	GithubCodeAccess   string             `json:"github_code_access"`
+	Providers          []string           `json:"providers"`
+	DefaultDaemonID    pgtype.UUID        `json:"default_daemon_id"`
+	MaxConcurrentTasks int32              `json:"max_concurrent_tasks"`
 }
 
 type AgentRuntime struct {

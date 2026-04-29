@@ -16,25 +16,26 @@ import (
 )
 
 type AgentResponse struct {
-	ID               string          `json:"id"`
-	WorkspaceID      string          `json:"workspace_id"`
-	Providers        []string        `json:"providers"`
-	Name             string          `json:"name"`
-	Description      string          `json:"description"`
-	Instructions     string          `json:"instructions"`
-	AvatarURL        *string         `json:"avatar_url"`
-	Visibility       string          `json:"visibility"`
-	Status           string          `json:"status"`
-	OwnerID          *string         `json:"owner_id"`
-	Skills           []SkillResponse `json:"skills"`
-	Tools            any             `json:"tools"`
-	Triggers         any             `json:"triggers"`
-	GitHubCodeAccess string          `json:"github_code_access"`
-	DefaultDaemonID  *string         `json:"default_daemon_id"`
-	CreatedAt        string          `json:"created_at"`
-	UpdatedAt        string          `json:"updated_at"`
-	ArchivedAt       *string         `json:"archived_at"`
-	ArchivedBy       *string         `json:"archived_by"`
+	ID                 string          `json:"id"`
+	WorkspaceID        string          `json:"workspace_id"`
+	Providers          []string        `json:"providers"`
+	Name               string          `json:"name"`
+	Description        string          `json:"description"`
+	Instructions       string          `json:"instructions"`
+	AvatarURL          *string         `json:"avatar_url"`
+	Visibility         string          `json:"visibility"`
+	Status             string          `json:"status"`
+	OwnerID            *string         `json:"owner_id"`
+	Skills             []SkillResponse `json:"skills"`
+	Tools              any             `json:"tools"`
+	Triggers           any             `json:"triggers"`
+	GitHubCodeAccess   string          `json:"github_code_access"`
+	DefaultDaemonID    *string         `json:"default_daemon_id"`
+	MaxConcurrentTasks int32           `json:"max_concurrent_tasks"`
+	CreatedAt          string          `json:"created_at"`
+	UpdatedAt          string          `json:"updated_at"`
+	ArchivedAt         *string         `json:"archived_at"`
+	ArchivedBy         *string         `json:"archived_by"`
 }
 
 func agentToResponse(a db.Agent) AgentResponse {
@@ -60,25 +61,26 @@ func agentToResponse(a db.Agent) AgentResponse {
 	}
 
 	return AgentResponse{
-		ID:               uuidToString(a.ID),
-		WorkspaceID:      uuidToString(a.WorkspaceID),
-		Providers:        providers,
-		Name:             a.Name,
-		Description:      a.Description,
-		Instructions:     a.Instructions,
-		AvatarURL:        textToPtr(a.AvatarUrl),
-		Visibility:       a.Visibility,
-		Status:           a.Status,
-		OwnerID:          uuidToPtr(a.OwnerID),
-		Skills:           []SkillResponse{},
-		Tools:            tools,
-		Triggers:         triggers,
-		GitHubCodeAccess: a.GithubCodeAccess,
-		DefaultDaemonID:  uuidToPtr(a.DefaultDaemonID),
-		CreatedAt:        timestampToString(a.CreatedAt),
-		UpdatedAt:        timestampToString(a.UpdatedAt),
-		ArchivedAt:       timestampToPtr(a.ArchivedAt),
-		ArchivedBy:       uuidToPtr(a.ArchivedBy),
+		ID:                 uuidToString(a.ID),
+		WorkspaceID:        uuidToString(a.WorkspaceID),
+		Providers:          providers,
+		Name:               a.Name,
+		Description:        a.Description,
+		Instructions:       a.Instructions,
+		AvatarURL:          textToPtr(a.AvatarUrl),
+		Visibility:         a.Visibility,
+		Status:             a.Status,
+		OwnerID:            uuidToPtr(a.OwnerID),
+		Skills:             []SkillResponse{},
+		Tools:              tools,
+		Triggers:           triggers,
+		GitHubCodeAccess:   a.GithubCodeAccess,
+		DefaultDaemonID:    uuidToPtr(a.DefaultDaemonID),
+		MaxConcurrentTasks: a.MaxConcurrentTasks,
+		CreatedAt:          timestampToString(a.CreatedAt),
+		UpdatedAt:          timestampToString(a.UpdatedAt),
+		ArchivedAt:         timestampToPtr(a.ArchivedAt),
+		ArchivedBy:         uuidToPtr(a.ArchivedBy),
 	}
 }
 
@@ -219,17 +221,18 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateAgentRequest struct {
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	Instructions     string   `json:"instructions"`
-	AvatarURL        *string  `json:"avatar_url"`
-	Providers        []string `json:"providers"`
-	Provider         string   `json:"provider"`  // deprecated: single provider, use providers
-	Visibility       string   `json:"visibility"`
-	Tools            any      `json:"tools"`
-	Triggers         any      `json:"triggers"`
-	GitHubCodeAccess string   `json:"github_code_access"`
-	DefaultDaemonID  *string  `json:"default_daemon_id"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	Instructions       string   `json:"instructions"`
+	AvatarURL          *string  `json:"avatar_url"`
+	Providers          []string `json:"providers"`
+	Provider           string   `json:"provider"` // deprecated: single provider, use providers
+	Visibility         string   `json:"visibility"`
+	Tools              any      `json:"tools"`
+	Triggers           any      `json:"triggers"`
+	GitHubCodeAccess   string   `json:"github_code_access"`
+	DefaultDaemonID    *string  `json:"default_daemon_id"`
+	MaxConcurrentTasks *int32   `json:"max_concurrent_tasks"`
 }
 
 func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
@@ -281,19 +284,25 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		triggers = defaultAgentTriggers()
 	}
 
+	maxConcurrentTasks := int32(6)
+	if req.MaxConcurrentTasks != nil && *req.MaxConcurrentTasks > 0 {
+		maxConcurrentTasks = *req.MaxConcurrentTasks
+	}
+
 	agent, err := h.Queries.CreateAgent(r.Context(), db.CreateAgentParams{
-		WorkspaceID:      parseUUID(workspaceID),
-		Name:             req.Name,
-		Description:      req.Description,
-		Instructions:     req.Instructions,
-		AvatarUrl:        ptrToText(req.AvatarURL),
-		Providers:        providers,
-		Visibility:       req.Visibility,
-		OwnerID:          parseUUID(ownerID),
-		Tools:            tools,
-		Triggers:         triggers,
-		GithubCodeAccess: req.GitHubCodeAccess,
-		DefaultDaemonID:  parseOptionalUUID(req.DefaultDaemonID),
+		WorkspaceID:        parseUUID(workspaceID),
+		Name:               req.Name,
+		Description:        req.Description,
+		Instructions:       req.Instructions,
+		AvatarUrl:          ptrToText(req.AvatarURL),
+		Providers:          providers,
+		Visibility:         req.Visibility,
+		OwnerID:            parseUUID(ownerID),
+		Tools:              tools,
+		Triggers:           triggers,
+		GithubCodeAccess:   req.GitHubCodeAccess,
+		DefaultDaemonID:    parseOptionalUUID(req.DefaultDaemonID),
+		MaxConcurrentTasks: maxConcurrentTasks,
 	})
 	if err != nil {
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -312,17 +321,18 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateAgentRequest struct {
-	Name             *string  `json:"name"`
-	Description      *string  `json:"description"`
-	Instructions     *string  `json:"instructions"`
-	AvatarURL        *string  `json:"avatar_url"`
-	Providers        []string `json:"providers"`
-	Visibility       *string  `json:"visibility"`
-	Status           *string  `json:"status"`
-	Tools            any      `json:"tools"`
-	Triggers         any      `json:"triggers"`
-	GitHubCodeAccess *string  `json:"github_code_access"`
-	DefaultDaemonID  *string  `json:"default_daemon_id"`
+	Name               *string  `json:"name"`
+	Description        *string  `json:"description"`
+	Instructions       *string  `json:"instructions"`
+	AvatarURL          *string  `json:"avatar_url"`
+	Providers          []string `json:"providers"`
+	Visibility         *string  `json:"visibility"`
+	Status             *string  `json:"status"`
+	Tools              any      `json:"tools"`
+	Triggers           any      `json:"triggers"`
+	GitHubCodeAccess   *string  `json:"github_code_access"`
+	DefaultDaemonID    *string  `json:"default_daemon_id"`
+	MaxConcurrentTasks *int32   `json:"max_concurrent_tasks"`
 }
 
 // canManageAgent checks whether the current user can update or archive an agent.
@@ -414,6 +424,13 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		} else {
 			params.DefaultDaemonID = pgtype.UUID{Valid: false}
 		}
+	}
+	if req.MaxConcurrentTasks != nil {
+		if *req.MaxConcurrentTasks <= 0 {
+			writeError(w, http.StatusBadRequest, "max_concurrent_tasks must be a positive integer")
+			return
+		}
+		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
 	}
 
 	agent, err = h.Queries.UpdateAgent(r.Context(), params)

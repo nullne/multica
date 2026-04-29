@@ -19,8 +19,8 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, providers, visibility, owner_id,
-    tools, triggers, instructions, github_code_access, default_daemon_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(default_daemon_id))
+    tools, triggers, instructions, github_code_access, default_daemon_id, max_concurrent_tasks
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(default_daemon_id), @max_concurrent_tasks)
 RETURNING *;
 
 -- name: UpdateAgent :one
@@ -36,6 +36,7 @@ UPDATE agent SET
     instructions = COALESCE(sqlc.narg('instructions'), instructions),
     github_code_access = COALESCE(sqlc.narg('github_code_access'), github_code_access),
     default_daemon_id = sqlc.narg('default_daemon_id'),
+    max_concurrent_tasks = COALESCE(sqlc.narg('max_concurrent_tasks'), max_concurrent_tasks),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -75,10 +76,10 @@ SELECT * FROM agent_task_queue
 WHERE id = $1;
 
 -- name: ClaimAgentTask :one
--- Claims the next queued task for an agent, enforcing per-issue serialization:
--- a task is only claimable when no other task for the same issue is already
--- dispatched or running. This guarantees serial execution within an issue
--- while allowing parallel execution across different issues.
+-- Claims the next queued task for an agent, enforcing per-issue serialization and
+-- the per-agent concurrency cap: a task is claimable only when no other task for
+-- the same issue is already dispatched or running, and the agent's total active
+-- task count is below its max_concurrent_tasks limit.
 UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
@@ -89,6 +90,11 @@ WHERE id = (
           WHERE active.issue_id = atq.issue_id
             AND active.status IN ('dispatched', 'running')
       )
+      AND (
+          SELECT COUNT(*) FROM agent_task_queue running
+          WHERE running.agent_id = $1
+            AND running.status IN ('dispatched', 'running')
+      ) < (SELECT max_concurrent_tasks FROM agent WHERE id = $1)
     ORDER BY atq.priority DESC, atq.created_at ASC
     LIMIT 1
     FOR UPDATE SKIP LOCKED

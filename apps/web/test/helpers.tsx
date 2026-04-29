@@ -61,6 +61,7 @@ export const mockAgents: Agent[] = [
     triggers: [],
     github_code_access: "write",
     default_daemon_id: null,
+    max_concurrent_tasks: 6,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     archived_at: null,
