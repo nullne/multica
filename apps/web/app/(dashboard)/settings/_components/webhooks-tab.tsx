@@ -32,6 +32,7 @@ import type {
   BotUser,
   WebhookEvent,
   WebhookEventStatus,
+  MemberWithUser,
 } from "@/shared/types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -137,6 +138,7 @@ export function WebhooksTab() {
   const [urlCopied, setUrlCopied] = useState(false);
   const [exampleCopied, setExampleCopied] = useState(false);
   const agents = useWorkspaceStore((s) => s.agents);
+  const members = useWorkspaceStore((s) => s.members);
 
   const reload = useCallback(async () => {
     if (!workspaceId) return;
@@ -207,6 +209,11 @@ export function WebhooksTab() {
     return agent?.name ?? "Unknown Agent";
   };
 
+  const memberName = (userId: string) => {
+    const m = members.find((m: MemberWithUser) => m.user_id === userId);
+    return m?.name ?? "(deleted member)";
+  };
+
   const envName = (daemonId: string) => {
     const d = daemons.find((daemon) => daemon.id === daemonId);
     return d?.device_name || d?.daemon_id || "Unknown";
@@ -264,6 +271,7 @@ export function WebhooksTab() {
                 wh={wh}
                 bots={bots}
                 agentName={agentName}
+                memberName={memberName}
                 envName={envName}
                 apiBaseUrl={apiBaseUrl}
                 onToggle={() => handleToggleStatus(wh)}
@@ -286,6 +294,7 @@ export function WebhooksTab() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         agents={agents}
+        members={members}
         daemons={daemons}
         adapters={adapters}
         apiBaseUrl={apiBaseUrl}
@@ -299,6 +308,7 @@ export function WebhooksTab() {
         webhook={editingWebhook}
         bots={bots}
         agents={agents}
+        members={members}
         daemons={daemons}
         adapters={adapters}
         onOpenChange={(v) => { if (!v) setEditingWebhook(null); }}
@@ -432,6 +442,7 @@ function WebhookCard({
   wh,
   bots,
   agentName,
+  memberName,
   envName,
   apiBaseUrl,
   onToggle,
@@ -442,6 +453,7 @@ function WebhookCard({
   wh: WebhookWithActions;
   bots: BotUser[];
   agentName: (agentId: string) => string;
+  memberName: (userId: string) => string;
   envName: (daemonId: string) => string;
   apiBaseUrl: string;
   onToggle: () => void;
@@ -556,6 +568,7 @@ function WebhookCard({
                 action={a}
                 index={idx}
                 agentName={agentName}
+                memberName={memberName}
                 envName={envName}
               />
             ))}
@@ -574,11 +587,13 @@ function ActionSummary({
   action,
   index,
   agentName,
+  memberName,
   envName,
 }: {
   action: WebhookAction;
   index: number;
   agentName: (id: string) => string;
+  memberName: (id: string) => string;
   envName: (id: string) => string;
 }) {
   return (
@@ -600,6 +615,9 @@ function ActionSummary({
             )}
             {cfg.repos && cfg.repos.length > 0 && (
               <PropLine label="Repos" value={cfg.repos.join(", ")} />
+            )}
+            {cfg.subscriber_ids && cfg.subscriber_ids.length > 0 && (
+              <PropLine label="Subscribers" value={cfg.subscriber_ids.map(memberName).join(", ")} />
             )}
           </div>
         );
@@ -640,6 +658,7 @@ function CreateWebhookDialog({
   open,
   onOpenChange,
   agents,
+  members,
   daemons,
   adapters,
   apiBaseUrl,
@@ -648,6 +667,7 @@ function CreateWebhookDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   agents: Agent[];
+  members: MemberWithUser[];
   daemons: Daemon[];
   adapters: AdapterInfo[];
   apiBaseUrl: string;
@@ -661,6 +681,7 @@ function CreateWebhookDialog({
   const [titleTemplate, setTitleTemplate] = useState("");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
   const [selectedLabels, setSelectedLabels] = useState<IssueLabel[]>([]);
+  const [subscriberIds, setSubscriberIds] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [showSchema, setShowSchema] = useState(false);
   const allLabels = useLabelStore((s) => s.labels);
@@ -688,6 +709,7 @@ function CreateWebhookDialog({
         labels: selectedLabels.length > 0 ? selectedLabels.map((l) => l.id) : undefined,
         dispatch_provider: dispatchProvider || undefined,
         dispatch_daemon_id: dispatchDaemonId || undefined,
+        subscriber_ids: subscriberIds.length > 0 ? subscriberIds : undefined,
       });
       onCreated({ token: result.token, webhookId: result.webhook.id, url: `${apiBaseUrl}/api/webhooks/${result.webhook.id}`, sourceType });
       onOpenChange(false);
@@ -699,6 +721,7 @@ function CreateWebhookDialog({
       setTitleTemplate("");
       setDescriptionTemplate("");
       setSelectedLabels([]);
+      setSubscriberIds([]);
       setShowSchema(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create webhook");
@@ -750,6 +773,7 @@ function CreateWebhookDialog({
             </div>
             <CreateIssueActionFields
               agents={activeAgents}
+              members={members}
               selectedAgent={selectedAgent}
               daemons={daemons}
               agentId={agentId}
@@ -765,6 +789,8 @@ function CreateWebhookDialog({
               selectedLabels={selectedLabels}
               setSelectedLabels={setSelectedLabels}
               allLabels={allLabels}
+              subscriberIds={subscriberIds}
+              setSubscriberIds={setSubscriberIds}
             />
           </div>
         </div>
@@ -787,6 +813,7 @@ function EditWebhookDialog({
   webhook,
   bots,
   agents,
+  members,
   daemons,
   adapters,
   onOpenChange,
@@ -795,6 +822,7 @@ function EditWebhookDialog({
   webhook: WebhookWithActions | null;
   bots: BotUser[];
   agents: Agent[];
+  members: MemberWithUser[];
   daemons: Daemon[];
   adapters: AdapterInfo[];
   onOpenChange: (v: boolean) => void;
@@ -1033,6 +1061,7 @@ function EditWebhookDialog({
                     <CreateIssueActionEditor
                       cfg={action.config as CreateIssueActionConfig}
                       agents={activeAgents}
+                      members={members}
                       daemons={daemons}
                       allLabels={allLabels}
                       onChange={(partial) => updateActionConfig(idx, partial)}
@@ -1070,6 +1099,7 @@ function EditWebhookDialog({
 
 function CreateIssueActionFields({
   agents,
+  members,
   selectedAgent,
   daemons,
   agentId,
@@ -1085,8 +1115,11 @@ function CreateIssueActionFields({
   selectedLabels,
   setSelectedLabels,
   allLabels,
+  subscriberIds,
+  setSubscriberIds,
 }: {
   agents: Agent[];
+  members: MemberWithUser[];
   selectedAgent: Agent | undefined;
   daemons: Daemon[];
   agentId: string;
@@ -1102,6 +1135,8 @@ function CreateIssueActionFields({
   selectedLabels: IssueLabel[];
   setSelectedLabels: (v: IssueLabel[]) => void;
   allLabels: IssueLabel[];
+  subscriberIds: string[];
+  setSubscriberIds: (v: string[]) => void;
 }) {
   return (
     <>
@@ -1175,6 +1210,10 @@ function CreateIssueActionFields({
         <Label>Labels <span className="text-muted-foreground">(optional)</span></Label>
         <WebhookLabelPicker labels={allLabels} selected={selectedLabels} onChange={setSelectedLabels} />
       </div>
+      <div className="space-y-1.5">
+        <Label>Subscribers <span className="text-muted-foreground">(optional)</span></Label>
+        <WebhookMemberPicker members={members} selectedIds={subscriberIds} onChange={setSubscriberIds} />
+      </div>
     </>
   );
 }
@@ -1182,6 +1221,7 @@ function CreateIssueActionFields({
 function CreateIssueActionEditor({
   cfg,
   agents,
+  members,
   daemons,
   allLabels,
   onChange,
@@ -1189,6 +1229,7 @@ function CreateIssueActionEditor({
 }: {
   cfg: CreateIssueActionConfig;
   agents: Agent[];
+  members: MemberWithUser[];
   daemons: Daemon[];
   allLabels: IssueLabel[];
   onChange: (partial: Partial<CreateIssueActionConfig>) => void;
@@ -1259,6 +1300,14 @@ function CreateIssueActionEditor({
           labels={allLabels}
           selected={selectedLabels}
           onChange={(picks) => onChange({ labels: picks.map((l) => l.id) })}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Subscribers</Label>
+        <WebhookMemberPicker
+          members={members}
+          selectedIds={cfg.subscriber_ids ?? []}
+          onChange={(ids) => onChange({ subscriber_ids: ids.length > 0 ? ids : undefined })}
         />
       </div>
       {isGitHub && (
@@ -1837,6 +1886,79 @@ function WebhookLabelPicker({ labels, selected, onChange }: {
           ))}
           {labels.length === 0 && (
             <div className="px-2 py-3 text-center text-sm text-muted-foreground">No labels yet</div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function WebhookMemberPicker({ members, selectedIds, onChange }: {
+  members: MemberWithUser[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const toggle = (userId: string) => {
+    onChange(
+      selectedIds.includes(userId)
+        ? selectedIds.filter((id) => id !== userId)
+        : [...selectedIds, userId],
+    );
+  };
+
+  const humanMembers = members.filter((m) => m.kind === "human");
+  const filtered = humanMembers.filter((m) => m.name.toLowerCase().includes(filter.toLowerCase()));
+  const selectedMembers = selectedIds.map((id) => humanMembers.find((m) => m.user_id === id)).filter((m): m is MemberWithUser => !!m);
+
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setFilter(""); }}>
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className="flex flex-wrap items-center gap-1 rounded-md border bg-transparent px-3 py-2 text-sm min-h-9 w-full text-left hover:bg-accent/50 transition-colors"
+          >
+            {selectedMembers.length > 0 ? (
+              selectedMembers.map((m) => (
+                <span key={m.user_id} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+                  {m.name}
+                </span>
+              ))
+            ) : (
+              <span className="text-muted-foreground">Select members...</span>
+            )}
+          </button>
+        }
+      />
+      <PopoverContent align="start" className="w-52 p-0">
+        <div className="px-2 py-1.5 border-b">
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter members..."
+            className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
+          />
+        </div>
+        <div className="p-1 max-h-60 overflow-y-auto">
+          {filtered.map((m) => (
+            <button
+              key={m.user_id}
+              type="button"
+              onClick={() => toggle(m.user_id)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+            >
+              <span className="flex-1 text-left truncate">{m.name}</span>
+              {selectedIds.includes(m.user_id) && (
+                <Check className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              )}
+            </button>
+          ))}
+          {humanMembers.length === 0 && (
+            <div className="px-2 py-3 text-center text-sm text-muted-foreground">No members</div>
           )}
         </div>
       </PopoverContent>

@@ -204,3 +204,63 @@ func TestRenderTemplate(t *testing.T) {
 	}
 }
 
+func TestMergeActionConfig_SubscriberIDsPreserved(t *testing.T) {
+	existing := db.WebhookAction{
+		ActionType: "create_issue",
+		Config: mustJSON(CreateIssueActionConfig{
+			AgentID:       "agent-123",
+			SubscriberIDs: []string{"user-aaa", "user-bbb"},
+		}),
+	}
+
+	incoming := map[string]any{
+		"title_template": "updated title",
+	}
+
+	merged, err := mergeActionConfig(existing, incoming)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result CreateIssueActionConfig
+	if err := json.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	if len(result.SubscriberIDs) != 2 || result.SubscriberIDs[0] != "user-aaa" || result.SubscriberIDs[1] != "user-bbb" {
+		t.Errorf("subscriber_ids not preserved: got %v", result.SubscriberIDs)
+	}
+	if result.TitleTemplate != "updated title" {
+		t.Errorf("title_template not updated: got %q", result.TitleTemplate)
+	}
+}
+
+func TestMergeActionConfig_SubscriberIDsUpdated(t *testing.T) {
+	existing := db.WebhookAction{
+		ActionType: "create_issue",
+		Config: mustJSON(CreateIssueActionConfig{
+			AgentID:       "agent-123",
+			SubscriberIDs: []string{"user-old"},
+		}),
+	}
+
+	incoming := map[string]any{
+		"agent_id":       "agent-123",
+		"subscriber_ids": []string{"user-new-1", "user-new-2"},
+	}
+
+	merged, err := mergeActionConfig(existing, incoming)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result CreateIssueActionConfig
+	if err := json.Unmarshal(merged, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	if len(result.SubscriberIDs) != 2 || result.SubscriberIDs[0] != "user-new-1" {
+		t.Errorf("subscriber_ids not updated: got %v", result.SubscriberIDs)
+	}
+}
+

@@ -135,6 +135,7 @@ type CreateWebhookRequest struct {
 	DispatchProvider    string   `json:"dispatch_provider"`
 	DispatchDaemonID    string   `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel string   `json:"dispatch_daemon_label"`
+	SubscriberIDs       []string `json:"subscriber_ids"`
 }
 
 func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +221,7 @@ func (h *Handler) CreateWebhook(w http.ResponseWriter, r *http.Request) {
 		DispatchProvider:    req.DispatchProvider,
 		DispatchDaemonID:    req.DispatchDaemonID,
 		DispatchDaemonLabel: req.DispatchDaemonLabel,
+		SubscriberIDs:       req.SubscriberIDs,
 	}
 	configJSON, err := json.Marshal(actionConfig)
 	if err != nil {
@@ -749,6 +751,8 @@ type CreateIssueActionConfig struct {
 	// Optional event filters; matched against Event.Type and Event.Data["repo"].
 	EventTypes []string `json:"event_types,omitempty"`
 	Repos      []string `json:"repos,omitempty"`
+	// Optional member user IDs to subscribe to issues created by this action.
+	SubscriberIDs []string `json:"subscriber_ids,omitempty"`
 }
 
 // CommentIssueActionConfig is the config schema for action_type = "comment_issue".
@@ -1018,6 +1022,18 @@ func (h *Handler) executeCreateIssueAction(ctx context.Context, webhook db.Webho
 			_ = qtx.AddLabelToIssue(ctx, db.AddLabelToIssueParams{
 				IssueID: issue.ID,
 				LabelID: lid,
+			})
+		}
+	}
+
+	for _, subID := range cfg.SubscriberIDs {
+		uid := parseUUID(subID)
+		if uid.Valid {
+			_ = qtx.AddIssueSubscriber(ctx, db.AddIssueSubscriberParams{
+				IssueID:  issue.ID,
+				UserType: "member",
+				UserID:   uid,
+				Reason:   "manual",
 			})
 		}
 	}

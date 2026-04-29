@@ -1,7 +1,7 @@
 "use client";
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import type { WebhookEvent, WebhookWithActions } from "@/shared/types";
 
 // Mock next/navigation
@@ -10,6 +10,20 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/settings",
 }));
 
+const mockMembers = [
+  {
+    id: "mem-1",
+    workspace_id: "ws-1",
+    user_id: "user-alice",
+    role: "member" as const,
+    created_at: "2026-01-01T00:00:00Z",
+    name: "Alice",
+    email: "alice@example.com",
+    avatar_url: null,
+    kind: "human" as const,
+  },
+];
+
 // Mock workspace feature
 vi.mock("@/features/workspace", () => ({
   useWorkspaceStore: Object.assign(
@@ -17,7 +31,7 @@ vi.mock("@/features/workspace", () => ({
       const state = {
         workspace: { id: "ws-1", name: "Test", slug: "test" },
         agents: [],
-        members: [],
+        members: mockMembers,
       };
       return selector ? selector(state) : state;
     },
@@ -25,7 +39,7 @@ vi.mock("@/features/workspace", () => ({
       getState: () => ({
         workspace: { id: "ws-1", name: "Test", slug: "test" },
         agents: [],
-        members: [],
+        members: mockMembers,
       }),
     },
   ),
@@ -210,6 +224,58 @@ describe("WebhooksTab — event history", () => {
     render(<WebhooksTab />);
     await waitFor(() => {
       expect(screen.getByTitle("key-xyz")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("WebhooksTab — subscriber config display", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListWebhooks.mockResolvedValue([]);
+    mockListDaemons.mockResolvedValue([]);
+    mockListBotUsers.mockResolvedValue([]);
+    mockListWebhookAdapters.mockResolvedValue([]);
+    mockListWorkspaceWebhookEvents.mockResolvedValue([]);
+    mockListWebhookEvents.mockResolvedValue([]);
+  });
+
+  it("shows subscriber names in action summary when subscriber_ids are configured", async () => {
+    const wh = makeWebhookWithActions();
+    wh.actions = [
+      {
+        id: "action-1",
+        webhook_id: "wh-1",
+        action_type: "create_issue",
+        config: {
+          agent_id: "agent-1",
+          title_template: "",
+          description_template: "",
+          labels: [],
+          subscriber_ids: ["user-alice"],
+        },
+        enabled: true,
+        position: 0,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mockListWebhooks.mockResolvedValue([wh]);
+    render(<WebhooksTab />);
+
+    // Wait for the webhook card to render, then click the expand button.
+    // The card's expand button is inside the card div, before the action buttons
+    // (edit, toggle, regenerate, delete). It's the first button that comes right
+    // before the webhook name text.
+    await waitFor(() => screen.getByText("My Webhook"));
+    const webhookNameEl = screen.getByText("My Webhook");
+    // The expand button is the first button inside the card container
+    const cardContainer = webhookNameEl.closest("div.flex.items-center.gap-3");
+    const expandBtn = cardContainer?.querySelector("button");
+    if (!expandBtn) throw new Error("Could not find expand button");
+    fireEvent.click(expandBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("Alice")).toBeInTheDocument();
     });
   });
 });
