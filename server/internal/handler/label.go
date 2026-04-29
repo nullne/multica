@@ -218,8 +218,9 @@ func (h *Handler) SetIssueLabels(w http.ResponseWriter, r *http.Request) {
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	issueResp := issueToResponse(issue, prefix)
 	issueResp.Labels = resp
+	h.hydrateLinks(r.Context(), issue.ID, &issueResp)
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
-		"issue":         issueResp,
+		"issue":          issueResp,
 		"labels_changed": true,
 	})
 

@@ -265,6 +265,67 @@ func TestIssueCRUD(t *testing.T) {
 	}
 }
 
+func TestUpdateIssuePreservesLinks(t *testing.T) {
+	ctx := context.Background()
+
+	// Create an issue.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":    "Link preservation test issue",
+		"status":   "todo",
+		"priority": "medium",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+	issueID := created.ID
+	defer func() {
+		w := httptest.NewRecorder()
+		req := newRequest("DELETE", "/api/issues/"+issueID, nil)
+		req = withURLParam(req, "id", issueID)
+		testHandler.DeleteIssue(w, req)
+	}()
+
+	// Seed a source link directly via the DB.
+	issueUUID := parseUUID(issueID)
+	wsUUID := parseUUID(testWorkspaceID)
+	_, err := testHandler.Queries.CreateIssueLink(ctx, db.CreateIssueLinkParams{
+		IssueID:     issueUUID,
+		WorkspaceID: wsUUID,
+		SourceType:  "github",
+		Kind:        "issue",
+		Direction:   "source",
+		Url:         "https://github.com/test/repo/issues/1",
+		ExternalID:  "test/repo#1",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssueLink: %v", err)
+	}
+
+	// Update the description — this must not drop links from the response.
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/issues/"+issueID, map[string]any{
+		"description": "Updated description",
+	})
+	req = withURLParam(req, "id", issueID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var updated IssueResponse
+	json.NewDecoder(w.Body).Decode(&updated)
+	if len(updated.Links) == 0 {
+		t.Fatal("UpdateIssue: links must not be empty after description update")
+	}
+	if updated.Links[0].URL != "https://github.com/test/repo/issues/1" {
+		t.Fatalf("UpdateIssue: unexpected link URL: %s", updated.Links[0].URL)
+	}
+}
+
 func TestCommentCRUD(t *testing.T) {
 	// Create an issue first
 	w := httptest.NewRecorder()

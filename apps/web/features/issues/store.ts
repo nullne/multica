@@ -49,7 +49,15 @@ export const useIssueStore = create<IssueState>((set, get) => ({
     })),
   updateIssue: (id, updates) =>
     set((s) => ({
-      issues: s.issues.map((i) => (i.id === id ? { ...i, ...updates } : i)),
+      issues: s.issues.map((i) => {
+        if (i.id !== id) return i;
+        const merged = { ...i, ...updates };
+        // Preserve existing links if the incoming payload omits them.
+        if (!updates.links?.length && i.links?.length) {
+          merged.links = i.links;
+        }
+        return merged;
+      }),
     })),
   removeIssue: (id) =>
     set((s) => ({ issues: s.issues.filter((i) => i.id !== id) })),

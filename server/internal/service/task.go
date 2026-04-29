@@ -801,12 +801,31 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 
 func (s *TaskService) broadcastIssueUpdated(issue db.Issue) {
 	prefix := s.getIssuePrefix(issue.WorkspaceID)
+	issueMap := issueToMap(issue, prefix)
+	linkRows, err := s.Queries.ListIssueLinksByIssue(context.Background(), issue.ID)
+	if err == nil {
+		links := make([]map[string]any, len(linkRows))
+		for i, l := range linkRows {
+			links[i] = map[string]any{
+				"id":          util.UUIDToString(l.ID),
+				"source_type": l.SourceType,
+				"kind":        l.Kind,
+				"direction":   l.Direction,
+				"url":         l.Url,
+				"external_id": l.ExternalID,
+				"created_at":  l.CreatedAt.Time.Format("2006-01-02T15:04:05Z"),
+			}
+		}
+		issueMap["links"] = links
+	} else {
+		issueMap["links"] = []map[string]any{}
+	}
 	s.Bus.Publish(events.Event{
 		Type:        protocol.EventIssueUpdated,
 		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
 		ActorType:   "system",
 		ActorID:     "",
-		Payload:     map[string]any{"issue": issueToMap(issue, prefix)},
+		Payload:     map[string]any{"issue": issueMap},
 	})
 }
 
