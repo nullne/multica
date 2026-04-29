@@ -146,26 +146,31 @@ func TestClaimAgentTask_RespectsPerAgentConcurrencyLimit(t *testing.T) {
 		t.Fatalf("create agent: %v", err)
 	}
 
-	// Create two issues assigned to the agent
-	var issueID1, issueID2 string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, position)
-		VALUES ($1, 'Claim Test Issue 1', 'in_progress', 'medium', 'member', $2, 'agent', $3, 0)
-		RETURNING id
-	`, testWorkspaceID, testUserID, agentID).Scan(&issueID1); err != nil {
-		t.Fatalf("create issue 1: %v", err)
+	// Create two issues via the handler (which properly increments the workspace issue counter,
+	// avoiding duplicate number constraint violations from concurrent test runs).
+	createIssue := func(title string) string {
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+			"title":         title,
+			"status":        "in_progress",
+			"assignee_type": "agent",
+			"assignee_id":   agentID,
+		})
+		testHandler.CreateIssue(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("CreateIssue %q: expected 201, got %d: %s", title, w.Code, w.Body.String())
+		}
+		var resp IssueResponse
+		json.NewDecoder(w.Body).Decode(&resp)
+		return resp.ID
 	}
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, assignee_type, assignee_id, position)
-		VALUES ($1, 'Claim Test Issue 2', 'in_progress', 'medium', 'member', $2, 'agent', $3, 0)
-		RETURNING id
-	`, testWorkspaceID, testUserID, agentID).Scan(&issueID2); err != nil {
-		t.Fatalf("create issue 2: %v", err)
-	}
+
+	issueID1 := createIssue("Claim Test Issue 1")
+	issueID2 := createIssue("Claim Test Issue 2")
 
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE agent_id = $1`, agentID)
-		testPool.Exec(ctx, `DELETE FROM issue WHERE id IN ($1, $2)`, issueID1, issueID2)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1 OR id = $2`, issueID1, issueID2)
 		testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID)
 	})
 
