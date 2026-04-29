@@ -358,6 +358,13 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	var parentIssueID pgtype.UUID
 	if req.ParentIssueID != nil {
 		parentIssueID = parseUUID(*req.ParentIssueID)
+		if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+			ID:          parentIssueID,
+			WorkspaceID: parseUUID(workspaceID),
+		}); err != nil {
+			writeError(w, http.StatusBadRequest, "parent issue not found in workspace")
+			return
+		}
 	}
 
 	var dueDate pgtype.Timestamptz
@@ -456,12 +463,13 @@ type UpdateIssueRequest struct {
 	AssigneeType          *string  `json:"assignee_type"`
 	AssigneeID            *string  `json:"assignee_id"`
 	VerifierAgentID       *string  `json:"verifier_agent_id"`
+	ParentIssueID         *string  `json:"parent_issue_id"`
 	MaxVerificationRounds *int32   `json:"max_verification_rounds"`
 	Position              *float64 `json:"position"`
 	DueDate               *string  `json:"due_date"`
-	DispatchProvider      *string           `json:"dispatch_provider"`
-	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
+	DispatchProvider      *string  `json:"dispatch_provider"`
+	DispatchDaemonID      *string  `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string  `json:"dispatch_daemon_label"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -496,6 +504,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		AssigneeType:          prevIssue.AssigneeType,
 		AssigneeID:            prevIssue.AssigneeID,
 		VerifierAgentID:       prevIssue.VerifierAgentID,
+		ParentIssueID:         prevIssue.ParentIssueID,
 		DueDate:               prevIssue.DueDate,
 		MaxVerificationRounds: prevIssue.MaxVerificationRounds,
 		DispatchProvider:      prevIssue.DispatchProvider,
@@ -569,6 +578,32 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if _, ok := rawFields["dispatch_daemon_label"]; ok {
 		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
 	}
+	if _, ok := rawFields["parent_issue_id"]; ok {
+		if req.ParentIssueID != nil {
+			newParentID := parseUUID(*req.ParentIssueID)
+			// Validate parent is in the same workspace.
+			if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+				ID:          newParentID,
+				WorkspaceID: prevIssue.WorkspaceID,
+			}); err != nil {
+				writeError(w, http.StatusBadRequest, "parent issue not found in workspace")
+				return
+			}
+			// Cannot set an issue as its own parent.
+			if uuidToString(newParentID) == id {
+				writeError(w, http.StatusBadRequest, "an issue cannot be its own parent")
+				return
+			}
+			// Prevent cycles: proposed parent must not be a descendant of this issue.
+			if h.wouldCreateCycle(r.Context(), prevIssue.ID, newParentID) {
+				writeError(w, http.StatusBadRequest, "setting this parent would create a cycle")
+				return
+			}
+			params.ParentIssueID = newParentID
+		} else {
+			params.ParentIssueID = pgtype.UUID{Valid: false} // explicit null = detach from parent
+		}
+	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
 	if req.AssigneeType != nil && *req.AssigneeType == "agent" && req.AssigneeID != nil {
@@ -605,10 +640,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	slog.Info("issue updated", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
 
 	_, verifierFieldPresent := rawFields["verifier_agent_id"]
+	_, parentFieldPresent := rawFields["parent_issue_id"]
 	assigneeChanged := (req.AssigneeType != nil || req.AssigneeID != nil) &&
 		(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
 	verifierChanged := verifierFieldPresent &&
 		uuidToString(prevIssue.VerifierAgentID) != uuidToString(issue.VerifierAgentID)
+	parentChanged := parentFieldPresent &&
+		uuidToPtr(prevIssue.ParentIssueID) != uuidToPtr(issue.ParentIssueID)
 	statusChanged := req.Status != nil && prevIssue.Status != issue.Status
 	priorityChanged := req.Priority != nil && prevIssue.Priority != issue.Priority
 	descriptionChanged := req.Description != nil && textToPtr(prevIssue.Description) != resp.Description
@@ -624,6 +662,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"issue":                  resp,
 		"assignee_changed":       assigneeChanged,
 		"verifier_changed":       verifierChanged,
+		"parent_changed":         parentChanged,
 		"status_changed":         statusChanged,
 		"priority_changed":       priorityChanged,
 		"due_date_changed":       dueDateChanged,
@@ -633,6 +672,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"prev_assignee_type":     textToPtr(prevIssue.AssigneeType),
 		"prev_assignee_id":       uuidToPtr(prevIssue.AssigneeID),
 		"prev_verifier_agent_id": uuidToPtr(prevIssue.VerifierAgentID),
+		"prev_parent_issue_id":   uuidToPtr(prevIssue.ParentIssueID),
 		"prev_status":            prevIssue.Status,
 		"prev_priority":          prevIssue.Priority,
 		"prev_due_date":          prevDueDate,
@@ -950,6 +990,55 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	h.publish(protocol.EventIssueDeleted, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue_id": id})
 	slog.Info("issue deleted", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", uuidToString(issue.WorkspaceID))...)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// wouldCreateCycle checks if setting proposedParentID as the parent of issueID
+// would create a cycle in the parent chain.
+func (h *Handler) wouldCreateCycle(ctx context.Context, issueID pgtype.UUID, proposedParentID pgtype.UUID) bool {
+	issueIDStr := uuidToString(issueID)
+	current := proposedParentID
+	visited := map[string]bool{}
+	for {
+		currentStr := uuidToString(current)
+		if currentStr == issueIDStr {
+			return true
+		}
+		if visited[currentStr] {
+			break
+		}
+		visited[currentStr] = true
+		parent, err := h.Queries.GetIssue(ctx, current)
+		if err != nil || !parent.ParentIssueID.Valid {
+			break
+		}
+		current = parent.ParentIssueID
+	}
+	return false
+}
+
+func (h *Handler) GetSubIssues(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, id)
+	if !ok {
+		return
+	}
+
+	children, err := h.Queries.ListIssuesByParent(r.Context(), issue.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list sub-issues")
+		return
+	}
+
+	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
+	resp := make([]IssueResponse, len(children))
+	for i, child := range children {
+		resp[i] = issueToResponse(child, prefix)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issues": resp,
+		"total":  len(resp),
+	})
 }
 
 // ---------------------------------------------------------------------------

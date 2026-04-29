@@ -10,9 +10,11 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  GitBranch,
   Link2,
   MoreHorizontal,
   PanelRight,
+  Plus,
   Trash2,
   UserMinus,
   Users,
@@ -66,6 +68,7 @@ import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { useModalStore } from "@/features/modals";
 import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueStore } from "@/features/issues";
 import { LabelPicker } from "@/features/labels/components";
@@ -356,6 +359,168 @@ function formatActivity(
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Parent issue picker
+// ---------------------------------------------------------------------------
+
+function ParentIssuePicker({
+  currentParentId,
+  currentIssueId,
+  onUpdate,
+}: {
+  currentParentId: string | null;
+  currentIssueId: string;
+  onUpdate: (parentId: string | null) => void;
+}) {
+  const allIssues = useIssueStore((s) => s.issues);
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const parentIssue = allIssues.find((i) => i.id === currentParentId);
+  const candidates = allIssues.filter(
+    (i) => i.id !== currentIssueId && i.parent_issue_id !== currentIssueId &&
+      (filter === "" || i.title.toLowerCase().includes(filter.toLowerCase()) || i.identifier.toLowerCase().includes(filter.toLowerCase())),
+  );
+
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setFilter(""); }}>
+      <PopoverTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden min-w-0 max-w-full">
+        {parentIssue ? (
+          <>
+            <StatusIcon status={parentIssue.status} className="h-3 w-3 shrink-0" />
+            <span className="truncate text-xs">{parentIssue.identifier} {parentIssue.title}</span>
+          </>
+        ) : (
+          <span className="text-muted-foreground text-xs">None</span>
+        )}
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-0">
+        <div className="px-2 py-1.5 border-b">
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Search issues..."
+            className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
+            autoFocus
+          />
+        </div>
+        <div className="p-1 max-h-60 overflow-y-auto">
+          {currentParentId && (
+            <button
+              type="button"
+              onClick={() => { onUpdate(null); setOpen(false); }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors text-muted-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+              Remove parent
+            </button>
+          )}
+          {candidates.map((issue) => (
+            <button
+              key={issue.id}
+              type="button"
+              onClick={() => { onUpdate(issue.id); setOpen(false); }}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+            >
+              <StatusIcon status={issue.status} className="h-3.5 w-3.5 shrink-0" />
+              <span className="text-muted-foreground shrink-0">{issue.identifier}</span>
+              <span className="truncate">{issue.title}</span>
+            </button>
+          ))}
+          {candidates.length === 0 && (
+            <div className="px-2 py-3 text-center text-sm text-muted-foreground">No issues found</div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-issues section
+// ---------------------------------------------------------------------------
+
+function SubIssuesSection({
+  issueId,
+  onCreateSubIssue,
+}: {
+  issueId: string;
+  onCreateSubIssue: () => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const [subIssues, setSubIssues] = useState<Issue[]>([]);
+  const [loading, setLoading] = useState(true);
+  const router = useRouter();
+
+  // Also subscribe to store changes so newly created sub-issues appear
+  const storeIssues = useIssueStore((s) => s.issues);
+  const storeSubIssues = storeIssues.filter((i) => i.parent_issue_id === issueId);
+
+  useEffect(() => {
+    setLoading(true);
+    api.getSubIssues(issueId)
+      .then((res) => {
+        setSubIssues(res.issues);
+        // Upsert into global store so they're available for navigation
+        const store = useIssueStore.getState();
+        res.issues.forEach((issue) => {
+          if (!store.issues.find((i) => i.id === issue.id)) {
+            store.addIssue(issue);
+          }
+        });
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [issueId]);
+
+  // Merge store sub-issues with fetched sub-issues (store may have more up-to-date data)
+  const merged = [...subIssues];
+  for (const si of storeSubIssues) {
+    if (!merged.find((i) => i.id === si.id)) merged.push(si);
+  }
+  // Reflect store updates
+  const display = merged.map((si) => storeIssues.find((i) => i.id === si.id) ?? si);
+
+  return (
+    <div>
+      <button
+        className={`flex w-full items-center gap-1 text-xs font-medium transition-colors mb-2 ${open ? "" : "text-muted-foreground hover:text-foreground"}`}
+        onClick={() => setOpen(!open)}
+      >
+        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
+        Sub-issues
+        <span className="ml-auto text-muted-foreground font-normal">{loading ? "…" : display.length}</span>
+      </button>
+
+      {open && (
+        <div className="space-y-0.5 pl-2">
+          {display.map((sub) => (
+            <button
+              key={sub.id}
+              type="button"
+              onClick={() => router.push(`/issues/${sub.id}`)}
+              className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-xs hover:bg-accent transition-colors text-left"
+            >
+              <StatusIcon status={sub.status} className="h-3 w-3 shrink-0" />
+              <span className="text-muted-foreground shrink-0">{sub.identifier}</span>
+              <span className="truncate">{sub.title}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={onCreateSubIssue}
+            className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            <Plus className="h-3 w-3 shrink-0" />
+            Add sub-issue
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Property row
@@ -728,6 +893,20 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
                   </>
                 )}
+                {issue.parent_issue_id && (() => {
+                  const parent = allIssues.find((i) => i.id === issue.parent_issue_id);
+                  return parent ? (
+                    <>
+                      <Link
+                        href={`/issues/${parent.id}`}
+                        className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                      >
+                        {parent.identifier}
+                      </Link>
+                      <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
+                    </>
+                  ) : null;
+                })()}
                 <span className="truncate text-muted-foreground">
                   {issue.identifier}
                 </span>
@@ -1374,6 +1553,15 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     />
                   </PropRow>
 
+                  {/* Parent issue */}
+                  <PropRow label="Parent">
+                    <ParentIssuePicker
+                      currentParentId={issue.parent_issue_id}
+                      currentIssueId={issue.id}
+                      onUpdate={(parentId) => handleUpdateField({ parent_issue_id: parentId })}
+                    />
+                  </PropRow>
+
                   {/* Verifier — only when assignee is an agent */}
                   {issue.assignee_type === "agent" && issue.assignee_id && (
                     <PropRow label="Verifier">
@@ -1486,6 +1674,14 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   })()}
                 </div>}
               </div>
+
+              {/* Sub-issues section */}
+              <SubIssuesSection
+                issueId={id}
+                onCreateSubIssue={() =>
+                  useModalStore.getState().open("create-issue", { parent_issue_id: id })
+                }
+              />
 
               {/* Acceptance Criteria section */}
               {issue.acceptance_criteria?.length > 0 && (

@@ -26,6 +26,7 @@ export interface UpdateIssueRequest {
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
   verifier_agent_id?: string | null;
+  parent_issue_id?: string | null;
   max_verification_rounds?: number | null;
   position?: number;
   due_date?: string | null;

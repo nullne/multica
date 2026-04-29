@@ -138,7 +138,10 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const descEditorRef = useRef<RichTextEditorRef>(null);
   const [status, setStatus] = useState<IssueStatus>((data?.status as IssueStatus) || draft.status);
   const [priority, setPriority] = useState<IssuePriority>(draft.priority);
+  const [parentIssueId] = useState<string | undefined>(data?.parent_issue_id as string | undefined);
   const [submitting, setSubmitting] = useState(false);
+
+  const parentIssue = useIssueStore((s) => s.issues.find((i) => i.id === parentIssueId));
 
   const defaults = useIssueDefaultsStore.getState();
   const initAssigneeType = draft.assigneeType ?? defaults.assigneeType;
@@ -274,6 +277,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         due_date: dueDate || undefined,
         dispatch_provider: dispatchProvider,
         dispatch_daemon_id: dispatchDaemonId,
+        parent_issue_id: parentIssueId,
       });
       if (selectedLabels.length > 0) {
         try {
@@ -343,8 +347,14 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         <div className="flex items-center justify-between px-5 pt-3 pb-2 shrink-0">
           <div className="flex items-center gap-1.5 text-xs">
             <span className="text-muted-foreground">{workspaceName}</span>
+            {parentIssue && (
+              <>
+                <ChevronRight className="size-3 text-muted-foreground/50" />
+                <span className="text-muted-foreground">{parentIssue.identifier}</span>
+              </>
+            )}
             <ChevronRight className="size-3 text-muted-foreground/50" />
-            <span className="font-medium">New issue</span>
+            <span className="font-medium">{parentIssue ? "New sub-issue" : "New issue"}</span>
           </div>
           <div className="flex items-center gap-1">
             <Tooltip>

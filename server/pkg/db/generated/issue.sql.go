@@ -306,12 +306,13 @@ UPDATE issue SET
     assignee_type = $6,
     assignee_id = $7,
     verifier_agent_id = $8,
-    position = COALESCE($9, position),
-    due_date = $10,
-    max_verification_rounds = $11,
-    dispatch_provider = $12,
-    dispatch_daemon_id = $13,
-    dispatch_daemon_label = $14,
+    parent_issue_id = $9,
+    position = COALESCE($10, position),
+    due_date = $11,
+    max_verification_rounds = $12,
+    dispatch_provider = $13,
+    dispatch_daemon_id = $14,
+    dispatch_daemon_label = $15,
     updated_at = now()
 WHERE id = $1
 RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
@@ -326,6 +327,7 @@ type UpdateIssueParams struct {
 	AssigneeType          pgtype.Text        `json:"assignee_type"`
 	AssigneeID            pgtype.UUID        `json:"assignee_id"`
 	VerifierAgentID       pgtype.UUID        `json:"verifier_agent_id"`
+	ParentIssueID         pgtype.UUID        `json:"parent_issue_id"`
 	Position              pgtype.Float8      `json:"position"`
 	DueDate               pgtype.Timestamptz `json:"due_date"`
 	MaxVerificationRounds pgtype.Int4        `json:"max_verification_rounds"`
@@ -344,6 +346,7 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		arg.AssigneeType,
 		arg.AssigneeID,
 		arg.VerifierAgentID,
+		arg.ParentIssueID,
 		arg.Position,
 		arg.DueDate,
 		arg.MaxVerificationRounds,
@@ -379,6 +382,57 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		&i.DispatchDaemonLabel,
 	)
 	return i, err
+}
+
+const listIssuesByParent = `-- name: ListIssuesByParent :many
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+WHERE parent_issue_id = $1
+ORDER BY position ASC, created_at DESC
+`
+
+func (q *Queries) ListIssuesByParent(ctx context.Context, parentIssueID pgtype.UUID) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listIssuesByParent, parentIssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.VerifierAgentID,
+			&i.MaxVerificationRounds,
+			&i.CriteriaStatus,
+			&i.DispatchProvider,
+			&i.DispatchDaemonID,
+			&i.DispatchDaemonLabel,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateIssueAcceptanceCriteria = `-- name: UpdateIssueAcceptanceCriteria :one
