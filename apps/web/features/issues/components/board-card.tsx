@@ -10,8 +10,10 @@ import { CalendarDays } from "lucide-react";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { api } from "@/shared/api";
 import { useIssueStore } from "@/features/issues/store";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
+import { AgentWorkingIndicator } from "./agent-working-indicator";
 import { PriorityPicker, AssigneePicker, DueDatePicker } from "./pickers";
 import { PRIORITY_CONFIG } from "@/features/issues/config";
 import type { CardProperties } from "@/features/issues/stores/view-store";
@@ -46,6 +48,7 @@ export const BoardCardContent = memo(function BoardCardContent({
 }) {
   const storeProperties = useViewStore((s) => s.cardProperties);
   const priorityCfg = PRIORITY_CONFIG[issue.priority];
+  const isWorking = useActiveTaskStore((s) => s.tasks.has(issue.id));
 
   const handleUpdate = useCallback(
     (updates: Partial<UpdateIssueRequest>) => {
@@ -66,7 +69,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showBottom = showAssignee || showDueDate;
 
   return (
-    <div className="rounded-lg border bg-card p-3.5 shadow-[0_1px_2px_0_rgba(0,0,0,0.03)] transition-shadow group-hover:shadow-sm">
+    <div className={`rounded-lg border bg-card p-3.5 shadow-[0_1px_2px_0_rgba(0,0,0,0.03)] transition-shadow group-hover:shadow-sm ${isWorking ? "border-info/30 bg-info/[0.02]" : ""}`}>
       {/* Row 1: Identifier */}
       <p className="text-xs text-muted-foreground">{issue.identifier}</p>
 
@@ -108,6 +111,9 @@ export const BoardCardContent = memo(function BoardCardContent({
           )}
         </div>
       )}
+
+      {/* Working indicator */}
+      <AgentWorkingIndicator issueId={issue.id} layout="card" />
 
       {/* Row 3: Assignee, priority badge, due date */}
       {(showAssignee || showPriority || showDueDate) && (

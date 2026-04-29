@@ -171,6 +171,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
 
+			// Tasks (workspace-level)
+			r.Get("/api/tasks/active", h.ListActiveTasksForWorkspace)
+
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/", h.ListIssues)

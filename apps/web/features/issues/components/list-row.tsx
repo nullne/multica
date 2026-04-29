@@ -7,6 +7,7 @@ import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
+import { AgentWorkingIndicator } from "./agent-working-indicator";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -77,6 +78,7 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
             {formatDate(issue.due_date)}
           </span>
         )}
+        <AgentWorkingIndicator issueId={issue.id} layout="inline" />
         {issue.assignee_type && issue.assignee_id && (
           issue.assignee_type === "agent" ? (
             <AgentDispatchBadge issue={issue} layout="inline" />
