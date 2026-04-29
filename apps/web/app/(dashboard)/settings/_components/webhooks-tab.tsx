@@ -802,6 +802,7 @@ function EditWebhookDialog({
 }) {
   const [name, setName] = useState("");
   const [botUserId, setBotUserId] = useState<string>("");
+  const [dedupWindow, setDedupWindow] = useState<string>("");
   const [actions, setActions] = useState<WebhookAction[]>([]);
   const [saving, setSaving] = useState(false);
   const [showSchema, setShowSchema] = useState(false);
@@ -812,6 +813,7 @@ function EditWebhookDialog({
     if (webhook) {
       setName(webhook.webhook.name);
       setBotUserId(webhook.webhook.bot_user_id ?? "");
+      setDedupWindow(String(webhook.webhook.dedup_window_seconds));
       setActions(webhook.actions);
     }
   }, [webhook]);
@@ -861,6 +863,9 @@ function EditWebhookDialog({
     setActions((prev) => prev.filter((a) => a.id !== action.id));
   };
 
+  const dedupWindowSeconds = parseInt(dedupWindow, 10);
+  const dedupWindowValid = !isNaN(dedupWindowSeconds) && dedupWindowSeconds >= 0;
+
   const handleSave = async () => {
     if (!webhook) return;
     setSaving(true);
@@ -869,6 +874,7 @@ function EditWebhookDialog({
       await api.updateWebhook(webhook.webhook.id, {
         name,
         bot_user_id: botUserId || undefined,
+        dedup_window_seconds: dedupWindowSeconds,
       });
       // Backend uses empty string to mean "clear bot user".
       if (!botUserId && webhook.webhook.bot_user_id) {
@@ -927,6 +933,20 @@ function EditWebhookDialog({
             <div className="space-y-1.5">
               <Label>Source Type</Label>
               <Input value={sourceType} disabled />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-wh-dedup">Dedup window (seconds)</Label>
+              <Input
+                id="edit-wh-dedup"
+                type="number"
+                min={0}
+                value={dedupWindow}
+                onChange={(e) => setDedupWindow(e.target.value)}
+                className={!dedupWindowValid ? "border-destructive" : ""}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                How long to suppress duplicate events. Set to 0 to disable deduplication.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label>Bot user (for comment_issue actions)</Label>
@@ -1035,7 +1055,7 @@ function EditWebhookDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving || !name.trim()}>
+          <Button onClick={handleSave} disabled={saving || !name.trim() || !dedupWindowValid}>
             {saving ? "Saving..." : "Save"}
           </Button>
         </DialogFooter>
