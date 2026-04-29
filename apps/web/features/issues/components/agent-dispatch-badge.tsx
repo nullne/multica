@@ -51,16 +51,25 @@ export function AgentDispatchBadge({ issue, layout = "stack" }: AgentDispatchBad
   }
 
   return (
-    <div className="flex items-start gap-1.5 min-w-0">
-      <Bot className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
-      <div className="min-w-0 flex flex-col">
-        <span className="text-xs font-medium truncate">{agentName}</span>
+    <div className="flex items-center gap-1.5 min-w-0">
+      <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex flex-col gap-0.5">
+        <span className="text-xs font-medium truncate leading-none">{agentName}</span>
         {(provider || daemonName) && (
-          <span className="text-[10px] text-muted-foreground truncate leading-tight">
-            {provider && <span className="capitalize">{provider}</span>}
-            {provider && daemonName && " · "}
-            {daemonName && daemonName}
-          </span>
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground leading-none">
+            {provider && (
+              <span className="capitalize shrink-0">{provider}</span>
+            )}
+            {provider && daemonName && (
+              <span className="shrink-0">·</span>
+            )}
+            {daemonName && (
+              <span className="inline-flex items-center gap-0.5 min-w-0">
+                <Monitor className="h-2.5 w-2.5 shrink-0" />
+                <span className="truncate">{daemonName}</span>
+              </span>
+            )}
+          </div>
         )}
       </div>
     </div>
