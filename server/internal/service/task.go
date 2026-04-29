@@ -173,6 +173,8 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 	}
 	if issue.DispatchDaemonID.Valid {
 		params.DaemonID = issue.DispatchDaemonID
+	} else if agent.DefaultDaemonID.Valid {
+		params.DaemonID = agent.DefaultDaemonID
 	}
 	if issue.DispatchDaemonLabel.Valid {
 		params.DaemonLabel = issue.DispatchDaemonLabel

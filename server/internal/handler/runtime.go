@@ -345,6 +345,22 @@ func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (h *Handler) GetDaemonByID(w http.ResponseWriter, r *http.Request) {
+	daemonID := chi.URLParam(r, "daemonId")
+
+	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return
+	}
+
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+		return
+	}
+
+	writeJSON(w, http.StatusOK, daemonToResponse(d))
+}
+
 func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
