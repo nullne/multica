@@ -1153,6 +1153,7 @@ function SettingsTab({
   const [codeAccess, setCodeAccess] = useState(agent.github_code_access ?? "read");
   const [providers, setProviders] = useState<string[]>(agent.providers ?? []);
   const [defaultDaemonId, setDefaultDaemonId] = useState<string | null>(agent.default_daemon_id ?? null);
+  const [maxConcurrentTasks, setMaxConcurrentTasks] = useState<string>(String(agent.max_concurrent_tasks ?? 6));
   const [saving, setSaving] = useState(false);
   const { upload, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1175,22 +1176,29 @@ function SettingsTab({
     }
   };
 
+  const parsedMaxConcurrentTasks = parseInt(maxConcurrentTasks, 10);
+
   const dirty =
     name !== agent.name ||
     description !== (agent.description ?? "") ||
     visibility !== agent.visibility ||
     codeAccess !== (agent.github_code_access ?? "read") ||
     JSON.stringify(providers) !== JSON.stringify(agent.providers ?? []) ||
-    defaultDaemonId !== (agent.default_daemon_id ?? null);
+    defaultDaemonId !== (agent.default_daemon_id ?? null) ||
+    parsedMaxConcurrentTasks !== (agent.max_concurrent_tasks ?? 6);
 
   const handleSave = async () => {
     if (!name.trim()) {
       toast.error("Name is required");
       return;
     }
+    if (!Number.isInteger(parsedMaxConcurrentTasks) || parsedMaxConcurrentTasks <= 0) {
+      toast.error("Max concurrent tasks must be a positive integer");
+      return;
+    }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_daemon_id: defaultDaemonId });
+      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_daemon_id: defaultDaemonId, max_concurrent_tasks: parsedMaxConcurrentTasks });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1404,6 +1412,20 @@ function SettingsTab({
             </Popover>
           )}
         </div>
+      </div>
+
+      <div>
+        <Label className="text-xs text-muted-foreground">Max Concurrent Tasks</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+          Maximum number of tasks this agent can run simultaneously. Defaults to 6.
+        </p>
+        <Input
+          type="number"
+          min={1}
+          value={maxConcurrentTasks}
+          onChange={(e) => setMaxConcurrentTasks(e.target.value)}
+          className="mt-1 w-32"
+        />
       </div>
 
       <Button onClick={handleSave} disabled={!dirty || saving} size="sm">
