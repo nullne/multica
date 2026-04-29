@@ -73,6 +73,16 @@ func issueLinkToResponse(l db.IssueLink) IssueLinkResponse {
 	}
 }
 
+func (h *Handler) hydrateLinks(ctx context.Context, issueID pgtype.UUID, resp *IssueResponse) {
+	links, err := h.Queries.ListIssueLinksByIssue(ctx, issueID)
+	if err == nil {
+		resp.Links = make([]IssueLinkResponse, len(links))
+		for i, l := range links {
+			resp.Links[i] = issueLinkToResponse(l)
+		}
+	}
+}
+
 type agentTriggerSnapshot struct {
 	Type    string         `json:"type"`
 	Enabled bool           `json:"enabled"`
@@ -651,6 +661,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
+	h.hydrateLinks(r.Context(), issue.ID, &resp)
 	slog.Info("issue updated", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
 
 	_, verifierFieldPresent := rawFields["verifier_agent_id"]
@@ -876,6 +887,7 @@ func (h *Handler) UpdateCriteria(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(updated, prefix)
+	h.hydrateLinks(r.Context(), updated.ID, &resp)
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
 
 	writeJSON(w, http.StatusOK, resp)
@@ -911,6 +923,7 @@ func (h *Handler) ApproveCriteria(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(updated, prefix)
+	h.hydrateLinks(r.Context(), updated.ID, &resp)
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
 		"issue":             resp,
 		"criteria_approved": true,
@@ -962,6 +975,7 @@ func (h *Handler) RejectCriteria(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(updated, prefix)
+	h.hydrateLinks(r.Context(), updated.ID, &resp)
 	h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{"issue": resp})
 
 	feedback := req.Feedback
@@ -1206,6 +1220,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 		resp := issueToResponse(issue, prefix)
+		h.hydrateLinks(r.Context(), issue.ID, &resp)
 		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil) &&
