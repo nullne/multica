@@ -53,7 +53,7 @@ export function AssigneePicker({
 
   const query = filter.toLowerCase();
   const filteredMembers = members.filter((m) =>
-    m.name.toLowerCase().includes(query),
+    m.kind !== "bot" && m.name.toLowerCase().includes(query),
   );
   const filteredAgents = agents.filter((a) =>
     !a.archived_at && a.name.toLowerCase().includes(query),

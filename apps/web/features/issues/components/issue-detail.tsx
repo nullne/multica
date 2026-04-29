@@ -842,7 +842,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                       Unassigned
                       {!issue.assignee_type && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
                     </DropdownMenuItem>
-                    {members.map((m) => (
+                    {members.filter((m) => m.kind !== "bot").map((m) => (
                       <DropdownMenuItem
                         key={m.user_id}
                         onClick={() => handleUpdateField({ assignee_type: "member", assignee_id: m.user_id })}
