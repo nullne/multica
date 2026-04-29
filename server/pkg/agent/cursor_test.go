@@ -161,14 +161,12 @@ func TestCursorHandleToolCallStarted(t *testing.T) {
 	ch := make(chan Message, 10)
 	var output strings.Builder
 
+	// New Cursor format: call_id at top level, tool_call keyed by tool type.
 	msg := cursorSDKMessage{
-		Type:    "tool_call",
-		Subtype: "started",
-		ToolCall: mustMarshal(t, cursorToolCallEvent{
-			ID:       "tc-1",
-			ToolType: "shellToolCall",
-			Input:    mustMarshal(t, map[string]any{"command": "ls -la"}),
-		}),
+		Type:     "tool_call",
+		Subtype:  "started",
+		CallID:   "tc-1",
+		ToolCall: mustMarshal(t, map[string]any{"shellToolCall": map[string]any{"command": "ls -la"}}),
 	}
 
 	b.handleToolCall(msg, ch, &output)
@@ -193,13 +191,17 @@ func TestCursorHandleToolCallCompleted(t *testing.T) {
 	ch := make(chan Message, 10)
 	var output strings.Builder
 
+	// New Cursor format: call_id at top level, tool_call keyed by tool type.
 	msg := cursorSDKMessage{
 		Type:    "tool_call",
 		Subtype: "completed",
-		ToolCall: mustMarshal(t, cursorToolCallEvent{
-			ID:       "tc-1",
-			ToolType: "shellToolCall",
-			Output:   mustMarshal(t, "total 42\ndrwxr-xr-x ..."),
+		CallID:  "tc-1",
+		ToolCall: mustMarshal(t, map[string]any{
+			"shellToolCall": map[string]any{
+				"exitCode": 0,
+				"stdout":   "total 42\ndrwxr-xr-x ...",
+				"stderr":   "",
+			},
 		}),
 	}
 
@@ -210,8 +212,55 @@ func TestCursorHandleToolCallCompleted(t *testing.T) {
 		if m.Type != MessageToolResult || m.Tool != "shellToolCall" || m.CallID != "tc-1" {
 			t.Fatalf("unexpected message: %+v", m)
 		}
+		if m.Output == "" {
+			t.Fatal("expected non-empty output")
+		}
 	default:
 		t.Fatal("expected message on channel")
+	}
+}
+
+func TestCursorHandleToolCallFixture(t *testing.T) {
+	t.Parallel()
+
+	b := &cursorBackend{cfg: Config{Logger: slog.Default()}}
+
+	// Real modern Cursor stream-json tool_call events.
+	startedLine := `{"type":"tool_call","subtype":"started","call_id":"curs-42","tool_call":{"shellToolCall":{"command":"echo hello"}}}`
+	completedLine := `{"type":"tool_call","subtype":"completed","call_id":"curs-42","tool_call":{"shellToolCall":{"exitCode":0,"stdout":"hello\n","stderr":""}}}`
+
+	for _, tc := range []struct {
+		line        string
+		wantMsgType MessageType
+		wantTool    string
+		wantCallID  string
+	}{
+		{startedLine, MessageToolUse, "shellToolCall", "curs-42"},
+		{completedLine, MessageToolResult, "shellToolCall", "curs-42"},
+	} {
+		var msg cursorSDKMessage
+		if err := json.Unmarshal([]byte(tc.line), &msg); err != nil {
+			t.Fatalf("unmarshal fixture: %v", err)
+		}
+
+		ch := make(chan Message, 10)
+		var out strings.Builder
+		b.handleToolCall(msg, ch, &out)
+
+		select {
+		case m := <-ch:
+			if m.Type != tc.wantMsgType {
+				t.Errorf("line %q: Type = %q, want %q", tc.line, m.Type, tc.wantMsgType)
+			}
+			if m.Tool != tc.wantTool {
+				t.Errorf("line %q: Tool = %q, want %q", tc.line, m.Tool, tc.wantTool)
+			}
+			if m.CallID != tc.wantCallID {
+				t.Errorf("line %q: CallID = %q, want %q", tc.line, m.CallID, tc.wantCallID)
+			}
+		default:
+			t.Fatalf("line %q: expected message on channel", tc.line)
+		}
 	}
 }
 
