@@ -784,6 +784,10 @@ export class ApiClient {
     return this.fetch(`/api/webhooks/${id}/events`);
   }
 
+  async listWorkspaceWebhookEvents(): Promise<WebhookEvent[]> {
+    return this.fetch("/api/webhook-events");
+  }
+
   async listWebhookActions(webhookId: string): Promise<WebhookAction[]> {
     return this.fetch(`/api/webhooks/${webhookId}/actions`);
   }

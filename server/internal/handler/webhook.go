@@ -467,6 +467,28 @@ func (h *Handler) ListWebhookEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (h *Handler) ListWorkspaceWebhookEvents(w http.ResponseWriter, r *http.Request) {
+	workspaceID := resolveWorkspaceID(r)
+
+	limit := int32(100)
+	offset := int32(0)
+	events, err := h.Queries.ListWorkspaceWebhookEvents(r.Context(), db.ListWorkspaceWebhookEventsParams{
+		WorkspaceID: parseUUID(workspaceID),
+		Limit:       limit,
+		Offset:      offset,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list events")
+		return
+	}
+
+	resp := make([]WebhookEventResponse, len(events))
+	for i, e := range events {
+		resp[i] = webhookEventToResponse(e)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // --- Webhook Action CRUD ---
 
 type CreateWebhookActionRequest struct {

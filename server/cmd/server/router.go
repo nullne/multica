@@ -272,6 +272,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 
 			// Webhooks (CRUD — workspace-scoped management)
 			r.Get("/api/webhook-adapters", h.ListWebhookAdapters)
+			r.Get("/api/webhook-events", h.ListWorkspaceWebhookEvents)
 			r.Route("/api/webhooks", func(r chi.Router) {
 				r.Get("/", h.ListWebhooks)
 				r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/", h.CreateWebhook)
