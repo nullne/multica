@@ -333,6 +333,13 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		verifierAgentID = parseUUID(*req.VerifierAgentID)
 	}
 
+	// Reject bot users as assignees.
+	if req.AssigneeType != nil && *req.AssigneeType == "member" && req.AssigneeID != nil {
+		if h.isBotUser(r.Context(), *req.AssigneeID) {
+			writeError(w, http.StatusBadRequest, "cannot assign issue to a bot user")
+			return
+		}
+	}
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
 	if req.AssigneeType != nil && *req.AssigneeType == "agent" && req.AssigneeID != nil {
 		if ok, msg := h.canAssignAgent(r.Context(), r, *req.AssigneeID, workspaceID); !ok {
@@ -570,6 +577,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
 	}
 
+	// Reject bot users as assignees.
+	if req.AssigneeType != nil && *req.AssigneeType == "member" && req.AssigneeID != nil {
+		if h.isBotUser(r.Context(), *req.AssigneeID) {
+			writeError(w, http.StatusBadRequest, "cannot assign issue to a bot user")
+			return
+		}
+	}
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
 	if req.AssigneeType != nil && *req.AssigneeType == "agent" && req.AssigneeID != nil {
 		if ok, msg := h.canAssignAgent(r.Context(), r, *req.AssigneeID, workspaceID); !ok {
@@ -656,6 +670,15 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// isBotUser returns true when the user identified by userID has kind == "bot".
+func (h *Handler) isBotUser(ctx context.Context, userID string) bool {
+	user, err := h.Queries.GetUser(ctx, parseUUID(userID))
+	if err != nil {
+		return false
+	}
+	return user.Kind == "bot"
 }
 
 // canAssignAgent checks whether the requesting user is allowed to assign issues
@@ -1060,6 +1083,12 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Reject bot users as assignees.
+		if req.Updates.AssigneeType != nil && *req.Updates.AssigneeType == "member" && req.Updates.AssigneeID != nil {
+			if h.isBotUser(r.Context(), *req.Updates.AssigneeID) {
+				continue
+			}
+		}
 		// Enforce agent visibility for batch assignment.
 		if req.Updates.AssigneeType != nil && *req.Updates.AssigneeType == "agent" && req.Updates.AssigneeID != nil {
 			if ok, _ := h.canAssignAgent(r.Context(), r, *req.Updates.AssigneeID, workspaceID); !ok {
