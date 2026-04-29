@@ -40,6 +40,7 @@ UPDATE issue SET
     assignee_type = sqlc.narg('assignee_type'),
     assignee_id = sqlc.narg('assignee_id'),
     verifier_agent_id = sqlc.narg('verifier_agent_id'),
+    parent_issue_id = sqlc.narg('parent_issue_id'),
     position = COALESCE(sqlc.narg('position'), position),
     due_date = sqlc.narg('due_date'),
     max_verification_rounds = sqlc.narg('max_verification_rounds'),
@@ -49,6 +50,11 @@ UPDATE issue SET
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: ListIssuesByParent :many
+SELECT * FROM issue
+WHERE parent_issue_id = $1
+ORDER BY position ASC, created_at DESC;
 
 -- name: UpdateIssueAcceptanceCriteria :one
 UPDATE issue SET
