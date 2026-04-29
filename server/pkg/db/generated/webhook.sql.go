@@ -460,6 +460,50 @@ func (q *Queries) ListWebhooksByWorkspace(ctx context.Context, workspaceID pgtyp
 	return items, nil
 }
 
+const listWorkspaceWebhookEvents = `-- name: ListWorkspaceWebhookEvents :many
+SELECT wel.id, wel.webhook_id, wel.dedup_key, wel.payload, wel.status, wel.issue_id, wel.error_message, wel.created_at
+FROM webhook_event_log wel
+JOIN webhook w ON w.id = wel.webhook_id
+WHERE w.workspace_id = $1
+ORDER BY wel.created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListWorkspaceWebhookEventsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Limit       int32       `json:"limit"`
+	Offset      int32       `json:"offset"`
+}
+
+func (q *Queries) ListWorkspaceWebhookEvents(ctx context.Context, arg ListWorkspaceWebhookEventsParams) ([]WebhookEventLog, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceWebhookEvents, arg.WorkspaceID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WebhookEventLog{}
+	for rows.Next() {
+		var i WebhookEventLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.WebhookID,
+			&i.DedupKey,
+			&i.Payload,
+			&i.Status,
+			&i.IssueID,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const regenerateWebhookToken = `-- name: RegenerateWebhookToken :one
 UPDATE webhook SET token_hash = $2, token_prefix = $3, updated_at = now()
 WHERE id = $1

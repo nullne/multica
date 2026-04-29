@@ -88,3 +88,11 @@ SELECT id FROM webhook_event_log
 WHERE webhook_id = $1 AND dedup_key = $2 AND status = 'processed'
   AND created_at > now() - make_interval(secs => @window_seconds::double precision)
 LIMIT 1;
+
+-- name: ListWorkspaceWebhookEvents :many
+SELECT wel.id, wel.webhook_id, wel.dedup_key, wel.payload, wel.status, wel.issue_id, wel.error_message, wel.created_at
+FROM webhook_event_log wel
+JOIN webhook w ON w.id = wel.webhook_id
+WHERE w.workspace_id = $1
+ORDER BY wel.created_at DESC
+LIMIT $2 OFFSET $3;
