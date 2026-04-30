@@ -1,6 +1,6 @@
 export type CommentType = "comment" | "status_change" | "progress_update" | "system";
 
-export type CommentAuthorType = "member" | "agent";
+export type CommentAuthorType = "member" | "agent" | "system";
 
 export interface Reaction {
   id: string;

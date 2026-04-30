@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -247,6 +248,41 @@ func (h *Handler) isReplyToMemberThread(parent *db.Comment, content string, issu
 	return true // Reply to member thread without mentioning agent — suppress
 }
 
+// postSystemNotice creates a system-authored notice comment on an issue to
+// inform users that a mentioned agent could not be dispatched. The comment is
+// posted as a reply to the triggering comment thread (or its root if nested).
+func (h *Handler) postSystemNotice(ctx context.Context, issue db.Issue, content string, parentCommentID pgtype.UUID) {
+	comment, err := h.Queries.CreateComment(ctx, db.CreateCommentParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+		AuthorType:  "system",
+		AuthorID:    issue.WorkspaceID,
+		Content:     content,
+		Type:        "system",
+		ParentID:    parentCommentID,
+	})
+	if err != nil {
+		slog.Warn("post system notice failed", "issue_id", uuidToString(issue.ID), "error", err)
+		return
+	}
+	h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), "system", uuidToString(issue.WorkspaceID), map[string]any{
+		"comment": map[string]any{
+			"id":          uuidToString(comment.ID),
+			"issue_id":    uuidToString(comment.IssueID),
+			"author_type": comment.AuthorType,
+			"author_id":   uuidToString(comment.AuthorID),
+			"content":     comment.Content,
+			"type":        comment.Type,
+			"parent_id":   uuidToPtr(comment.ParentID),
+			"created_at":  timestampToString(comment.CreatedAt),
+			"reactions":   []any{},
+			"attachments": []any{},
+		},
+		"issue_title":  issue.Title,
+		"issue_status": issue.Status,
+	})
+}
+
 // enqueueMentionedAgentTasks parses @agent mentions from comment content and
 // enqueues a task for each mentioned agent. Skips self-mentions, agents that
 // are already the issue's assignee (handled by on_comment), agents with
@@ -273,23 +309,46 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			issue.AssigneeID.Valid && uuidToString(issue.AssigneeID) == m.ID {
 			continue
 		}
+
+		// Thread root for any notice replies: use the comment itself as parent,
+		// or the root comment if the mention is in a nested reply.
+		noticeParent := comment.ID
+		if comment.ParentID.Valid {
+			noticeParent = comment.ParentID
+		}
+
 		// Load the agent to check visibility, archive status, and trigger config.
 		agent, err := h.Queries.GetAgent(ctx, agentUUID)
-		if err != nil || len(agent.Providers) == 0 || agent.ArchivedAt.Valid {
+		if err != nil {
+			h.postSystemNotice(ctx, issue, "A mentioned agent could not be found.", noticeParent)
 			continue
 		}
+		if agent.ArchivedAt.Valid {
+			agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
+			h.postSystemNotice(ctx, issue, agentLink+" is archived and cannot accept tasks.", noticeParent)
+			continue
+		}
+		if len(agent.Providers) == 0 {
+			agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
+			h.postSystemNotice(ctx, issue, agentLink+" has no AI providers configured and cannot accept tasks.", noticeParent)
+			continue
+		}
+
 		// Private agents can only be mentioned by the agent owner or workspace admin/owner.
 		if agent.Visibility == "private" && authorType == "member" {
 			isOwner := uuidToString(agent.OwnerID) == authorID
 			if !isOwner {
 				member, err := h.getWorkspaceMember(ctx, authorID, wsID)
 				if err != nil || !roleAllowed(member.Role, "owner", "admin") {
+					h.postSystemNotice(ctx, issue, "A mentioned agent could not be dispatched due to access restrictions.", noticeParent)
 					continue
 				}
 			}
 		}
 		// Check if the agent has on_mention trigger enabled.
 		if !agentHasTriggerEnabled(agent.Triggers, "on_mention") {
+			agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
+			h.postSystemNotice(ctx, issue, agentLink+" has the mention trigger disabled.", noticeParent)
 			continue
 		}
 		// Dedup: skip if this agent already has a pending task for this issue.
@@ -298,6 +357,10 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			AgentID: agentUUID,
 		})
 		if err != nil || hasPending {
+			if hasPending {
+				agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
+				h.postSystemNotice(ctx, issue, agentLink+" already has a pending task for this issue.", noticeParent)
+			}
 			continue
 		}
 		// Resolve thread root for reply threading.
@@ -306,6 +369,8 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			replyTo = comment.ParentID
 		}
 		if _, err := h.TaskService.EnqueueTaskForMention(ctx, issue, agentUUID, replyTo); err != nil {
+			agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
+			h.postSystemNotice(ctx, issue, agentLink+" has no available runtime to execute the task.", noticeParent)
 			slog.Warn("enqueue mention agent task failed", "issue_id", uuidToString(issue.ID), "agent_id", m.ID, "error", err)
 		}
 	}

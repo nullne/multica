@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Bot } from "lucide-react";
+import { Bot, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useActorName } from "@/features/workspace";
 
@@ -34,6 +34,7 @@ function ActorAvatar({
   const name = resolveName(actorType, actorId);
   const initials = resolveInitials(actorType, actorId);
   const isAgent = actorType === "agent";
+  const isSystem = actorType === "system";
   const resolvedUrl = avatarUrl !== undefined ? avatarUrl : resolveAvatarUrl(actorType, actorId);
 
   const [imgError, setImgError] = useState(false);
@@ -61,6 +62,8 @@ function ActorAvatar({
           className="h-full w-full object-cover"
           onError={() => setImgError(true)}
         />
+      ) : isSystem ? (
+        <Info style={{ width: size * 0.55, height: size * 0.55 }} />
       ) : isAgent ? (
         <Bot style={{ width: size * 0.55, height: size * 0.55 }} />
       ) : (
