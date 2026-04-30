@@ -99,6 +99,7 @@ jobs:
           CLOUDFRONT_DOMAIN=${{ secrets.CLOUDFRONT_DOMAIN }}
           CLOUDFRONT_KEY_PAIR_ID=${{ secrets.CLOUDFRONT_KEY_PAIR_ID }}
           CLOUDFRONT_PRIVATE_KEY=${{ secrets.CLOUDFRONT_PRIVATE_KEY }}
+          TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}
           LISTEN_PORT=${{ vars.LISTEN_PORT || '8180' }}
           PGDATA_DIR=${{ vars.PGDATA_DIR || './data/postgres-staging' }}
           IMAGE_TAG=staging
