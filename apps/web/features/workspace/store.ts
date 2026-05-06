@@ -74,10 +74,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     api.setWorkspaceId(nextWorkspace.id);
     localStorage.setItem("multica_workspace_id", nextWorkspace.id);
-    set({ workspace: nextWorkspace });
+    set({ workspace: nextWorkspace, members: [], agents: [], skills: [] });
 
     logger.debug("hydrate workspace", nextWorkspace.name, nextWorkspace.id);
-    const [nextMembers, nextAgents, nextSkills] = await Promise.all([
+    const workspaceId = nextWorkspace.id;
+    void Promise.all([
       api.listMembers(nextWorkspace.id).catch((e) => {
         logger.error("failed to load members", e);
         toast.error("Failed to load members");
@@ -89,12 +90,19 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         return [] as Agent[];
       }),
       api.listSkills().catch(() => [] as Skill[]),
-      useIssueStore.getState().fetch().catch(() => {}),
-      useInboxStore.getState().fetch().catch(() => {}),
-      useLabelStore.getState().fetch().catch(() => {}),
-    ]);
-    logger.info("hydrate complete", "members:", nextMembers.length, "agents:", nextAgents.length);
-    set({ members: nextMembers, agents: nextAgents, skills: nextSkills });
+    ]).then(([nextMembers, nextAgents, nextSkills]) => {
+      if (get().workspace?.id !== workspaceId) {
+        logger.debug("skip stale hydrate result", workspaceId);
+        return;
+      }
+
+      logger.info("hydrate complete", "members:", nextMembers.length, "agents:", nextAgents.length);
+      set({ members: nextMembers, agents: nextAgents, skills: nextSkills });
+    });
+
+    void useIssueStore.getState().fetch().catch(() => {});
+    void useInboxStore.getState().fetch().catch(() => {});
+    void useLabelStore.getState().fetch().catch(() => {});
 
     return nextWorkspace;
   },

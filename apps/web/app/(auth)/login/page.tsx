@@ -10,6 +10,7 @@ import {
 } from "@/features/auth/firebase";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
+import { createLogger } from "@/shared/logger";
 import {
   Card,
   CardHeader,
@@ -20,6 +21,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { User } from "@/shared/types";
+
+const logger = createLogger("login-page");
 
 function validateCliCallback(cliCallback: string): boolean {
   try {
@@ -90,13 +93,19 @@ function LoginPageContent() {
         return;
       }
 
+      logger.info("detected pending Google redirect sign-in");
       setSubmitting(true);
 
       try {
         const login = await completeGoogleRedirectSignIn();
         if (!login || cancelled) {
+          if (!cancelled) {
+            logger.warn("Google redirect sign-in produced no login result");
+          }
           return;
         }
+
+        logger.info("Google redirect sign-in completed");
 
         if (cliCallback) {
           if (!validateCliCallback(cliCallback)) {
@@ -112,8 +121,10 @@ function LoginPageContent() {
           return;
         }
         await hydrateWorkspace(wsList);
+        logger.info("workspace hydration scheduled after Google redirect sign-in");
         router.push(nextPath);
       } catch (err) {
+        logger.error("Google redirect sign-in failed", err);
         if (!cancelled) {
           setError(
             err instanceof Error ? err.message : "Failed to sign in with Google"
