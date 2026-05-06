@@ -70,6 +70,7 @@ import { toast } from "sonner";
 import { api } from "@/shared/api";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useWorkspaceStore } from "@/features/workspace";
+import { issueUrl } from "@/features/issues/utils/url";
 import { useLabelStore } from "@/features/labels";
 import type { Label as IssueLabel } from "@/shared/types";
 
@@ -1659,6 +1660,7 @@ function WebhookEventsPanel({
 
 function WebhookEventRow({ event, webhookName }: { event: WebhookEvent; webhookName?: string }) {
   const summary = payloadSummary(event.payload);
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
   return (
     <div className="flex flex-col gap-0.5 rounded border bg-muted/30 px-2 py-1.5 text-[11px]">
       <div className="flex items-center gap-2 flex-wrap">
@@ -1674,7 +1676,7 @@ function WebhookEventRow({ event, webhookName }: { event: WebhookEvent; webhookN
         )}
         {event.issue_id && (
           <a
-            href={`/issues/${event.issue_id}`}
+            href={issueUrl(event.issue_id, workspaceSlug)}
             className="flex items-center gap-0.5 text-primary hover:underline shrink-0"
           >
             <ExternalLink className="h-2.5 w-2.5" />

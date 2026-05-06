@@ -36,6 +36,7 @@ import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useIssueStore } from "@/features/issues";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
 import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
+import { issueUrl } from "@/features/issues/utils/url";
 import { api } from "@/shared/api";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { FileUploadButton } from "@/components/common/file-upload-button";
@@ -126,6 +127,7 @@ function DaemonTriggerLabel({ daemonId }: { daemonId?: string }) {
 export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?: Record<string, unknown> | null }) {
   const router = useRouter();
   const workspaceName = useWorkspaceStore((s) => s.workspace?.name);
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
   const members = useWorkspaceStore((s) => s.members);
   const agents = useWorkspaceStore((s) => s.agents);
   const { getActorName } = useActorName();
@@ -313,7 +315,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
             type="button"
             className="ml-7 mt-2 text-sm text-primary hover:underline cursor-pointer"
             onClick={() => {
-              router.push(`/issues/${issue.id}`);
+              router.push(issueUrl(issue.id, workspaceSlug));
               toast.dismiss(t);
             }}
           >

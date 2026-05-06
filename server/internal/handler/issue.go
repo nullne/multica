@@ -1300,3 +1300,37 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
+
+// ResolveIssueWorkspace returns the workspace slug for an issue without
+// requiring the X-Workspace-ID header. Used by the frontend to redirect
+// legacy /issues/{id} links to the canonical /w/{slug}/issues/{id} route.
+func (h *Handler) ResolveIssueWorkspace(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	id := chi.URLParam(r, "id")
+
+	issue, err := h.Queries.GetIssue(r.Context(), parseUUID(id))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "issue not found")
+		return
+	}
+
+	_, err = h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+		UserID:      parseUUID(userID),
+		WorkspaceID: issue.WorkspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusForbidden, "not a member of this workspace")
+		return
+	}
+
+	ws, err := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"workspace_slug": ws.Slug})
+}

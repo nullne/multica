@@ -11,6 +11,8 @@ import { ActorAvatar } from "@/components/common/actor-avatar";
 import { api } from "@/shared/api";
 import { useIssueStore } from "@/features/issues/store";
 import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
+import { useWorkspaceStore } from "@/features/workspace";
+import { issueUrl } from "@/features/issues/utils/url";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
 import { AgentWorkingIndicator } from "./agent-working-indicator";
@@ -228,6 +230,7 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({ issue }: { 
     id: issue.id,
     data: { status: issue.status },
   });
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -243,7 +246,7 @@ export const DraggableBoardCard = memo(function DraggableBoardCard({ issue }: { 
       className={isDragging ? "opacity-30" : ""}
     >
       <Link
-        href={`/issues/${issue.id}`}
+        href={issueUrl(issue.id, workspaceSlug)}
         className={`group block transition-colors ${isDragging ? "pointer-events-none" : ""}`}
       >
         <BoardCardContent issue={issue} editable />

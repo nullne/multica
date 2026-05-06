@@ -38,8 +38,8 @@ vi.mock("@/features/auth", () => ({
 
 // Mock workspace feature
 const workspaceState = {
-  workspace: { id: "ws-1", name: "Test WS" },
-  workspaces: [{ id: "ws-1", name: "Test WS" }],
+  workspace: { id: "ws-1", name: "Test WS", slug: "test-ws" },
+  workspaces: [{ id: "ws-1", name: "Test WS", slug: "test-ws" }],
   members: [{ user_id: "user-1", name: "Test User", email: "test@multica.ai" }],
   agents: [{ id: "agent-1", name: "Claude Agent" }],
 };
@@ -164,6 +164,7 @@ vi.mock("@/shared/api", () => ({
     deleteComment: (...args: any[]) => mockDeleteComment(...args),
     deleteIssue: (...args: any[]) => mockDeleteIssue(...args),
     updateIssue: (...args: any[]) => mockUpdateIssue(...args),
+    resolveIssueWorkspace: vi.fn().mockResolvedValue({ workspace_slug: "test-ws" }),
     listIssueSubscribers: vi.fn().mockResolvedValue([]),
     subscribeToIssue: vi.fn().mockResolvedValue(undefined),
     unsubscribeFromIssue: vi.fn().mockResolvedValue(undefined),

@@ -79,6 +79,7 @@ import { useIssueReactions } from "@/features/issues/hooks/use-issue-reactions";
 import { useIssueSubscribers } from "@/features/issues/hooks/use-issue-subscribers";
 import { filterIssues } from "@/features/issues/utils/filter";
 import { sortIssues } from "@/features/issues/utils/sort";
+import { issueUrl } from "@/features/issues/utils/url";
 import { ReactionBar } from "@/components/common/reaction-bar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -453,6 +454,7 @@ function SubIssuesSection({
   const [subIssues, setSubIssues] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
 
   // Also subscribe to store changes so newly created sub-issues appear
   const storeIssues = useIssueStore((s) => s.issues);
@@ -500,7 +502,7 @@ function SubIssuesSection({
             <button
               key={sub.id}
               type="button"
-              onClick={() => router.push(`/issues/${sub.id}`)}
+              onClick={() => router.push(issueUrl(sub.id, workspaceSlug))}
               className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-xs hover:bg-accent transition-colors text-left"
             >
               <StatusIcon status={sub.status} className="h-3 w-3 shrink-0" />
@@ -898,7 +900,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   return parent ? (
                     <>
                       <Link
-                        href={`/issues/${parent.id}`}
+                        href={issueUrl(parent.id, workspace?.slug ?? "")}
                         className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
                       >
                         {parent.identifier}
@@ -927,7 +929,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                         size="icon-xs"
                         className="text-muted-foreground"
                         disabled={!prevIssue}
-                        onClick={() => prevIssue && router.push(`/issues/${prevIssue.id}`)}
+                        onClick={() => prevIssue && router.push(issueUrl(prevIssue.id, workspace?.slug ?? ""))}
                       >
                         <ChevronLeft className="h-4 w-4" />
                       </Button>
@@ -946,7 +948,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                         size="icon-xs"
                         className="text-muted-foreground"
                         disabled={!nextIssue}
-                        onClick={() => nextIssue && router.push(`/issues/${nextIssue.id}`)}
+                        onClick={() => nextIssue && router.push(issueUrl(nextIssue.id, workspace?.slug ?? ""))}
                       >
                         <ChevronRight className="h-4 w-4" />
                       </Button>
