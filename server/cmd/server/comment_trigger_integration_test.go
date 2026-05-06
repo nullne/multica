@@ -323,6 +323,45 @@ func TestCommentTriggerOnMentionNoStatusGate(t *testing.T) {
 	}
 }
 
+// TestMentionDispatchIgnoresIssueDispatchHints verifies that @mentioning an
+// agent whose providers differ from the issue's dispatch_provider still
+// enqueues a task. Mention dispatch must resolve runtimes from the mentioned
+// agent's own configuration, not from the issue's pinned provider.
+func TestMentionDispatchIgnoresIssueDispatchHints(t *testing.T) {
+	// The test workspace fixture has one agent (providers=["codex"]) and one
+	// codex runtime. Pin the issue to a different provider ("claude") — without
+	// the fix this would prevent the codex agent from being dispatched via
+	// @mention.
+	agentID := getAgentID(t)
+
+	issueID := createIssue(t, "Mention dispatch provider isolation test")
+	t.Cleanup(func() {
+		clearTasks(t, issueID)
+		resp := authRequest(t, "DELETE", "/api/issues/"+issueID, nil)
+		resp.Body.Close()
+	})
+
+	// Pin the issue to "claude" — the codex runtime will NOT match this.
+	resp := authRequest(t, "PUT", "/api/issues/"+issueID, map[string]any{
+		"dispatch_provider": "claude",
+	})
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("set dispatch_provider: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	resp.Body.Close()
+
+	// @mention the codex-only agent — should still create a task because
+	// mention dispatch ignores the issue's dispatch_provider.
+	content := fmt.Sprintf("[@Agent](mention://agent/%s) can you help?", agentID)
+	postComment(t, issueID, content, nil)
+
+	if n := countPendingTasks(t, issueID); n != 1 {
+		t.Errorf("expected 1 pending task for @mention despite mismatched dispatch_provider, got %d", n)
+	}
+}
+
 // TestCommentTriggerCoalescing verifies that rapid-fire comments don't create
 // duplicate tasks (coalescing dedup).
 func TestCommentTriggerCoalescing(t *testing.T) {
