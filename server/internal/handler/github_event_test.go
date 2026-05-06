@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/auth"
@@ -223,6 +224,200 @@ func TestReceiveGitHubEvent_PullRequestCreatesIssueAndLink(t *testing.T) {
 		testHandler.Queries.DeleteIssue(ctx, link.IssueID)
 		testHandler.Queries.DeleteIssueLink(ctx, link.ID)
 	})
+}
+
+func TestReceiveGitHubEvent_PullRequestReusesLinkedGitHubIssue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	ctx := context.Background()
+	secret := []byte("test-secret")
+
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	installationID := int64(424243)
+	webhookID := setupGitHubWebhookFixture(t, installationID)
+
+	var agentIDStr string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentIDStr); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	cfgJSON, _ := json.Marshal(CreateIssueActionConfig{
+		AgentID:       agentIDStr,
+		TitleTemplate: "PR: {{.title}}",
+	})
+	if _, err := testHandler.Queries.CreateWebhookAction(ctx, db.CreateWebhookActionParams{
+		WebhookID:  webhookID,
+		ActionType: "create_issue",
+		Config:     cfgJSON,
+		Enabled:    true,
+		Position:   0,
+	}); err != nil {
+		t.Fatalf("create action: %v", err)
+	}
+
+	linkedIssueID := createTestIssue(t, "Existing GitHub issue")
+	linkedIssueURL := fmt.Sprintf("https://github.com/acme/widgets/issues/%d", time.Now().UnixNano())
+	if _, err := testHandler.Queries.CreateIssueLink(ctx, db.CreateIssueLinkParams{
+		IssueID:     parseUUID(linkedIssueID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+		SourceType:  "github",
+		Kind:        "issue",
+		Direction:   "source",
+		Url:         linkedIssueURL,
+		ExternalID:  "acme/widgets#123",
+	}); err != nil {
+		t.Fatalf("create linked issue link: %v", err)
+	}
+
+	var beforeCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM issue WHERE workspace_id = $1`,
+		testWorkspaceID,
+	).Scan(&beforeCount); err != nil {
+		t.Fatalf("count issues before webhook: %v", err)
+	}
+
+	prURL := fmt.Sprintf("https://github.com/acme/widgets/pull/%d", time.Now().UnixNano())
+	body := []byte(fmt.Sprintf(`{
+		"action":"opened",
+		"installation":{"id":%d},
+		"pull_request":{"number":778,"title":"Fix existing issue","html_url":%q,"user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"Fixes %s"},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, prURL, linkedIssueURL))
+
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("PR opened: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	prLink, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Url:         prURL,
+	})
+	if err != nil {
+		t.Fatalf("PR issue_link not found: %v", err)
+	}
+	if got := uuidToString(prLink.IssueID); got != linkedIssueID {
+		t.Fatalf("PR link issue_id = %s, want existing issue %s", got, linkedIssueID)
+	}
+
+	issueLink, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Url:         linkedIssueURL,
+	})
+	if err != nil {
+		t.Fatalf("linked GitHub issue link not found: %v", err)
+	}
+	if issueLink.ExternalID != "acme/widgets#123" {
+		t.Fatalf("linked GitHub issue external_id = %q, want acme/widgets#123", issueLink.ExternalID)
+	}
+
+	var afterCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM issue WHERE workspace_id = $1`,
+		testWorkspaceID,
+	).Scan(&afterCount); err != nil {
+		t.Fatalf("count issues after webhook: %v", err)
+	}
+	if afterCount != beforeCount {
+		t.Fatalf("issue count after webhook = %d, want %d", afterCount, beforeCount)
+	}
+}
+
+func TestReceiveGitHubEvent_MultipleCreateActionsStillCreateSeparateIssues(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	ctx := context.Background()
+	secret := []byte("test-secret")
+
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	installationID := time.Now().UnixNano()
+	webhookID := setupGitHubWebhookFixture(t, installationID)
+
+	var agentIDStr string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentIDStr); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	for i, titleTemplate := range []string{"A: {{.title}}", "B: {{.title}}"} {
+		cfgJSON, _ := json.Marshal(CreateIssueActionConfig{
+			AgentID:       agentIDStr,
+			TitleTemplate: titleTemplate,
+		})
+		if _, err := testHandler.Queries.CreateWebhookAction(ctx, db.CreateWebhookActionParams{
+			WebhookID:  webhookID,
+			ActionType: "create_issue",
+			Config:     cfgJSON,
+			Enabled:    true,
+			Position:   int32(i),
+		}); err != nil {
+			t.Fatalf("create action %d: %v", i, err)
+		}
+	}
+
+	var beforeCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM issue WHERE workspace_id = $1`,
+		testWorkspaceID,
+	).Scan(&beforeCount); err != nil {
+		t.Fatalf("count issues before webhook: %v", err)
+	}
+
+	prURL := fmt.Sprintf("https://github.com/acme/widgets/pull/%d", time.Now().UnixNano())
+	body := []byte(fmt.Sprintf(`{
+		"action":"opened",
+		"installation":{"id":%d},
+		"pull_request":{"number":779,"title":"Create two issues","html_url":%q,"user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"no linked issue"},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, prURL))
+
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("PR opened: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var afterCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM issue WHERE workspace_id = $1`,
+		testWorkspaceID,
+	).Scan(&afterCount); err != nil {
+		t.Fatalf("count issues after webhook: %v", err)
+	}
+	if afterCount != beforeCount+2 {
+		t.Fatalf("issue count after webhook = %d, want %d", afterCount, beforeCount+2)
+	}
 }
 
 // uniqueIssueNumber yields a value unlikely to collide across parallel test

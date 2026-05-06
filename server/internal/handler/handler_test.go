@@ -1590,7 +1590,7 @@ func TestWebhookCreateIssueSubscribers(t *testing.T) {
 		Type: "standard",
 		Data: map[string]string{"title": "Sub test issue"},
 	}
-	issueUUID, err := testHandler.executeCreateIssueAction(ctx, wkRow, cfg, evt)
+	issueUUID, err := testHandler.executeCreateIssueAction(ctx, wkRow, cfg, evt, db.IssueLink{}, false)
 	if err != nil {
 		t.Fatalf("executeCreateIssueAction: %v", err)
 	}

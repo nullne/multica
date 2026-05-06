@@ -893,9 +893,15 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 			}
 		}
 
+		preexistingLink, hasPreexistingLink, linkErr := h.findIssueLinkForEvent(ctx, webhook.WorkspaceID, evt)
+		if linkErr != nil {
+			h.logWebhookEvent(ctx, webhook, evt.DedupKey, body, "error", pgtype.UUID{}, "lookup issue_link: "+linkErr.Error())
+			continue
+		}
+
 		processed := false
 		for _, action := range actions {
-			ranOK, issueID, runErr := h.runWebhookAction(ctx, webhook, action, evt)
+			ranOK, issueID, runErr := h.runWebhookAction(ctx, webhook, action, evt, preexistingLink, hasPreexistingLink)
 			if runErr != nil {
 				h.logWebhookEvent(ctx, webhook, evt.DedupKey, body, "error", pgtype.UUID{}, fmt.Sprintf("%s: %s", action.ActionType, runErr.Error()))
 				continue
@@ -919,7 +925,7 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 // (ran, issueID, error). ran=false means the action's filters did not match
 // (no error, just skipped). ran=true with a nil error means the action
 // produced a side effect; issueID points at the issue if applicable.
-func (h *Handler) runWebhookAction(ctx context.Context, webhook db.Webhook, action db.WebhookAction, evt wh.Event) (bool, pgtype.UUID, error) {
+func (h *Handler) runWebhookAction(ctx context.Context, webhook db.Webhook, action db.WebhookAction, evt wh.Event, preexistingLink db.IssueLink, hasPreexistingLink bool) (bool, pgtype.UUID, error) {
 	switch action.ActionType {
 	case "create_issue":
 		var cfg CreateIssueActionConfig
@@ -929,7 +935,7 @@ func (h *Handler) runWebhookAction(ctx context.Context, webhook db.Webhook, acti
 		if !actionMatchesFilters(cfg.EventTypes, cfg.Repos, evt) {
 			return false, pgtype.UUID{}, nil
 		}
-		issueID, err := h.executeCreateIssueAction(ctx, webhook, cfg, evt)
+		issueID, err := h.executeCreateIssueAction(ctx, webhook, cfg, evt, preexistingLink, hasPreexistingLink)
 		if err != nil {
 			return true, pgtype.UUID{}, err
 		}
@@ -957,9 +963,16 @@ func (h *Handler) runWebhookAction(ctx context.Context, webhook db.Webhook, acti
 	}
 }
 
-func (h *Handler) executeCreateIssueAction(ctx context.Context, webhook db.Webhook, cfg CreateIssueActionConfig, evt wh.Event) (pgtype.UUID, error) {
+func (h *Handler) executeCreateIssueAction(ctx context.Context, webhook db.Webhook, cfg CreateIssueActionConfig, evt wh.Event, preexistingLink db.IssueLink, hasPreexistingLink bool) (pgtype.UUID, error) {
 	if cfg.AgentID == "" {
 		return pgtype.UUID{}, fmt.Errorf("action config missing agent_id")
+	}
+
+	if hasPreexistingLink {
+		if err := h.persistEventSourceLinks(ctx, h.Queries, webhook, preexistingLink.IssueID, evt); err != nil {
+			return pgtype.UUID{}, err
+		}
+		return preexistingLink.IssueID, nil
 	}
 
 	title := renderTemplate(cfg.TitleTemplate, evt.Data)
@@ -1038,25 +1051,8 @@ func (h *Handler) executeCreateIssueAction(ctx context.Context, webhook db.Webho
 		}
 	}
 
-	// Persist the source link so subsequent events for the same external
-	// resource (PR / issue) can find this issue via comment_issue actions.
-	if sourceURL := evt.Data["source_url"]; sourceURL != "" {
-		kind := evt.Data["source_kind"]
-		if kind == "" {
-			kind = "issue"
-		}
-		_, linkErr := qtx.CreateIssueLink(ctx, db.CreateIssueLinkParams{
-			IssueID:     issue.ID,
-			WorkspaceID: webhook.WorkspaceID,
-			SourceType:  webhook.SourceType,
-			Kind:        kind,
-			Direction:   "source",
-			Url:         sourceURL,
-			ExternalID:  evt.Data["external_id"],
-		})
-		if linkErr != nil {
-			slog.Warn("create issue_link failed", "issue_id", uuidToString(issue.ID), "url", sourceURL, "error", linkErr)
-		}
+	if err := h.persistEventSourceLinks(ctx, qtx, webhook, issue.ID, evt); err != nil {
+		return pgtype.UUID{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1093,22 +1089,12 @@ func (h *Handler) executeCommentIssueAction(ctx context.Context, webhook db.Webh
 		return pgtype.UUID{}, false, fmt.Errorf("webhook has no bot_user_id")
 	}
 
-	sourceURL := evt.Data["source_url"]
-	if sourceURL == "" {
-		return pgtype.UUID{}, false, nil
-	}
-
-	link, err := h.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
-		WorkspaceID: webhook.WorkspaceID,
-		Url:         sourceURL,
-	})
+	link, ok, err := h.findIssueLinkForEvent(ctx, webhook.WorkspaceID, evt)
 	if err != nil {
-		// Not finding a matching link is normal — a Multica issue was never
-		// created for this PR. Treat as "no action".
-		if isNotFound(err) {
-			return pgtype.UUID{}, false, nil
-		}
-		return pgtype.UUID{}, false, fmt.Errorf("lookup issue_link: %w", err)
+		return pgtype.UUID{}, false, err
+	}
+	if !ok {
+		return pgtype.UUID{}, false, nil
 	}
 
 	issue, err := h.Queries.GetIssue(ctx, link.IssueID)
@@ -1176,6 +1162,97 @@ func (h *Handler) executeCommentIssueAction(ctx context.Context, webhook db.Webh
 	return issue.ID, true, nil
 }
 
+func (h *Handler) findIssueLinkForEvent(ctx context.Context, workspaceID pgtype.UUID, evt wh.Event) (db.IssueLink, bool, error) {
+	for _, sourceURL := range eventSourceURLs(evt) {
+		link, err := h.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+			WorkspaceID: workspaceID,
+			Url:         sourceURL,
+		})
+		if err == nil {
+			return link, true, nil
+		}
+		if isNotFound(err) {
+			continue
+		}
+		return db.IssueLink{}, false, fmt.Errorf("lookup issue_link: %w", err)
+	}
+	return db.IssueLink{}, false, nil
+}
+
+func (h *Handler) persistEventSourceLinks(ctx context.Context, queries *db.Queries, webhook db.Webhook, issueID pgtype.UUID, evt wh.Event) error {
+	for _, sourceURL := range eventSourceURLs(evt) {
+		if _, err := queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+			WorkspaceID: webhook.WorkspaceID,
+			Url:         sourceURL,
+		}); err == nil {
+			continue
+		} else if !isNotFound(err) {
+			return fmt.Errorf("lookup issue_link: %w", err)
+		}
+
+		_, linkErr := queries.CreateIssueLink(ctx, db.CreateIssueLinkParams{
+			IssueID:     issueID,
+			WorkspaceID: webhook.WorkspaceID,
+			SourceType:  webhook.SourceType,
+			Kind:        eventSourceKind(evt, sourceURL),
+			Direction:   "source",
+			Url:         sourceURL,
+			ExternalID:  eventExternalID(evt, sourceURL),
+		})
+		if linkErr != nil {
+			slog.Warn("create issue_link failed", "issue_id", uuidToString(issueID), "url", sourceURL, "error", linkErr)
+			return linkErr
+		}
+	}
+	return nil
+}
+
+func eventSourceURLs(evt wh.Event) []string {
+	seen := make(map[string]bool)
+	var urls []string
+	add := func(url string) {
+		url = strings.TrimSpace(url)
+		if url == "" || seen[url] {
+			return
+		}
+		seen[url] = true
+		urls = append(urls, url)
+	}
+
+	for _, sourceURL := range strings.Split(evt.Data["source_urls"], "\n") {
+		add(sourceURL)
+	}
+	add(evt.Data["source_url"])
+	return urls
+}
+
+func eventSourceKind(evt wh.Event, sourceURL string) string {
+	if sourceURL == evt.Data["source_url"] && evt.Data["source_kind"] != "" {
+		return evt.Data["source_kind"]
+	}
+	if strings.Contains(sourceURL, "/pull/") {
+		return "pr"
+	}
+	if strings.Contains(sourceURL, "/issues/") {
+		return "issue"
+	}
+	if evt.Data["source_kind"] != "" {
+		return evt.Data["source_kind"]
+	}
+	return "issue"
+}
+
+func eventExternalID(evt wh.Event, sourceURL string) string {
+	const githubPrefix = "https://github.com/"
+	if strings.HasPrefix(sourceURL, githubPrefix) {
+		parts := strings.Split(strings.TrimPrefix(sourceURL, githubPrefix), "/")
+		if len(parts) >= 4 && (parts[2] == "issues" || parts[2] == "pull") {
+			return parts[0] + "/" + parts[1] + "#" + parts[3]
+		}
+	}
+	return evt.Data["external_id"]
+}
+
 // commentForBroadcast builds the lightweight payload published over WS for
 // new comments. We avoid pulling reactions/attachments here since webhook
 // comments never have either at creation time.
@@ -1223,4 +1300,3 @@ func (h *Handler) logWebhookEvent(ctx context.Context, webhook db.Webhook, dedup
 		slog.Warn("failed to log webhook event", "webhook_id", uuidToString(webhook.ID), "error", err)
 	}
 }
-
