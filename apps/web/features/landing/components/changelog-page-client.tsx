@@ -3,8 +3,13 @@
 import { LandingHeader } from "./landing-header";
 import { LandingFooter } from "./landing-footer";
 import { useLocale } from "../i18n";
+import type { ChangelogEntry } from "@/lib/changelog";
 
-export function ChangelogPageClient() {
+type Props = {
+  entries: ChangelogEntry[];
+};
+
+export function ChangelogPageClient({ entries }: Props) {
   const { t } = useLocale();
 
   return (
@@ -20,7 +25,7 @@ export function ChangelogPageClient() {
           </p>
 
           <div className="mt-16 space-y-16">
-            {t.changelog.entries.map((release) => (
+            {entries.map((release) => (
               <div key={release.version} className="relative">
                 <div className="flex items-baseline gap-3">
                   <span className="text-[13px] font-semibold tabular-nums">

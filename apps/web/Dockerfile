@@ -11,6 +11,7 @@ COPY apps/web/package.json ./apps/web/
 RUN pnpm install --frozen-lockfile
 
 COPY apps/web/ ./apps/web/
+COPY CHANGELOG.md ./
 
 # NEXT_PUBLIC_* values are inlined into the client bundle at build time,
 # so Firebase web config must be passed as build args (not runtime env).
