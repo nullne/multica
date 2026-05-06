@@ -144,7 +144,15 @@ func (s *TaskService) EnqueueExecutorForApprovedCriteria(ctx context.Context, is
 // EnqueueTaskForMention creates a queued task for a mentioned agent on an issue.
 // Unlike EnqueueTaskForIssue, this takes an explicit agent ID rather than
 // deriving it from the issue assignee.
+// Mention dispatch intentionally ignores issue-level dispatch hints
+// (dispatch_provider, dispatch_daemon_id, dispatch_daemon_label) so that an
+// agent whose providers differ from the issue's pinned provider can still run.
+// Runtime selection uses only the mentioned agent's own providers and
+// default_daemon_id.
 func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID) (db.AgentTaskQueue, error) {
+	issue.DispatchProvider = pgtype.Text{}
+	issue.DispatchDaemonID = pgtype.UUID{}
+	issue.DispatchDaemonLabel = pgtype.Text{}
 	return s.enqueueTaskToAgent(ctx, issue, agentID, triggerCommentID, nil, "mention task enqueued")
 }
 
