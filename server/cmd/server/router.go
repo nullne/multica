@@ -305,6 +305,17 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				})
 			})
 
+			// Recurring issue templates
+			r.Route("/api/recurring-templates", func(r chi.Router) {
+				r.Get("/", h.ListRecurringTemplates)
+				r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/", h.CreateRecurringTemplate)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetRecurringTemplate)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Patch("/", h.UpdateRecurringTemplate)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Delete("/", h.DeleteRecurringTemplate)
+				})
+			})
+
 			// Inbox
 			r.Route("/api/inbox", func(r chi.Router) {
 				r.Get("/", h.ListInbox)
