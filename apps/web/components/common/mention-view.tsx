@@ -3,6 +3,8 @@
 import { NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
 import { useIssueStore } from "@/features/issues/store";
+import { useWorkspaceStore } from "@/features/workspace";
+import { issueUrl } from "@/features/issues/utils/url";
 import { StatusIcon } from "@/features/issues/components/status-icon";
 
 /**
@@ -41,17 +43,19 @@ function IssueMention({
   fallbackLabel?: string;
 }) {
   const issue = useIssueStore((s) => s.issues.find((i) => i.id === issueId));
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
+  const url = issueUrl(issueId, workspaceSlug);
 
   const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    window.open(`/issues/${issueId}`, "_blank", "noopener,noreferrer");
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   if (!issue) {
     return (
       <a
-        href={`/issues/${issueId}`}
+        href={url}
         onClick={handleClick}
         className="issue-mention text-primary font-medium cursor-pointer hover:underline"
       >
@@ -62,7 +66,7 @@ function IssueMention({
 
   return (
     <a
-      href={`/issues/${issueId}`}
+      href={url}
       onClick={handleClick}
       className="issue-mention inline-flex items-center align-middle gap-1.5 rounded-md border px-2 py-0.5 text-sm hover:bg-accent transition-colors cursor-pointer"
     >

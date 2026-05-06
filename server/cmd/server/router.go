@@ -172,6 +172,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 			r.Delete("/{id}", h.RevokePersonalAccessToken)
 		})
 
+		// Cross-workspace issue resolution (auth only, no workspace header needed)
+		r.Get("/api/issues/{id}/resolve", h.ResolveIssueWorkspace)
+
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))

@@ -226,6 +226,10 @@ export class ApiClient {
     return this.fetch(`/api/issues/${id}`);
   }
 
+  async resolveIssueWorkspace(id: string): Promise<{ workspace_slug: string }> {
+    return this.fetch(`/api/issues/${id}/resolve`);
+  }
+
   async createIssue(data: CreateIssueRequest): Promise<Issue> {
     const search = new URLSearchParams();
     if (this.workspaceId) search.set("workspace_id", this.workspaceId);

@@ -5,6 +5,8 @@ import Link from "next/link";
 import type { Issue } from "@/shared/types";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
+import { useWorkspaceStore } from "@/features/workspace";
+import { issueUrl } from "@/features/issues/utils/url";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
 import { AgentWorkingIndicator } from "./agent-working-indicator";
@@ -19,6 +21,7 @@ function formatDate(date: string): string {
 export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
   const selected = useIssueSelectionStore((s) => s.selectedIds.has(issue.id));
   const toggle = useIssueSelectionStore((s) => s.toggle);
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
 
   return (
     <div
@@ -41,7 +44,7 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
         />
       </div>
       <Link
-        href={`/issues/${issue.id}`}
+        href={issueUrl(issue.id, workspaceSlug)}
         className="flex flex-1 items-center gap-2 min-w-0"
       >
         <span className="hidden md:inline w-16 shrink-0 text-xs text-muted-foreground">

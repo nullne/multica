@@ -235,7 +235,7 @@ describe("WebhooksTab — event history", () => {
     await expandEventHistory();
     await waitFor(() => {
       const link = screen.getByRole("link", { name: /issue/i });
-      expect(link).toHaveAttribute("href", "/issues/issue-abc");
+      expect(link).toHaveAttribute("href", "/w/test/issues/issue-abc");
     });
   });
 
