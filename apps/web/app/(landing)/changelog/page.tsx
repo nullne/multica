@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { ChangelogPageClient } from "@/features/landing/components/changelog-page-client";
+import { parseChangelog } from "@/lib/changelog";
 
 export const metadata: Metadata = {
   title: "Changelog",
@@ -16,5 +17,6 @@ export const metadata: Metadata = {
 };
 
 export default function ChangelogPage() {
-  return <ChangelogPageClient />;
+  const entries = parseChangelog();
+  return <ChangelogPageClient entries={entries} />;
 }
