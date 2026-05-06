@@ -6,6 +6,7 @@ server/bin
 server/tmp
 e2e
 *.md
+!CHANGELOG.md
 !apps/web/README.md
 .env*
 !.env.example
