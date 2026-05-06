@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { ChevronRight, Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ChevronRight, Copy, Info, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -95,6 +95,15 @@ function DeleteCommentDialog({
 // Single comment row (used for both parent and replies within the same Card)
 // ---------------------------------------------------------------------------
 
+function SystemNoticeRow({ entry }: { entry: TimelineEntry }) {
+  return (
+    <div className="py-2.5 flex items-start gap-2 text-sm text-muted-foreground">
+      <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+      <ReadonlyEditor content={entry.content ?? ""} />
+    </div>
+  );
+}
+
 function CommentRow({
   issueId,
   entry,
@@ -119,6 +128,10 @@ function CommentRow({
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
   const isTemp = entry.id.startsWith("temp-");
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  if (entry.actor_type === "system") {
+    return <SystemNoticeRow entry={entry} />;
+  }
 
   const startEdit = () => {
     cancelledRef.current = false;
