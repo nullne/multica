@@ -32,10 +32,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { IssuePriority, RecurringTemplate, CreateRecurringTemplateRequest, UpdateRecurringTemplateRequest } from "@/shared/types";
+import { ActorAvatar } from "@/components/common/actor-avatar";
+import type {
+  IssueAssigneeType,
+  IssuePriority,
+  RecurringTemplate,
+  CreateRecurringTemplateRequest,
+  UpdateRecurringTemplateRequest,
+} from "@/shared/types";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
-import { useWorkspaceStore } from "@/features/workspace";
+import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { AssigneePicker } from "@/features/issues/components/pickers";
 import { useRecurringTemplateStore } from "../store";
 
 const PRIORITY_OPTIONS: { value: IssuePriority; label: string }[] = [
@@ -61,6 +69,8 @@ interface TemplateFormData {
   timezone: string;
   enabled: boolean;
   due_date_offset_hours: string;
+  assignee_type: IssueAssigneeType | null;
+  assignee_id: string | null;
 }
 
 const DEFAULT_FORM: TemplateFormData = {
@@ -71,6 +81,8 @@ const DEFAULT_FORM: TemplateFormData = {
   timezone: "UTC",
   enabled: true,
   due_date_offset_hours: "",
+  assignee_type: null,
+  assignee_id: null,
 };
 
 function templateToForm(t: RecurringTemplate): TemplateFormData {
@@ -82,6 +94,8 @@ function templateToForm(t: RecurringTemplate): TemplateFormData {
     timezone: t.timezone,
     enabled: t.enabled,
     due_date_offset_hours: t.due_date_offset_hours != null ? String(t.due_date_offset_hours) : "",
+    assignee_type: t.assignee_type ?? null,
+    assignee_id: t.assignee_id ?? null,
   };
 }
 
@@ -95,6 +109,50 @@ function formatNextRun(nextRunAt?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function AssigneeField({
+  assigneeType,
+  assigneeId,
+  onChange,
+}: {
+  assigneeType: IssueAssigneeType | null;
+  assigneeId: string | null;
+  onChange: (type: IssueAssigneeType | null, id: string | null) => void;
+}) {
+  const { getActorName } = useActorName();
+  const label =
+    assigneeType && assigneeId ? getActorName(assigneeType, assigneeId) : "Unassigned";
+
+  return (
+    <AssigneePicker
+      assigneeType={assigneeType}
+      assigneeId={assigneeId}
+      onUpdate={(updates) => {
+        const nextType = (updates.assignee_type ?? null) as IssueAssigneeType | null;
+        const nextId = (updates.assignee_id ?? null) as string | null;
+        onChange(nextType, nextId);
+      }}
+      align="start"
+      triggerRender={
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full justify-start font-normal"
+        />
+      }
+      trigger={
+        <>
+          {assigneeType && assigneeId ? (
+            <ActorAvatar actorType={assigneeType} actorId={assigneeId} size={18} />
+          ) : null}
+          <span className={assigneeType && assigneeId ? "" : "text-muted-foreground"}>
+            {label}
+          </span>
+        </>
+      }
+    />
+  );
 }
 
 function TemplateFormDialog({
@@ -159,19 +217,29 @@ function TemplateFormDialog({
             />
           </div>
 
-          {/* Priority */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium">Priority</label>
-            <Select value={form.priority} onValueChange={(v) => set({ priority: v as IssuePriority })}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PRIORITY_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          {/* Priority + Assignee */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Priority</label>
+              <Select value={form.priority} onValueChange={(v) => set({ priority: v as IssuePriority })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PRIORITY_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Assignee</label>
+              <AssigneeField
+                assigneeType={form.assignee_type}
+                assigneeId={form.assignee_id}
+                onChange={(type, id) => set({ assignee_type: type, assignee_id: id })}
+              />
+            </div>
           </div>
 
           {/* Schedule */}
@@ -249,13 +317,32 @@ function TemplateFormDialog({
   );
 }
 
+function buildPayload(form: TemplateFormData): CreateRecurringTemplateRequest {
+  const payload: CreateRecurringTemplateRequest = {
+    title: form.title.trim(),
+    description: form.description.trim() || undefined,
+    priority: form.priority,
+    schedule: form.schedule.trim(),
+    timezone: form.timezone.trim() || "UTC",
+    enabled: form.enabled,
+    assignee_type: form.assignee_type ?? undefined,
+    assignee_id: form.assignee_id ?? undefined,
+  };
+  if (form.due_date_offset_hours.trim()) {
+    payload.due_date_offset_hours = parseInt(form.due_date_offset_hours, 10);
+  }
+  return payload;
+}
+
 export function RecurringTemplateManager() {
   const templates = useRecurringTemplateStore((s) => s.templates);
   const loading = useRecurringTemplateStore((s) => s.loading);
   const fetch = useRecurringTemplateStore((s) => s.fetch);
 
   const user = useAuthStore((s) => s.user);
+  const workspaceId = useWorkspaceStore((s) => s.workspace?.id);
   const members = useWorkspaceStore((s) => s.members);
+  const { getActorName } = useActorName();
   const currentMember = members.find((m) => m.user_id === user?.id) ?? null;
   const canManage = currentMember?.role === "owner" || currentMember?.role === "admin";
 
@@ -264,24 +351,15 @@ export function RecurringTemplateManager() {
   const [deletingTemplate, setDeletingTemplate] = useState<RecurringTemplate | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
+  // Refetch when workspace changes so stale data from a previous workspace
+  // does not remain visible after switching.
   useEffect(() => {
-    fetch();
-  }, [fetch]);
+    if (workspaceId) fetch();
+  }, [workspaceId, fetch]);
 
   const handleCreate = async (form: TemplateFormData) => {
-    const data: CreateRecurringTemplateRequest = {
-      title: form.title.trim(),
-      description: form.description.trim() || undefined,
-      priority: form.priority,
-      schedule: form.schedule.trim(),
-      timezone: form.timezone.trim() || "UTC",
-      enabled: form.enabled,
-    };
-    if (form.due_date_offset_hours.trim()) {
-      data.due_date_offset_hours = parseInt(form.due_date_offset_hours, 10);
-    }
     try {
-      const template = await api.createRecurringTemplate(data);
+      const template = await api.createRecurringTemplate(buildPayload(form));
       useRecurringTemplateStore.getState().addTemplate(template);
       setShowCreate(false);
       toast.success("Template created");
@@ -293,19 +371,9 @@ export function RecurringTemplateManager() {
 
   const handleUpdate = async (form: TemplateFormData) => {
     if (!editingTemplate) return;
-    const data: UpdateRecurringTemplateRequest = {
-      title: form.title.trim(),
-      description: form.description.trim() || undefined,
-      priority: form.priority,
-      schedule: form.schedule.trim(),
-      timezone: form.timezone.trim() || "UTC",
-      enabled: form.enabled,
-    };
-    if (form.due_date_offset_hours.trim()) {
-      data.due_date_offset_hours = parseInt(form.due_date_offset_hours, 10);
-    }
+    const payload: UpdateRecurringTemplateRequest = buildPayload(form);
     try {
-      const updated = await api.updateRecurringTemplate(editingTemplate.id, data);
+      const updated = await api.updateRecurringTemplate(editingTemplate.id, payload);
       useRecurringTemplateStore.getState().updateTemplate(editingTemplate.id, updated);
       setEditingTemplate(null);
       toast.success("Template updated");
@@ -389,6 +457,12 @@ export function RecurringTemplateManager() {
                   <RefreshCw className="h-3 w-3" />
                   Next: {formatNextRun(t.next_run_at ?? undefined)}
                 </span>
+                {t.assignee_type && t.assignee_id && (
+                  <span className="flex items-center gap-1">
+                    <ActorAvatar actorType={t.assignee_type} actorId={t.assignee_id} size={14} />
+                    <span>{getActorName(t.assignee_type, t.assignee_id)}</span>
+                  </span>
+                )}
                 {t.priority !== "medium" && (
                   <span className="capitalize">{t.priority}</span>
                 )}

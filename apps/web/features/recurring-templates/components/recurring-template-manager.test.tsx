@@ -21,7 +21,35 @@ vi.mock("@/features/workspace", () => ({
     (selector: (s: any) => any) => selector(workspaceState),
     { getState: () => workspaceState },
   ),
-  useActorName: () => ({}),
+  useActorName: () => ({
+    getMemberName: (id: string) => (id === "user-1" ? "Test User" : "Unknown"),
+    getAgentName: () => "Unknown Agent",
+    getActorName: (type: string, id: string) => {
+      if (type === "member" && id === "user-1") return "Test User";
+      return "Unknown";
+    },
+    getActorInitials: () => "TU",
+  }),
+}));
+
+// Mock the assignee picker so it doesn't pull in heavy issue UI for tests.
+vi.mock("@/features/issues/components/pickers", () => ({
+  AssigneePicker: ({ trigger, onUpdate }: any) => (
+    <div>
+      <div data-testid="assignee-trigger">{trigger}</div>
+      <button
+        type="button"
+        data-testid="select-member"
+        onClick={() => onUpdate({ assignee_type: "member", assignee_id: "user-1" })}
+      >
+        Select Test User
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock("@/components/common/actor-avatar", () => ({
+  ActorAvatar: ({ actorId }: any) => <span data-testid={`avatar-${actorId}`} />,
 }));
 
 const mockTemplate: RecurringTemplate = {
@@ -59,6 +87,7 @@ vi.mock("@/features/recurring-templates/store", async () => {
     fetch: vi.fn().mockImplementation(async () => {
       store.setState({ templates: [mockTemplate], loading: false });
     }),
+    setTemplates: (t: any) => store.setState({ templates: t }),
     addTemplate: (t: any) => store.setState((s: any) => ({ templates: [...s.templates, t] })),
     updateTemplate: (id: string, u: any) =>
       store.setState((s: any) => ({
@@ -86,11 +115,12 @@ describe("RecurringTemplateManager", () => {
     expect(screen.getByRole("button", { name: /new template/i })).toBeInTheDocument();
   });
 
-  it("shows existing templates", async () => {
+  it("shows existing templates with schedule and next run", async () => {
     render(<RecurringTemplateManager />);
     await waitFor(() => {
       expect(screen.getByText("Weekly Review")).toBeInTheDocument();
       expect(screen.getByText("0 9 * * 1")).toBeInTheDocument();
+      expect(screen.getByText(/Next:/)).toBeInTheDocument();
     });
   });
 
@@ -102,8 +132,15 @@ describe("RecurringTemplateManager", () => {
     expect(screen.getByPlaceholderText("Weekly standup issue")).toBeInTheDocument();
   });
 
-  it("calls createRecurringTemplate on submit", async () => {
-    const newTemplate = { ...mockTemplate, id: "tpl-2", title: "Daily Standup", schedule: "0 9 * * *" };
+  it("includes assignee in createRecurringTemplate payload", async () => {
+    const newTemplate = {
+      ...mockTemplate,
+      id: "tpl-2",
+      title: "Daily Standup",
+      schedule: "0 9 * * *",
+      assignee_type: "member" as const,
+      assignee_id: "user-1",
+    };
     mockApi.createRecurringTemplate.mockResolvedValueOnce(newTemplate);
 
     const user = userEvent.setup();
@@ -112,11 +149,17 @@ describe("RecurringTemplateManager", () => {
     await user.click(screen.getByRole("button", { name: /new template/i }));
     await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Daily Standup");
     await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+    await user.click(screen.getByTestId("select-member"));
     await user.click(screen.getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => {
       expect(mockApi.createRecurringTemplate).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Daily Standup", schedule: "0 9 * * *" }),
+        expect.objectContaining({
+          title: "Daily Standup",
+          schedule: "0 9 * * *",
+          assignee_type: "member",
+          assignee_id: "user-1",
+        }),
       );
     });
   });
@@ -128,15 +171,9 @@ describe("RecurringTemplateManager", () => {
 
     await waitFor(() => expect(screen.getByText("Weekly Review")).toBeInTheDocument());
 
-    const deleteBtn = screen.getByRole("button", { name: "" });
-    // Hover to reveal delete button, then click it
-    fireEvent.mouseEnter(screen.getByText("Weekly Review").closest(".group")!);
-    const deleteBtns = screen.getAllByRole("button");
-    const trashBtn = deleteBtns.find((b) => b.querySelector("svg"));
-    // Find the delete button specifically by clicking the trash icon area
     const row = screen.getByText("Weekly Review").closest(".group")!;
     const buttons = row.querySelectorAll("button");
-    // Last button is delete
+    // Last hover-action button is delete.
     await act(async () => {
       fireEvent.click(buttons[buttons.length - 1]);
     });

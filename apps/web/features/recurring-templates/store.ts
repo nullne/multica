@@ -12,6 +12,7 @@ interface RecurringTemplateState {
   templates: RecurringTemplate[];
   loading: boolean;
   fetch: () => Promise<void>;
+  setTemplates: (templates: RecurringTemplate[]) => void;
   addTemplate: (template: RecurringTemplate) => void;
   updateTemplate: (id: string, updates: Partial<RecurringTemplate>) => void;
   removeTemplate: (id: string) => void;
@@ -34,6 +35,8 @@ export const useRecurringTemplateStore = create<RecurringTemplateState>((set, ge
       if (isInitialLoad) set({ loading: false });
     }
   },
+
+  setTemplates: (templates) => set({ templates }),
 
   addTemplate: (template) =>
     set((s) => ({

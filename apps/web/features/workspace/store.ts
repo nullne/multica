@@ -5,6 +5,7 @@ import type { Workspace, MemberWithUser, Agent, Skill } from "@/shared/types";
 import { useIssueStore } from "@/features/issues";
 import { useInboxStore } from "@/features/inbox";
 import { useLabelStore } from "@/features/labels";
+import { useRecurringTemplateStore } from "@/features/recurring-templates";
 import { useRuntimeStore } from "@/features/runtimes";
 import { toast } from "sonner";
 import { api } from "@/shared/api";
@@ -124,6 +125,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     useIssueStore.getState().setIssues([]);
     useInboxStore.getState().setItems([]);
     useLabelStore.getState().setLabels([]);
+    useRecurringTemplateStore.getState().setTemplates([]);
     useRuntimeStore.getState().setRuntimes([]);
     set({ workspace: ws, members: [], agents: [], skills: [] });
 

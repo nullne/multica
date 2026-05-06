@@ -27,8 +27,8 @@ export interface CreateRecurringTemplateRequest {
   title: string;
   description?: string;
   priority?: IssuePriority;
-  assignee_type?: IssueAssigneeType;
-  assignee_id?: string;
+  assignee_type?: IssueAssigneeType | null;
+  assignee_id?: string | null;
   due_date_offset_hours?: number;
   schedule: string;
   timezone?: string;
@@ -39,8 +39,8 @@ export interface UpdateRecurringTemplateRequest {
   title?: string;
   description?: string;
   priority?: IssuePriority;
-  assignee_type?: IssueAssigneeType;
-  assignee_id?: string;
+  assignee_type?: IssueAssigneeType | null;
+  assignee_id?: string | null;
   due_date_offset_hours?: number;
   schedule?: string;
   timezone?: string;
