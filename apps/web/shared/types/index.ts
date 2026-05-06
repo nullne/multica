@@ -37,6 +37,7 @@ export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
 export type { NotificationChannel, NotificationChannelType, UpsertTelegramChannelRequest } from "./notification_channel";
+export type { WorkspaceTelegramSettings, UpsertWorkspaceTelegramRequest } from "./workspace_telegram";
 export type {
   Webhook,
   WebhookAction,

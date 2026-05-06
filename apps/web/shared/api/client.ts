@@ -6,6 +6,8 @@ import type {
   UpdateMeRequest,
   NotificationChannel,
   UpsertTelegramChannelRequest,
+  WorkspaceTelegramSettings,
+  UpsertWorkspaceTelegramRequest,
   CreateMemberRequest,
   UpdateMemberRequest,
   ListIssuesParams,
@@ -207,6 +209,23 @@ export class ApiClient {
 
   async deleteTelegramChannel(): Promise<void> {
     await this.fetch("/api/me/notification-channels/telegram", { method: "DELETE" });
+  }
+
+  // Workspace Telegram group notifications
+  async getWorkspaceTelegramNotifications(workspaceId: string): Promise<WorkspaceTelegramSettings> {
+    return this.fetch(`/api/workspaces/${workspaceId}/telegram-notifications`);
+  }
+
+  async upsertWorkspaceTelegramNotifications(workspaceId: string, data: UpsertWorkspaceTelegramRequest): Promise<WorkspaceTelegramSettings> {
+    return this.fetch(`/api/workspaces/${workspaceId}/telegram-notifications`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteWorkspaceTelegramNotifications(workspaceId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/telegram-notifications`, { method: "DELETE" });
   }
 
   // Issues

@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Save, LogOut } from "lucide-react";
+import { Save, LogOut, Send, Trash2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -21,6 +22,7 @@ import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
+import type { WorkspaceTelegramSettings } from "@/shared/types";
 
 export function WorkspaceTab() {
   const user = useAuthStore((s) => s.user);
@@ -35,6 +37,11 @@ export function WorkspaceTab() {
   const [context, setContext] = useState(workspace?.context ?? "");
   const [saving, setSaving] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
+
+  const [telegramGroup, setTelegramGroup] = useState<WorkspaceTelegramSettings | null>(null);
+  const [telegramChatId, setTelegramChatId] = useState("");
+  const [telegramSaving, setTelegramSaving] = useState(false);
+  const [telegramLoading, setTelegramLoading] = useState(true);
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
     description: string;
@@ -51,6 +58,60 @@ export function WorkspaceTab() {
     setDescription(workspace?.description ?? "");
     setContext(workspace?.context ?? "");
   }, [workspace]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    api.getWorkspaceTelegramNotifications(workspace.id).then((s) => {
+      setTelegramGroup(s);
+      if (s.configured && s.chat_id) setTelegramChatId(s.chat_id);
+    }).catch(() => {
+      // silently ignore
+    }).finally(() => setTelegramLoading(false));
+  }, [workspace?.id]);
+
+  const handleTelegramGroupSave = async () => {
+    if (!workspace) return;
+    const chatId = telegramChatId.trim();
+    if (!chatId) return;
+    setTelegramSaving(true);
+    try {
+      const updated = await api.upsertWorkspaceTelegramNotifications(workspace.id, {
+        chat_id: chatId,
+        enabled: telegramGroup?.enabled ?? true,
+      });
+      setTelegramGroup(updated);
+      toast.success("Telegram group saved");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save Telegram group");
+    } finally {
+      setTelegramSaving(false);
+    }
+  };
+
+  const handleTelegramGroupToggle = async (enabled: boolean) => {
+    if (!workspace || !telegramGroup?.configured || !telegramGroup.chat_id) return;
+    try {
+      const updated = await api.upsertWorkspaceTelegramNotifications(workspace.id, {
+        chat_id: telegramGroup.chat_id,
+        enabled,
+      });
+      setTelegramGroup(updated);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update Telegram group");
+    }
+  };
+
+  const handleTelegramGroupDelete = async () => {
+    if (!workspace) return;
+    try {
+      await api.deleteWorkspaceTelegramNotifications(workspace.id);
+      setTelegramGroup({ configured: false });
+      setTelegramChatId("");
+      toast.success("Telegram group removed");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove Telegram group");
+    }
+  };
 
   const handleSave = async () => {
     if (!workspace) return;
@@ -170,6 +231,84 @@ export function WorkspaceTab() {
               <p className="text-xs text-muted-foreground">
                 Only admins and owners can update workspace settings.
               </p>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* Telegram Group Notifications */}
+      <section className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Send className="h-4 w-4 text-muted-foreground" />
+          <h2 className="text-sm font-semibold">Telegram Group Notifications</h2>
+        </div>
+
+        <Card>
+          <CardContent className="space-y-3">
+            {telegramLoading ? (
+              <p className="text-xs text-muted-foreground">Loading…</p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Send workspace activity (new issues, comments, status changes, task results) to a Telegram group chat.
+                  Add the bot to your group and enter the group chat ID below.
+                </p>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Group Chat ID</Label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <Input
+                      type="text"
+                      value={telegramChatId}
+                      onChange={(e) => setTelegramChatId(e.target.value)}
+                      placeholder="-1001234567890"
+                      disabled={!canManageWorkspace}
+                      className="flex-1"
+                    />
+                    {telegramGroup?.configured && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={handleTelegramGroupDelete}
+                        disabled={!canManageWorkspace}
+                        title="Remove Telegram group"
+                      >
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {telegramGroup?.configured && (
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      checked={telegramGroup.enabled ?? true}
+                      onCheckedChange={handleTelegramGroupToggle}
+                      disabled={!canManageWorkspace}
+                      id="telegram-group-enabled"
+                    />
+                    <Label htmlFor="telegram-group-enabled" className="text-xs text-muted-foreground cursor-pointer">
+                      Notifications enabled
+                    </Label>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    onClick={handleTelegramGroupSave}
+                    disabled={telegramSaving || !telegramChatId.trim() || !canManageWorkspace}
+                  >
+                    <Save className="h-3 w-3" />
+                    {telegramSaving ? "Saving…" : "Save"}
+                  </Button>
+                </div>
+
+                {!canManageWorkspace && (
+                  <p className="text-xs text-muted-foreground">
+                    Only admins and owners can configure workspace notifications.
+                  </p>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

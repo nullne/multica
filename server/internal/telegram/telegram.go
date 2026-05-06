@@ -12,7 +12,8 @@ import (
 
 // Bot wraps the Telegram Bot API.
 type Bot struct {
-	token string
+	token   string
+	baseURL string // defaults to "https://api.telegram.org"
 }
 
 // NewBotFromEnv reads TELEGRAM_BOT_TOKEN from the environment.
@@ -23,6 +24,11 @@ func NewBotFromEnv() *Bot {
 		return nil
 	}
 	return &Bot{token: token}
+}
+
+// NewBotWithURL creates a Bot with a custom base URL, useful for testing.
+func NewBotWithURL(token, baseURL string) *Bot {
+	return &Bot{token: token, baseURL: strings.TrimRight(baseURL, "/")}
 }
 
 // SendMessage delivers a plain-text message to the given chat_id.
@@ -40,7 +46,11 @@ func (b *Bot) SendMessage(chatID, text string) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.token)
+	base := b.baseURL
+	if base == "" {
+		base = "https://api.telegram.org"
+	}
+	url := fmt.Sprintf("%s/bot%s/sendMessage", base, b.token)
 	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
