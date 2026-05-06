@@ -22,22 +22,21 @@ export function parseChangelog(): ChangelogEntry[] {
   const sections = content.split(/^(?=## \[)/m).filter((s) => s.trim());
 
   for (const section of sections) {
-    const lines = section.split("\n");
-    const headerLine = lines[0]?.trim() ?? "";
+    const [headerLine, ...bodyLines] = section.split("\n");
 
     // Match: ## [0.1.4] - 2026-04-01
-    const headerMatch = headerLine.match(
+    const headerMatch = (headerLine ?? "").match(
       /^## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})/,
     );
     if (!headerMatch) continue;
 
-    const version = headerMatch[1];
-    const date = headerMatch[2];
+    const version = headerMatch[1] ?? "";
+    const date = headerMatch[2] ?? "";
     let title = "";
     const changes: string[] = [];
 
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
+    for (const raw of bodyLines) {
+      const line = raw.trim();
       if (line.startsWith("### ")) {
         title = line.slice(4).trim();
       } else if (line.startsWith("- ")) {
