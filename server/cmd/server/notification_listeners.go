@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/events"
@@ -59,6 +60,54 @@ func priorityLabel(p string) string {
 }
 
 var emptyDetails = []byte("{}")
+
+// resolveActorName returns a display name for the given actor type+ID.
+// Returns an empty string when the lookup fails or the type is unrecognised.
+func resolveActorName(ctx context.Context, queries *db.Queries, actorType, actorID string) string {
+	if actorID == "" {
+		return ""
+	}
+	switch actorType {
+	case "member":
+		if u, err := queries.GetUser(ctx, parseUUID(actorID)); err == nil {
+			return u.Name
+		}
+	case "agent":
+		if a, err := queries.GetAgent(ctx, parseUUID(actorID)); err == nil {
+			return a.Name
+		}
+	}
+	return ""
+}
+
+// formatDueDate converts an RFC3339 timestamp string to a short YYYY-MM-DD
+// label. Returns "None" for an empty string (cleared date).
+func formatDueDate(s string) string {
+	if s == "" {
+		return "None"
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s
+	}
+	return t.Format("2006-01-02")
+}
+
+// buildAssigneeBody returns a human-readable "prev → new" string for assignee
+// change Telegram bodies. Either side may be empty when there was no previous
+// or no new assignee.
+func buildAssigneeBody(prevName, newName string) string {
+	switch {
+	case prevName != "" && newName != "":
+		return prevName + " → " + newName
+	case prevName != "":
+		return prevName + " → unassigned"
+	case newName != "":
+		return "→ " + newName
+	default:
+		return ""
+	}
+}
 
 // parseMentions extracts mentions from markdown content.
 // Delegates to the shared util.ParseMentions and converts to the local type.
@@ -209,9 +258,11 @@ func notifyDirect(
 // notifyMentionedMembers creates inbox items for each @mentioned member,
 // excluding the actor and any IDs in the skip set. When an @all mention is
 // present, all workspace members are notified (excluding agents).
+// When bot is non-nil, it also delivers the notification via Telegram using body as the message body.
 func notifyMentionedMembers(
 	bus *events.Bus,
 	queries *db.Queries,
+	bot *telegram.Bot,
 	e events.Event,
 	mentions []mention,
 	issueID string,
@@ -220,6 +271,7 @@ func notifyMentionedMembers(
 	title string,
 	skip map[string]bool,
 	details []byte,
+	body string,
 ) {
 	// Collect the set of member IDs to notify.
 	recipientIDs := map[string]bool{}
@@ -247,6 +299,7 @@ func notifyMentionedMembers(
 		}
 	}
 
+	var telegramRecipients []pgtype.UUID
 	for id := range recipientIDs {
 		if id == e.ActorID || skip[id] {
 			continue
@@ -276,7 +329,10 @@ func notifyMentionedMembers(
 			ActorID:     e.ActorID,
 			Payload:     map[string]any{"item": resp},
 		})
+		telegramRecipients = append(telegramRecipients, parseUUID(id))
 	}
+	sendTelegramToSubscribers(context.Background(), queries, bot, telegramRecipients,
+		telegramMessage("mentioned", issueTitle, issuePageURL(issueID), body))
 }
 
 // sendTelegramToSubscribers looks up enabled Telegram channels for the given
@@ -381,8 +437,8 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 		// Notify @mentions in description
 		if issue.Description != nil && *issue.Description != "" {
 			mentions := parseMentions(*issue.Description)
-			notifyMentionedMembers(bus, queries, e, mentions, issue.ID, issue.Title, issue.Status,
-				issue.Title, skip, emptyDetails)
+			notifyMentionedMembers(bus, queries, bot, e, mentions, issue.ID, issue.Title, issue.Status,
+				issue.Title, skip, emptyDetails, *issue.Description)
 		}
 	})
 
@@ -420,6 +476,17 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			}
 			assigneeDetails, _ := json.Marshal(detailsMap)
 
+			// Resolve display names for the Telegram subscriber notification.
+			prevName := ""
+			if prevAssigneeType != nil && prevAssigneeID != nil {
+				prevName = resolveActorName(ctx, queries, *prevAssigneeType, *prevAssigneeID)
+			}
+			newName := ""
+			if issue.AssigneeType != nil && issue.AssigneeID != nil {
+				newName = resolveActorName(ctx, queries, *issue.AssigneeType, *issue.AssigneeID)
+			}
+			assigneeBody := buildAssigneeBody(prevName, newName)
+
 			// Direct: notify new assignee about assignment
 			if issue.AssigneeType != nil && issue.AssigneeID != nil {
 				notifyDirect(ctx, queries, bus,
@@ -430,6 +497,11 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 					"",
 					assigneeDetails,
 				)
+				if *issue.AssigneeType == "member" {
+					sendTelegramToSubscribers(ctx, queries, bot,
+						[]pgtype.UUID{parseUUID(*issue.AssigneeID)},
+						telegramMessage("issue_assigned", issue.Title, issuePageURL(issue.ID), ""))
+				}
 			}
 
 			// Direct: notify old assignee about unassignment
@@ -442,6 +514,9 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 					"",
 					assigneeDetails,
 				)
+				sendTelegramToSubscribers(ctx, queries, bot,
+					[]pgtype.UUID{parseUUID(*prevAssigneeID)},
+					telegramMessage("unassigned", issue.Title, issuePageURL(issue.ID), ""))
 			}
 
 			// Subscriber: notify remaining subscribers about assignee change,
@@ -455,7 +530,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			}
 			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				exclude, "assignee_changed", "info",
-				issue.Title, "",
+				issue.Title, assigneeBody,
 				assigneeDetails)
 		}
 
@@ -465,9 +540,10 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 				"from": prevStatus,
 				"to":   issue.Status,
 			})
+			statusBody := statusLabel(prevStatus) + " → " + statusLabel(issue.Status)
 			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				nil, "status_changed", "info",
-				issue.Title, "",
+				issue.Title, statusBody,
 				statusDetails)
 		}
 
@@ -477,9 +553,10 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 				"from": prevPriority,
 				"to":   issue.Priority,
 			})
+			priorityBody := priorityLabel(prevPriority) + " → " + priorityLabel(issue.Priority)
 			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				nil, "priority_changed", "info",
-				issue.Title, "",
+				issue.Title, priorityBody,
 				priorityDetails)
 		}
 
@@ -496,9 +573,10 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 				"from": prevDueDateStr,
 				"to":   newDueDateStr,
 			})
+			dueDateBody := formatDueDate(prevDueDateStr) + " → " + formatDueDate(newDueDateStr)
 			notifySubscribers(ctx, queries, bus, bot, issue.ID, issue.Status, e.WorkspaceID, e,
 				nil, "due_date_changed", "info",
-				issue.Title, "",
+				issue.Title, dueDateBody,
 				dueDateDetails)
 		}
 
@@ -519,8 +597,8 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 					}
 				}
 				skip := map[string]bool{e.ActorID: true}
-				notifyMentionedMembers(bus, queries, e, added, issue.ID, issue.Title, issue.Status,
-					issue.Title, skip, emptyDetails)
+				notifyMentionedMembers(bus, queries, bot, e, added, issue.ID, issue.Title, issue.Status,
+					issue.Title, skip, emptyDetails, *issue.Description)
 			}
 		}
 	})
@@ -568,8 +646,8 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 		mentions := parseMentions(commentContent)
 		if len(mentions) > 0 {
 			skip := map[string]bool{e.ActorID: true}
-			notifyMentionedMembers(bus, queries, e, mentions, issueID, issueTitle, issueStatus,
-				issueTitle, skip, commentDetails)
+			notifyMentionedMembers(bus, queries, bot, e, mentions, issueID, issueTitle, issueStatus,
+				issueTitle, skip, commentDetails, commentContent)
 		}
 	})
 
@@ -606,6 +684,11 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			issueTitle, "",
 			details,
 		)
+		if creatorType == "member" {
+			sendTelegramToSubscribers(ctx, queries, bot,
+				[]pgtype.UUID{parseUUID(creatorID)},
+				telegramMessage("reaction_added", issueTitle, issuePageURL(issueID), reaction.Emoji))
+		}
 	})
 
 	// reaction:added — notify the comment author
@@ -646,6 +729,11 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			issueTitle, "",
 			details,
 		)
+		if commentAuthorType == "member" {
+			sendTelegramToSubscribers(ctx, queries, bot,
+				[]pgtype.UUID{parseUUID(commentAuthorID)},
+				telegramMessage("reaction_added", issueTitle, issuePageURL(issueID), reaction.Emoji))
+		}
 	})
 
 	// task:completed — no inbox notification (completion is visible from status change)
@@ -673,6 +761,13 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			exclude[agentID] = true
 		}
 
+		taskFailedBody := ""
+		if agentID != "" {
+			if agentName := resolveActorName(ctx, queries, "agent", agentID); agentName != "" {
+				taskFailedBody = "Agent: " + agentName
+			}
+		}
+
 		notifySubscribers(ctx, queries, bus, bot, issueID, issue.Status, e.WorkspaceID,
 			events.Event{
 				Type:        e.Type,
@@ -681,7 +776,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 				ActorID:     agentID,
 			},
 			exclude, "task_failed", "action_required",
-			issue.Title, "",
+			issue.Title, taskFailedBody,
 			emptyDetails)
 	})
 }
