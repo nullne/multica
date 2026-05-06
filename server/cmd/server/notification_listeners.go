@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/events"
@@ -148,7 +150,7 @@ func notifySubscribers(
 		telegramRecipients = append(telegramRecipients, sub.UserID)
 	}
 
-	sendTelegramToSubscribers(ctx, queries, bot, telegramRecipients, telegramMessage(notifType, title, body))
+	sendTelegramToSubscribers(ctx, queries, bot, telegramRecipients, telegramMessage(notifType, title, issuePageURL(issueID), body))
 }
 
 // notifyDirect creates an inbox item for a specific recipient. Skips if the
@@ -294,8 +296,18 @@ func sendTelegramToSubscribers(ctx context.Context, queries *db.Queries, bot *te
 	}
 }
 
+// issuePageURL constructs the frontend URL for an issue detail page.
+func issuePageURL(issueID string) string {
+	origin := strings.TrimRight(strings.TrimSpace(os.Getenv("FRONTEND_ORIGIN")), "/")
+	if origin == "" {
+		origin = "http://localhost:3000"
+	}
+	return origin + "/issues/" + issueID
+}
+
 // telegramMessage builds a concise notification message for Telegram delivery.
-func telegramMessage(notifType, issueTitle, body string) string {
+// Layout: clickable issue title, then notification type, then body if present.
+func telegramMessage(notifType, issueTitle, issueURL, body string) string {
 	label := notifType
 	switch notifType {
 	case "new_comment":
@@ -319,10 +331,11 @@ func telegramMessage(notifType, issueTitle, body string) string {
 	case "reaction_added":
 		label = "Reaction added"
 	}
+	titleLink := fmt.Sprintf("<a href=\"%s\">%s</a>", issueURL, issueTitle)
 	if body != "" {
-		return fmt.Sprintf("<b>%s</b>\n%s\n\n%s", label, issueTitle, body)
+		return fmt.Sprintf("%s\n<b>%s</b>\n\n%s", titleLink, label, body)
 	}
-	return fmt.Sprintf("<b>%s</b>\n%s", label, issueTitle)
+	return fmt.Sprintf("%s\n<b>%s</b>", titleLink, label)
 }
 
 // registerNotificationListeners wires up event bus listeners that create inbox
@@ -362,7 +375,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			)
 			sendTelegramToSubscribers(ctx, queries, bot,
 				[]pgtype.UUID{parseUUID(*issue.AssigneeID)},
-				telegramMessage("issue_assigned", issue.Title, ""))
+				telegramMessage("issue_assigned", issue.Title, issuePageURL(issue.ID), ""))
 		}
 
 		// Notify @mentions in description
