@@ -23,7 +23,7 @@ export function parseChangelog(): ChangelogEntry[] {
 
   for (const section of sections) {
     const lines = section.split("\n");
-    const headerLine = lines[0].trim();
+    const headerLine = lines[0]?.trim() ?? "";
 
     // Match: ## [0.1.4] - 2026-04-01
     const headerMatch = headerLine.match(
