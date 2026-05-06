@@ -115,6 +115,11 @@ function makeWebhookWithActions(overrides: Partial<WebhookWithActions["webhook"]
 
 import { WebhooksTab } from "./webhooks-tab";
 
+async function expandEventHistory() {
+  const btn = await screen.findByRole("button", { name: /event history/i });
+  fireEvent.click(btn);
+}
+
 describe("WebhooksTab — event history", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -126,25 +131,36 @@ describe("WebhooksTab — event history", () => {
     mockListWebhookEvents.mockResolvedValue([]);
   });
 
-  it("shows 'No webhook events recorded yet' when there are no events", async () => {
+  it("does not load workspace events on mount — Event History is collapsed by default", async () => {
     render(<WebhooksTab />);
+    // Wait for the initial load to complete
+    await waitFor(() => {
+      expect(mockListWebhooks).toHaveBeenCalled();
+    });
+    expect(mockListWorkspaceWebhookEvents).not.toHaveBeenCalled();
+  });
+
+  it("shows 'No webhook events recorded yet' when there are no events after expanding", async () => {
+    render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       expect(screen.getByText("No webhook events recorded yet.")).toBeInTheDocument();
     });
   });
 
-  it("renders a processed event in the global events section", async () => {
+  it("renders a processed event in the global events section after expanding", async () => {
     const event = makeEvent({ status: "processed", payload: { title: "Deploy succeeded" } });
     mockListWorkspaceWebhookEvents.mockResolvedValue([event]);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       expect(screen.getByText("processed")).toBeInTheDocument();
       expect(screen.getByText("Deploy succeeded")).toBeInTheDocument();
     });
   });
 
-  it("renders an error event with error message in the global events section", async () => {
+  it("renders an error event with error message in the global events section after expanding", async () => {
     const event = makeEvent({
       status: "error",
       error_message: "action config missing agent_id",
@@ -152,33 +168,36 @@ describe("WebhooksTab — event history", () => {
     mockListWorkspaceWebhookEvents.mockResolvedValue([event]);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       expect(screen.getByText("error")).toBeInTheDocument();
       expect(screen.getByText("action config missing agent_id")).toBeInTheDocument();
     });
   });
 
-  it("renders a filtered event badge", async () => {
+  it("renders a filtered event badge after expanding", async () => {
     const event = makeEvent({ status: "filtered" });
     mockListWorkspaceWebhookEvents.mockResolvedValue([event]);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       expect(screen.getByText("filtered")).toBeInTheDocument();
     });
   });
 
-  it("renders a deduped event badge", async () => {
+  it("renders a deduped event badge after expanding", async () => {
     const event = makeEvent({ status: "deduped", dedup_key: "alert-123" });
     mockListWorkspaceWebhookEvents.mockResolvedValue([event]);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       expect(screen.getByText("deduped")).toBeInTheDocument();
     });
   });
 
-  it("shows unprocessed count badge when there are problem events", async () => {
+  it("shows unprocessed count badge when there are problem events after expanding", async () => {
     const events = [
       makeEvent({ id: "e1", status: "error" }),
       makeEvent({ id: "e2", status: "filtered" }),
@@ -187,18 +206,20 @@ describe("WebhooksTab — event history", () => {
     mockListWorkspaceWebhookEvents.mockResolvedValue(events);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       expect(screen.getByText("2 unprocessed")).toBeInTheDocument();
     });
   });
 
-  it("shows webhook name in the global events section", async () => {
+  it("shows webhook name in the global events section after expanding", async () => {
     const wh = makeWebhookWithActions();
     const event = makeEvent({ webhook_id: "wh-1" });
     mockListWebhooks.mockResolvedValue([wh]);
     mockListWorkspaceWebhookEvents.mockResolvedValue([event]);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       // Name appears in both the webhook card header and the global events row
       const names = screen.getAllByText("My Webhook");
@@ -206,22 +227,24 @@ describe("WebhooksTab — event history", () => {
     });
   });
 
-  it("renders issue link when issue_id is present", async () => {
+  it("renders issue link when issue_id is present after expanding", async () => {
     const event = makeEvent({ status: "processed", issue_id: "issue-abc" });
     mockListWorkspaceWebhookEvents.mockResolvedValue([event]);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       const link = screen.getByRole("link", { name: /issue/i });
       expect(link).toHaveAttribute("href", "/issues/issue-abc");
     });
   });
 
-  it("shows dedup_key in event row when present", async () => {
+  it("shows dedup_key in event row when present after expanding", async () => {
     const event = makeEvent({ dedup_key: "key-xyz" });
     mockListWorkspaceWebhookEvents.mockResolvedValue([event]);
 
     render(<WebhooksTab />);
+    await expandEventHistory();
     await waitFor(() => {
       expect(screen.getByTitle("key-xyz")).toBeInTheDocument();
     });

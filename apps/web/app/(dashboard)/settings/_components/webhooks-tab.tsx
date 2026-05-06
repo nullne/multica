@@ -128,7 +128,6 @@ export function WebhooksTab() {
   const [bots, setBots] = useState<BotUser[]>([]);
   const [daemons, setDaemons] = useState<Daemon[]>([]);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
-  const [globalEvents, setGlobalEvents] = useState<WebhookEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<WebhookWithActions | null>(null);
@@ -143,18 +142,16 @@ export function WebhooksTab() {
   const reload = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const [webhookList, daemonList, botList, adapterList, eventList] = await Promise.all([
+      const [webhookList, daemonList, botList, adapterList] = await Promise.all([
         api.listWebhooks(),
         api.listDaemons(),
         api.listBotUsers(workspaceId),
         api.listWebhookAdapters(),
-        api.listWorkspaceWebhookEvents(),
       ]);
       setWebhooks(webhookList);
       setDaemons(daemonList);
       setBots(botList);
       setAdapters(adapterList);
-      setGlobalEvents(eventList);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load webhooks");
     } finally {
@@ -284,11 +281,7 @@ export function WebhooksTab() {
         )}
       </section>
 
-      <WebhookEventsSection
-        events={globalEvents}
-        webhooks={webhooks}
-        loading={loading}
-      />
+      <WebhookEventsSection webhooks={webhooks} />
 
       <CreateWebhookDialog
         open={createOpen}
@@ -462,6 +455,7 @@ function WebhookCard({
   onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [eventsExpanded, setEventsExpanded] = useState(false);
   const [events, setEvents] = useState<WebhookEvent[] | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const webhook = wh.webhook;
@@ -469,13 +463,13 @@ function WebhookCard({
   const isGitHub = webhook.source_type === "github";
 
   useEffect(() => {
-    if (!expanded || events !== null) return;
+    if (!eventsExpanded || events !== null) return;
     setEventsLoading(true);
     api.listWebhookEvents(webhook.id)
       .then(setEvents)
       .catch(() => setEvents([]))
       .finally(() => setEventsLoading(false));
-  }, [expanded, events, webhook.id]);
+  }, [eventsExpanded, events, webhook.id]);
   const url = isGitHub
     ? `${apiBaseUrl}/api/github/events`
     : `${apiBaseUrl}/api/webhooks/${webhook.id}`;
@@ -575,7 +569,12 @@ function WebhookCard({
             {wh.actions.length === 0 && (
               <div className="italic text-muted-foreground/70">No actions configured</div>
             )}
-            <WebhookEventsPanel events={events} loading={eventsLoading} />
+            <WebhookEventsPanel
+              events={events}
+              loading={eventsLoading}
+              expanded={eventsExpanded}
+              onToggle={() => setEventsExpanded((v) => !v)}
+            />
           </div>
         )}
       </CardContent>
@@ -1615,31 +1614,44 @@ function payloadSummary(payload: unknown): string {
 function WebhookEventsPanel({
   events,
   loading,
+  expanded,
+  onToggle,
 }: {
   events: WebhookEvent[] | null;
   loading: boolean;
+  expanded: boolean;
+  onToggle: () => void;
 }) {
   const displayEvents = events?.slice(0, 20) ?? [];
 
   return (
     <div className="border-t pt-2 mt-1 space-y-1.5">
-      <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide hover:text-foreground text-muted-foreground transition-colors"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <History className="h-3 w-3" />
         Recent Events
-      </span>
-      {loading && (
-        <div className="text-muted-foreground/70 italic">Loading events…</div>
-      )}
-      {!loading && events !== null && displayEvents.length === 0 && (
-        <div className="italic text-muted-foreground/70">No events recorded yet</div>
-      )}
-      {!loading && displayEvents.map((evt) => (
-        <WebhookEventRow key={evt.id} event={evt} />
-      ))}
-      {!loading && events !== null && events.length > 20 && (
-        <div className="text-muted-foreground/70 italic">
-          Showing 20 of {events.length} events
-        </div>
+      </button>
+      {expanded && (
+        <>
+          {loading && (
+            <div className="text-muted-foreground/70 italic">Loading events…</div>
+          )}
+          {!loading && events !== null && displayEvents.length === 0 && (
+            <div className="italic text-muted-foreground/70">No events recorded yet</div>
+          )}
+          {!loading && displayEvents.map((evt) => (
+            <WebhookEventRow key={evt.id} event={evt} />
+          ))}
+          {!loading && events !== null && events.length > 20 && (
+            <div className="text-muted-foreground/70 italic">
+              Showing 20 of {events.length} events
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1687,73 +1699,95 @@ function WebhookEventRow({ event, webhookName }: { event: WebhookEvent; webhookN
 // ----------------------------------------------------------------------------
 
 function WebhookEventsSection({
-  events,
   webhooks,
-  loading,
 }: {
-  events: WebhookEvent[];
   webhooks: WebhookWithActions[];
-  loading: boolean;
 }) {
+  const [sectionExpanded, setSectionExpanded] = useState(false);
+  const [events, setEvents] = useState<WebhookEvent[] | null>(null);
+  const [loading, setLoading] = useState(false);
   const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    if (!sectionExpanded || events !== null) return;
+    setLoading(true);
+    api.listWorkspaceWebhookEvents()
+      .then(setEvents)
+      .catch(() => setEvents([]))
+      .finally(() => setLoading(false));
+  }, [sectionExpanded, events]);
+
   const webhookNameMap = new Map(webhooks.map((w) => [w.webhook.id, w.webhook.name]));
-  const problemEvents = events.filter((e) => e.status !== "processed");
-  const displayEvents = showAll ? events : events.slice(0, 30);
+  const problemEvents = (events ?? []).filter((e) => e.status !== "processed");
+  const displayEvents = showAll ? (events ?? []) : (events ?? []).slice(0, 30);
 
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <History className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold">Event History</h2>
-          {!loading && events.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setSectionExpanded((v) => !v)}
+          className="flex items-center gap-2 hover:text-foreground text-muted-foreground transition-colors group"
+        >
+          {sectionExpanded ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+          <History className="h-4 w-4" />
+          <h2 className="text-sm font-semibold text-foreground">Event History</h2>
+          {sectionExpanded && events !== null && events.length > 0 && (
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
               {events.length}
             </Badge>
           )}
-          {!loading && problemEvents.length > 0 && (
+          {sectionExpanded && problemEvents.length > 0 && (
             <Badge variant="destructive" className="text-[10px] px-1.5 py-0">
               {problemEvents.length} unprocessed
             </Badge>
           )}
-        </div>
+        </button>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        All webhook events across this workspace, in reverse chronological order. Filtered, deduped, and error events are highlighted.
-      </p>
+      {sectionExpanded && (
+        <>
+          <p className="text-xs text-muted-foreground">
+            All webhook events across this workspace, in reverse chronological order. Filtered, deduped, and error events are highlighted.
+          </p>
 
-      {loading ? (
-        <div className="space-y-1.5">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-10 rounded-md border bg-muted/30 animate-pulse" />
-          ))}
-        </div>
-      ) : events.length === 0 ? (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            No webhook events recorded yet.
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-1.5">
-          {displayEvents.map((evt) => (
-            <WebhookEventRow
-              key={evt.id}
-              event={evt}
-              webhookName={webhookNameMap.get(evt.webhook_id)}
-            />
-          ))}
-          {events.length > 30 && (
-            <button
-              type="button"
-              onClick={() => setShowAll((v) => !v)}
-              className="text-xs text-primary hover:underline"
-            >
-              {showAll ? "Show less" : `Show all ${events.length} events`}
-            </button>
-          )}
-        </div>
+          {loading ? (
+            <div className="space-y-1.5">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-10 rounded-md border bg-muted/30 animate-pulse" />
+              ))}
+            </div>
+          ) : events !== null && events.length === 0 ? (
+            <Card>
+              <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                No webhook events recorded yet.
+              </CardContent>
+            </Card>
+          ) : events !== null ? (
+            <div className="space-y-1.5">
+              {displayEvents.map((evt) => (
+                <WebhookEventRow
+                  key={evt.id}
+                  event={evt}
+                  webhookName={webhookNameMap.get(evt.webhook_id)}
+                />
+              ))}
+              {events.length > 30 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAll((v) => !v)}
+                  className="text-xs text-primary hover:underline"
+                >
+                  {showAll ? "Show less" : `Show all ${events.length} events`}
+                </button>
+              )}
+            </div>
+          ) : null}
+        </>
       )}
     </section>
   );
