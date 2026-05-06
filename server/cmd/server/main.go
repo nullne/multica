@@ -14,6 +14,7 @@ import (
 	"github.com/nullne/multica/server/internal/events"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/internal/realtime"
+	"github.com/nullne/multica/server/internal/service"
 	"github.com/nullne/multica/server/internal/telegram"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
@@ -76,6 +77,11 @@ func main() {
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	go runRuntimeSweeper(sweepCtx, queries, bus)
 
+	// Start recurring issue scheduler.
+	schedCtx, schedCancel := context.WithCancel(context.Background())
+	taskSvc := service.NewTaskService(queries, hub, bus)
+	go runRecurringScheduler(schedCtx, pool, queries, taskSvc, bus)
+
 	// Graceful shutdown
 	go func() {
 		slog.Info("server starting", "port", port)
@@ -91,6 +97,7 @@ func main() {
 
 	slog.Info("shutting down server")
 	sweepCancel()
+	schedCancel()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

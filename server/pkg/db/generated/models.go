@@ -384,6 +384,29 @@ type UserNotificationChannel struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type RecurringIssueTemplate struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Title               string             `json:"title"`
+	Description         pgtype.Text        `json:"description"`
+	Priority            string             `json:"priority"`
+	AssigneeType        pgtype.Text        `json:"assignee_type"`
+	AssigneeID          pgtype.UUID        `json:"assignee_id"`
+	DueDateOffsetHours  pgtype.Int4        `json:"due_date_offset_hours"`
+	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
+	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
+	Schedule            string             `json:"schedule"`
+	Timezone            string             `json:"timezone"`
+	Enabled             bool               `json:"enabled"`
+	LastTriggeredAt     pgtype.Timestamptz `json:"last_triggered_at"`
+	NextRunAt           pgtype.Timestamptz `json:"next_run_at"`
+	CreatedByID         pgtype.UUID        `json:"created_by_id"`
+	CreatedByType       string             `json:"created_by_type"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Workspace struct {
 	ID                   pgtype.UUID        `json:"id"`
 	Name                 string             `json:"name"`
