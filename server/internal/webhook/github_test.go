@@ -49,6 +49,43 @@ func TestGitHubAdapter_PullRequestOpened(t *testing.T) {
 	}
 }
 
+func TestGitHubAdapter_PullRequestIssueCandidates(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "opened",
+		"pull_request": {
+			"number": 42,
+			"title": "Add login feature",
+			"body": "Fixes #7 and closes other/repo#8. See https://github.com/org/repo/issues/9",
+			"html_url": "https://github.com/org/repo/pull/42",
+			"user": {"login": "alice"},
+			"head": {"ref": "feat/login"},
+			"base": {"ref": "main"}
+		},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "pull_request")
+
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+
+	want := strings.Join([]string{
+		"https://github.com/org/repo/issues/7",
+		"https://github.com/other/repo/issues/8",
+		"https://github.com/org/repo/issues/9",
+		"https://github.com/org/repo/pull/42",
+	}, "\n")
+	if got := events[0].Data["source_urls"]; got != want {
+		t.Errorf("source_urls = %q, want %q", got, want)
+	}
+}
+
 func TestGitHubAdapter_PullRequestMerged(t *testing.T) {
 	a := &githubAdapter{}
 	body := []byte(`{

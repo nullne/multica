@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -190,6 +192,7 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 	if action == "closed" && pr.Merged {
 		action = "merged"
 	}
+	sourceURLs := githubPRSourceURLs(ev.Repository.FullName, pr.Body, pr.HTMLURL)
 
 	return map[string]string{
 		"action":      action,
@@ -201,10 +204,63 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 		"head_branch": pr.Head.Ref,
 		"base_branch": pr.Base.Ref,
 		"source_url":  pr.HTMLURL,
+		"source_urls": strings.Join(sourceURLs, "\n"),
 		"source_kind": "pr",
 		"external_id": fmt.Sprintf("%s#%d", ev.Repository.FullName, pr.Number),
 		"body":        fmt.Sprintf("**PR [#%d](%s): %s**\n**Author:** %s\n**Branch:** `%s` → `%s`\n**Action:** %s\n\n%s", pr.Number, pr.HTMLURL, pr.Title, pr.User.Login, pr.Head.Ref, pr.Base.Ref, action, pr.Body),
 	}
+}
+
+var (
+	githubIssueURLRe   = regexp.MustCompile(`https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/([0-9]+)`)
+	githubClosingRefRe = regexp.MustCompile(`(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+((?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+)`)
+)
+
+func githubPRSourceURLs(repo, body, prURL string) []string {
+	var urls []string
+	seen := make(map[string]bool)
+	type candidate struct {
+		index int
+		url   string
+	}
+	var candidates []candidate
+	add := func(url string) {
+		if url == "" || seen[url] {
+			return
+		}
+		seen[url] = true
+		urls = append(urls, url)
+	}
+
+	for _, match := range githubIssueURLRe.FindAllStringSubmatchIndex(body, -1) {
+		candidates = append(candidates, candidate{
+			index: match[0],
+			url:   fmt.Sprintf("https://github.com/%s/issues/%s", body[match[2]:match[3]], body[match[4]:match[5]]),
+		})
+	}
+	for _, match := range githubClosingRefRe.FindAllStringSubmatchIndex(body, -1) {
+		ref := body[match[2]:match[3]]
+		hash := strings.LastIndex(ref, "#")
+		if hash < 0 {
+			continue
+		}
+		refRepo := ref[:hash]
+		if refRepo == "" {
+			refRepo = repo
+		}
+		candidates = append(candidates, candidate{
+			index: match[0],
+			url:   fmt.Sprintf("https://github.com/%s/issues/%s", refRepo, ref[hash+1:]),
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].index < candidates[j].index
+	})
+	for _, candidate := range candidates {
+		add(candidate.url)
+	}
+	add(prURL)
+	return urls
 }
 
 func parseGitHubIssues(body []byte) map[string]string {
@@ -314,6 +370,7 @@ func (a *githubAdapter) Keys() []AdapterKey {
 		{Key: "base_branch", Description: "PR base branch", Required: false},
 		{Key: "html_url", Description: "Direct URL to the PR / issue / comment", Required: false},
 		{Key: "source_url", Description: "Stable URL of the parent resource — used by issue_link reverse lookup", Required: true},
+		{Key: "source_urls", Description: "Ordered newline-separated candidate source URLs for reverse lookup", Required: false},
 		{Key: "source_kind", Description: "'pr' | 'issue' | 'commit'", Required: true},
 		{Key: "external_id", Description: "Compact id like 'owner/repo#123'", Required: false},
 		{Key: "comment_body", Description: "Full comment body (issue_comment only)", Required: false},
