@@ -11,17 +11,65 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimRecurringTemplate = `-- name: ClaimRecurringTemplate :one
+UPDATE recurring_issue_template
+SET last_triggered_at = now(),
+    next_run_at       = $3,
+    updated_at        = now()
+WHERE id = $1
+  AND next_run_at = $2
+  AND enabled = TRUE
+  AND (max_runs IS NULL OR successful_runs_count < max_runs)
+RETURNING id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count
+`
+
+type ClaimRecurringTemplateParams struct {
+	ID          pgtype.UUID        `json:"id"`
+	NextRunAt   pgtype.Timestamptz `json:"next_run_at"`
+	NextRunAt_2 pgtype.Timestamptz `json:"next_run_at_2"`
+}
+
+func (q *Queries) ClaimRecurringTemplate(ctx context.Context, arg ClaimRecurringTemplateParams) (RecurringIssueTemplate, error) {
+	row := q.db.QueryRow(ctx, claimRecurringTemplate, arg.ID, arg.NextRunAt, arg.NextRunAt_2)
+	var i RecurringIssueTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.DueDateOffsetHours,
+		&i.DispatchProvider,
+		&i.DispatchDaemonID,
+		&i.DispatchDaemonLabel,
+		&i.Schedule,
+		&i.Timezone,
+		&i.Enabled,
+		&i.LastTriggeredAt,
+		&i.NextRunAt,
+		&i.CreatedByID,
+		&i.CreatedByType,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MaxRuns,
+		&i.SuccessfulRunsCount,
+	)
+	return i, err
+}
+
 const createRecurringTemplate = `-- name: CreateRecurringTemplate :one
 INSERT INTO recurring_issue_template (
     workspace_id, title, description, priority,
     assignee_type, assignee_id, due_date_offset_hours,
     dispatch_provider, dispatch_daemon_id, dispatch_daemon_label,
-    schedule, timezone, enabled, next_run_at,
+    schedule, timezone, enabled, next_run_at, max_runs,
     created_by_id, created_by_type
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 )
-RETURNING id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at
+RETURNING id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count
 `
 
 type CreateRecurringTemplateParams struct {
@@ -39,6 +87,7 @@ type CreateRecurringTemplateParams struct {
 	Timezone            string             `json:"timezone"`
 	Enabled             bool               `json:"enabled"`
 	NextRunAt           pgtype.Timestamptz `json:"next_run_at"`
+	MaxRuns             pgtype.Int4        `json:"max_runs"`
 	CreatedByID         pgtype.UUID        `json:"created_by_id"`
 	CreatedByType       string             `json:"created_by_type"`
 }
@@ -59,24 +108,240 @@ func (q *Queries) CreateRecurringTemplate(ctx context.Context, arg CreateRecurri
 		arg.Timezone,
 		arg.Enabled,
 		arg.NextRunAt,
+		arg.MaxRuns,
 		arg.CreatedByID,
 		arg.CreatedByType,
 	)
-	return scanRecurringTemplate(row)
+	var i RecurringIssueTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.DueDateOffsetHours,
+		&i.DispatchProvider,
+		&i.DispatchDaemonID,
+		&i.DispatchDaemonLabel,
+		&i.Schedule,
+		&i.Timezone,
+		&i.Enabled,
+		&i.LastTriggeredAt,
+		&i.NextRunAt,
+		&i.CreatedByID,
+		&i.CreatedByType,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MaxRuns,
+		&i.SuccessfulRunsCount,
+	)
+	return i, err
+}
+
+const deleteRecurringTemplate = `-- name: DeleteRecurringTemplate :exec
+DELETE FROM recurring_issue_template WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteRecurringTemplateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteRecurringTemplate(ctx context.Context, arg DeleteRecurringTemplateParams) error {
+	_, err := q.db.Exec(ctx, deleteRecurringTemplate, arg.ID, arg.WorkspaceID)
+	return err
 }
 
 const getRecurringTemplateInWorkspace = `-- name: GetRecurringTemplateInWorkspace :one
-SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at FROM recurring_issue_template
+SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count FROM recurring_issue_template
 WHERE id = $1 AND workspace_id = $2
 `
 
-func (q *Queries) GetRecurringTemplateInWorkspace(ctx context.Context, id, workspaceID pgtype.UUID) (RecurringIssueTemplate, error) {
-	row := q.db.QueryRow(ctx, getRecurringTemplateInWorkspace, id, workspaceID)
-	return scanRecurringTemplate(row)
+type GetRecurringTemplateInWorkspaceParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetRecurringTemplateInWorkspace(ctx context.Context, arg GetRecurringTemplateInWorkspaceParams) (RecurringIssueTemplate, error) {
+	row := q.db.QueryRow(ctx, getRecurringTemplateInWorkspace, arg.ID, arg.WorkspaceID)
+	var i RecurringIssueTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.DueDateOffsetHours,
+		&i.DispatchProvider,
+		&i.DispatchDaemonID,
+		&i.DispatchDaemonLabel,
+		&i.Schedule,
+		&i.Timezone,
+		&i.Enabled,
+		&i.LastTriggeredAt,
+		&i.NextRunAt,
+		&i.CreatedByID,
+		&i.CreatedByType,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MaxRuns,
+		&i.SuccessfulRunsCount,
+	)
+	return i, err
+}
+
+const incrementRecurringTemplateSuccess = `-- name: IncrementRecurringTemplateSuccess :one
+UPDATE recurring_issue_template
+SET successful_runs_count = successful_runs_count + 1,
+    next_run_at = CASE
+        WHEN max_runs IS NOT NULL AND successful_runs_count + 1 >= max_runs THEN NULL
+        ELSE next_run_at
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count
+`
+
+func (q *Queries) IncrementRecurringTemplateSuccess(ctx context.Context, id pgtype.UUID) (RecurringIssueTemplate, error) {
+	row := q.db.QueryRow(ctx, incrementRecurringTemplateSuccess, id)
+	var i RecurringIssueTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.DueDateOffsetHours,
+		&i.DispatchProvider,
+		&i.DispatchDaemonID,
+		&i.DispatchDaemonLabel,
+		&i.Schedule,
+		&i.Timezone,
+		&i.Enabled,
+		&i.LastTriggeredAt,
+		&i.NextRunAt,
+		&i.CreatedByID,
+		&i.CreatedByType,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MaxRuns,
+		&i.SuccessfulRunsCount,
+	)
+	return i, err
+}
+
+const listActiveRecurringTemplates = `-- name: ListActiveRecurringTemplates :many
+SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count FROM recurring_issue_template
+WHERE workspace_id = $1
+  AND enabled = TRUE
+  AND (max_runs IS NULL OR successful_runs_count < max_runs)
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListActiveRecurringTemplates(ctx context.Context, workspaceID pgtype.UUID) ([]RecurringIssueTemplate, error) {
+	rows, err := q.db.Query(ctx, listActiveRecurringTemplates, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RecurringIssueTemplate{}
+	for rows.Next() {
+		var i RecurringIssueTemplate
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.DueDateOffsetHours,
+			&i.DispatchProvider,
+			&i.DispatchDaemonID,
+			&i.DispatchDaemonLabel,
+			&i.Schedule,
+			&i.Timezone,
+			&i.Enabled,
+			&i.LastTriggeredAt,
+			&i.NextRunAt,
+			&i.CreatedByID,
+			&i.CreatedByType,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MaxRuns,
+			&i.SuccessfulRunsCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueRecurringTemplates = `-- name: ListDueRecurringTemplates :many
+SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count FROM recurring_issue_template
+WHERE enabled = TRUE
+  AND next_run_at IS NOT NULL
+  AND next_run_at <= now()
+  AND (max_runs IS NULL OR successful_runs_count < max_runs)
+ORDER BY next_run_at
+LIMIT $1
+`
+
+func (q *Queries) ListDueRecurringTemplates(ctx context.Context, limit int32) ([]RecurringIssueTemplate, error) {
+	rows, err := q.db.Query(ctx, listDueRecurringTemplates, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RecurringIssueTemplate{}
+	for rows.Next() {
+		var i RecurringIssueTemplate
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.DueDateOffsetHours,
+			&i.DispatchProvider,
+			&i.DispatchDaemonID,
+			&i.DispatchDaemonLabel,
+			&i.Schedule,
+			&i.Timezone,
+			&i.Enabled,
+			&i.LastTriggeredAt,
+			&i.NextRunAt,
+			&i.CreatedByID,
+			&i.CreatedByType,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MaxRuns,
+			&i.SuccessfulRunsCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRecurringTemplates = `-- name: ListRecurringTemplates :many
-SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at FROM recurring_issue_template
+SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count FROM recurring_issue_template
 WHERE workspace_id = $1
 ORDER BY created_at DESC
 `
@@ -87,16 +352,41 @@ func (q *Queries) ListRecurringTemplates(ctx context.Context, workspaceID pgtype
 		return nil, err
 	}
 	defer rows.Close()
-
-	var items []RecurringIssueTemplate
+	items := []RecurringIssueTemplate{}
 	for rows.Next() {
-		t, err := scanRecurringTemplate(rows)
-		if err != nil {
+		var i RecurringIssueTemplate
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.DueDateOffsetHours,
+			&i.DispatchProvider,
+			&i.DispatchDaemonID,
+			&i.DispatchDaemonLabel,
+			&i.Schedule,
+			&i.Timezone,
+			&i.Enabled,
+			&i.LastTriggeredAt,
+			&i.NextRunAt,
+			&i.CreatedByID,
+			&i.CreatedByType,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.MaxRuns,
+			&i.SuccessfulRunsCount,
+		); err != nil {
 			return nil, err
 		}
-		items = append(items, t)
+		items = append(items, i)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateRecurringTemplate = `-- name: UpdateRecurringTemplate :one
@@ -114,9 +404,10 @@ UPDATE recurring_issue_template SET
     timezone              = $12,
     enabled               = $13,
     next_run_at           = $14,
+    max_runs              = $15,
     updated_at            = now()
-WHERE id = $1 AND workspace_id = $15
-RETURNING id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at
+WHERE id = $1 AND workspace_id = $16
+RETURNING id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count
 `
 
 type UpdateRecurringTemplateParams struct {
@@ -134,6 +425,7 @@ type UpdateRecurringTemplateParams struct {
 	Timezone            string             `json:"timezone"`
 	Enabled             bool               `json:"enabled"`
 	NextRunAt           pgtype.Timestamptz `json:"next_run_at"`
+	MaxRuns             pgtype.Int4        `json:"max_runs"`
 	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
 }
 
@@ -153,91 +445,33 @@ func (q *Queries) UpdateRecurringTemplate(ctx context.Context, arg UpdateRecurri
 		arg.Timezone,
 		arg.Enabled,
 		arg.NextRunAt,
+		arg.MaxRuns,
 		arg.WorkspaceID,
 	)
-	return scanRecurringTemplate(row)
-}
-
-const deleteRecurringTemplate = `-- name: DeleteRecurringTemplate :exec
-DELETE FROM recurring_issue_template WHERE id = $1 AND workspace_id = $2
-`
-
-func (q *Queries) DeleteRecurringTemplate(ctx context.Context, id, workspaceID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteRecurringTemplate, id, workspaceID)
-	return err
-}
-
-const listDueRecurringTemplates = `-- name: ListDueRecurringTemplates :many
-SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at FROM recurring_issue_template
-WHERE enabled = TRUE
-  AND next_run_at IS NOT NULL
-  AND next_run_at <= now()
-ORDER BY next_run_at
-LIMIT $1
-`
-
-func (q *Queries) ListDueRecurringTemplates(ctx context.Context, limit int32) ([]RecurringIssueTemplate, error) {
-	rows, err := q.db.Query(ctx, listDueRecurringTemplates, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var items []RecurringIssueTemplate
-	for rows.Next() {
-		t, err := scanRecurringTemplate(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, t)
-	}
-	return items, rows.Err()
-}
-
-const claimRecurringTemplate = `-- name: ClaimRecurringTemplate :one
-UPDATE recurring_issue_template
-SET last_triggered_at = now(),
-    next_run_at       = $3,
-    updated_at        = now()
-WHERE id = $1
-  AND next_run_at = $2
-  AND enabled = TRUE
-RETURNING id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at
-`
-
-func (q *Queries) ClaimRecurringTemplate(ctx context.Context, id pgtype.UUID, oldNextRunAt pgtype.Timestamptz, newNextRunAt pgtype.Timestamptz) (RecurringIssueTemplate, error) {
-	row := q.db.QueryRow(ctx, claimRecurringTemplate, id, oldNextRunAt, newNextRunAt)
-	return scanRecurringTemplate(row)
-}
-
-// rowScanner abstracts pgx.Row and pgx.Rows so scanRecurringTemplate works for both.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanRecurringTemplate(row rowScanner) (RecurringIssueTemplate, error) {
-	var t RecurringIssueTemplate
+	var i RecurringIssueTemplate
 	err := row.Scan(
-		&t.ID,
-		&t.WorkspaceID,
-		&t.Title,
-		&t.Description,
-		&t.Priority,
-		&t.AssigneeType,
-		&t.AssigneeID,
-		&t.DueDateOffsetHours,
-		&t.DispatchProvider,
-		&t.DispatchDaemonID,
-		&t.DispatchDaemonLabel,
-		&t.Schedule,
-		&t.Timezone,
-		&t.Enabled,
-		&t.LastTriggeredAt,
-		&t.NextRunAt,
-		&t.CreatedByID,
-		&t.CreatedByType,
-		&t.CreatedAt,
-		&t.UpdatedAt,
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.DueDateOffsetHours,
+		&i.DispatchProvider,
+		&i.DispatchDaemonID,
+		&i.DispatchDaemonLabel,
+		&i.Schedule,
+		&i.Timezone,
+		&i.Enabled,
+		&i.LastTriggeredAt,
+		&i.NextRunAt,
+		&i.CreatedByID,
+		&i.CreatedByType,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.MaxRuns,
+		&i.SuccessfulRunsCount,
 	)
-	return t, err
+	return i, err
 }

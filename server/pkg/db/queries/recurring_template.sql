@@ -3,10 +3,10 @@ INSERT INTO recurring_issue_template (
     workspace_id, title, description, priority,
     assignee_type, assignee_id, due_date_offset_hours,
     dispatch_provider, dispatch_daemon_id, dispatch_daemon_label,
-    schedule, timezone, enabled, next_run_at,
+    schedule, timezone, enabled, next_run_at, max_runs,
     created_by_id, created_by_type
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 )
 RETURNING *;
 
@@ -17,6 +17,13 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: ListRecurringTemplates :many
 SELECT * FROM recurring_issue_template
 WHERE workspace_id = $1
+ORDER BY created_at DESC;
+
+-- name: ListActiveRecurringTemplates :many
+SELECT * FROM recurring_issue_template
+WHERE workspace_id = $1
+  AND enabled = TRUE
+  AND (max_runs IS NULL OR successful_runs_count < max_runs)
 ORDER BY created_at DESC;
 
 -- name: UpdateRecurringTemplate :one
@@ -34,8 +41,9 @@ UPDATE recurring_issue_template SET
     timezone              = $12,
     enabled               = $13,
     next_run_at           = $14,
+    max_runs              = $15,
     updated_at            = now()
-WHERE id = $1 AND workspace_id = $15
+WHERE id = $1 AND workspace_id = $16
 RETURNING *;
 
 -- name: DeleteRecurringTemplate :exec
@@ -46,6 +54,7 @@ SELECT * FROM recurring_issue_template
 WHERE enabled = TRUE
   AND next_run_at IS NOT NULL
   AND next_run_at <= now()
+  AND (max_runs IS NULL OR successful_runs_count < max_runs)
 ORDER BY next_run_at
 LIMIT $1;
 
@@ -57,4 +66,16 @@ SET last_triggered_at = now(),
 WHERE id = $1
   AND next_run_at = $2
   AND enabled = TRUE
+  AND (max_runs IS NULL OR successful_runs_count < max_runs)
+RETURNING *;
+
+-- name: IncrementRecurringTemplateSuccess :one
+UPDATE recurring_issue_template
+SET successful_runs_count = successful_runs_count + 1,
+    next_run_at = CASE
+        WHEN max_runs IS NOT NULL AND successful_runs_count + 1 >= max_runs THEN NULL
+        ELSE next_run_at
+    END,
+    updated_at = now()
+WHERE id = $1
 RETURNING *;

@@ -29,6 +29,8 @@ type RecurringTemplateResponse struct {
 	Schedule            string  `json:"schedule"`
 	Timezone            string  `json:"timezone"`
 	Enabled             bool    `json:"enabled"`
+	MaxRuns             *int32  `json:"max_runs"`
+	SuccessfulRunsCount int32   `json:"successful_runs_count"`
 	LastTriggeredAt     *string `json:"last_triggered_at"`
 	NextRunAt           *string `json:"next_run_at"`
 	CreatedByID         string  `json:"created_by_id"`
@@ -41,6 +43,10 @@ func recurringTemplateToResponse(t db.RecurringIssueTemplate) RecurringTemplateR
 	var dueDateOffset *int32
 	if t.DueDateOffsetHours.Valid {
 		dueDateOffset = &t.DueDateOffsetHours.Int32
+	}
+	var maxRuns *int32
+	if t.MaxRuns.Valid {
+		maxRuns = &t.MaxRuns.Int32
 	}
 	return RecurringTemplateResponse{
 		ID:                  uuidToString(t.ID),
@@ -57,6 +63,8 @@ func recurringTemplateToResponse(t db.RecurringIssueTemplate) RecurringTemplateR
 		Schedule:            t.Schedule,
 		Timezone:            t.Timezone,
 		Enabled:             t.Enabled,
+		MaxRuns:             maxRuns,
+		SuccessfulRunsCount: t.SuccessfulRunsCount,
 		LastTriggeredAt:     timestampToPtr(t.LastTriggeredAt),
 		NextRunAt:           timestampToPtr(t.NextRunAt),
 		CreatedByID:         uuidToString(t.CreatedByID),
@@ -79,6 +87,7 @@ type CreateRecurringTemplateRequest struct {
 	Schedule            string  `json:"schedule"`
 	Timezone            string  `json:"timezone"`
 	Enabled             *bool   `json:"enabled"`
+	MaxRuns             *int32  `json:"max_runs"`
 }
 
 func (h *Handler) CreateRecurringTemplate(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +108,10 @@ func (h *Handler) CreateRecurringTemplate(w http.ResponseWriter, r *http.Request
 	}
 	if req.Schedule == "" {
 		writeError(w, http.StatusBadRequest, "schedule is required")
+		return
+	}
+	if req.MaxRuns != nil && *req.MaxRuns <= 0 {
+		writeError(w, http.StatusBadRequest, "max_runs must be a positive integer")
 		return
 	}
 
@@ -140,6 +153,11 @@ func (h *Handler) CreateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		dueDateOffset = pgtype.Int4{Int32: *req.DueDateOffsetHours, Valid: true}
 	}
 
+	var maxRuns pgtype.Int4
+	if req.MaxRuns != nil {
+		maxRuns = pgtype.Int4{Int32: *req.MaxRuns, Valid: true}
+	}
+
 	t, err := h.Queries.CreateRecurringTemplate(r.Context(), db.CreateRecurringTemplateParams{
 		WorkspaceID:         parseUUID(workspaceID),
 		Title:               req.Title,
@@ -155,6 +173,7 @@ func (h *Handler) CreateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		Timezone:            tz,
 		Enabled:             enabled,
 		NextRunAt:           nextRunAt,
+		MaxRuns:             maxRuns,
 		CreatedByID:         member.UserID,
 		CreatedByType:       "member",
 	})
@@ -173,7 +192,17 @@ func (h *Handler) ListRecurringTemplates(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	templates, err := h.Queries.ListRecurringTemplates(r.Context(), parseUUID(workspaceID))
+	includeInactive := r.URL.Query().Get("include_inactive") == "true"
+
+	var (
+		templates []db.RecurringIssueTemplate
+		err       error
+	)
+	if includeInactive {
+		templates, err = h.Queries.ListRecurringTemplates(r.Context(), parseUUID(workspaceID))
+	} else {
+		templates, err = h.Queries.ListActiveRecurringTemplates(r.Context(), parseUUID(workspaceID))
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list recurring templates")
 		return
@@ -193,7 +222,10 @@ func (h *Handler) GetRecurringTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := h.Queries.GetRecurringTemplateInWorkspace(r.Context(), parseUUID(id), parseUUID(workspaceID))
+	t, err := h.Queries.GetRecurringTemplateInWorkspace(r.Context(), db.GetRecurringTemplateInWorkspaceParams{
+		ID:          parseUUID(id),
+		WorkspaceID: parseUUID(workspaceID),
+	})
 	if err != nil {
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, "recurring template not found")
@@ -219,13 +251,17 @@ type UpdateRecurringTemplateRequest struct {
 	Schedule            *string `json:"schedule"`
 	Timezone            *string `json:"timezone"`
 	Enabled             *bool   `json:"enabled"`
+	MaxRuns             *int32  `json:"max_runs"`
 }
 
 func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	id := chi.URLParam(r, "id")
 
-	existing, err := h.Queries.GetRecurringTemplateInWorkspace(r.Context(), parseUUID(id), parseUUID(workspaceID))
+	existing, err := h.Queries.GetRecurringTemplateInWorkspace(r.Context(), db.GetRecurringTemplateInWorkspaceParams{
+		ID:          parseUUID(id),
+		WorkspaceID: parseUUID(workspaceID),
+	})
 	if err != nil {
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, "recurring template not found")
@@ -253,6 +289,11 @@ func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request
 	var rawFields map[string]json.RawMessage
 	_ = json.Unmarshal(bodyBytes, &rawFields)
 
+	if _, ok := rawFields["max_runs"]; ok && req.MaxRuns != nil && *req.MaxRuns <= 0 {
+		writeError(w, http.StatusBadRequest, "max_runs must be a positive integer")
+		return
+	}
+
 	// Start with existing values.
 	params := db.UpdateRecurringTemplateParams{
 		ID:                  existing.ID,
@@ -270,6 +311,7 @@ func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		Timezone:            existing.Timezone,
 		Enabled:             existing.Enabled,
 		NextRunAt:           existing.NextRunAt,
+		MaxRuns:             existing.MaxRuns,
 	}
 
 	if req.Title != nil {
@@ -307,6 +349,13 @@ func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request
 	}
 	if _, ok := rawFields["dispatch_daemon_label"]; ok {
 		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
+	}
+	if _, ok := rawFields["max_runs"]; ok {
+		if req.MaxRuns != nil {
+			params.MaxRuns = pgtype.Int4{Int32: *req.MaxRuns, Valid: true}
+		} else {
+			params.MaxRuns = pgtype.Int4{Valid: false}
+		}
 	}
 
 	// Recompute next_run_at if schedule, timezone, or enabled changed.
@@ -361,7 +410,10 @@ func (h *Handler) DeleteRecurringTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := h.Queries.DeleteRecurringTemplate(r.Context(), parseUUID(id), parseUUID(workspaceID)); err != nil {
+	if err := h.Queries.DeleteRecurringTemplate(r.Context(), db.DeleteRecurringTemplateParams{
+		ID:          parseUUID(id),
+		WorkspaceID: parseUUID(workspaceID),
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete recurring template")
 		return
 	}

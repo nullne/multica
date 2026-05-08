@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { CheckCircle2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +69,7 @@ interface TemplateFormData {
   timezone: string;
   enabled: boolean;
   due_date_offset_hours: string;
+  max_runs: string;
   assignee_type: IssueAssigneeType | null;
   assignee_id: string | null;
 }
@@ -81,6 +82,7 @@ const DEFAULT_FORM: TemplateFormData = {
   timezone: "UTC",
   enabled: true,
   due_date_offset_hours: "",
+  max_runs: "",
   assignee_type: null,
   assignee_id: null,
 };
@@ -94,6 +96,7 @@ function templateToForm(t: RecurringTemplate): TemplateFormData {
     timezone: t.timezone,
     enabled: t.enabled,
     due_date_offset_hours: t.due_date_offset_hours != null ? String(t.due_date_offset_hours) : "",
+    max_runs: t.max_runs != null ? String(t.max_runs) : "",
     assignee_type: t.assignee_type ?? null,
     assignee_id: t.assignee_id ?? null,
   };
@@ -109,6 +112,10 @@ function formatNextRun(nextRunAt?: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function isCompleted(t: RecurringTemplate): boolean {
+  return t.max_runs != null && t.successful_runs_count >= t.max_runs;
 }
 
 function AssigneeField({
@@ -178,8 +185,12 @@ function TemplateFormDialog({
   const set = (patch: Partial<TemplateFormData>) =>
     setForm((f) => ({ ...f, ...patch }));
 
+  const maxRunsValid =
+    form.max_runs.trim() === "" ||
+    (Number.isInteger(Number(form.max_runs)) && Number(form.max_runs) > 0);
+
   const handleSubmit = async () => {
-    if (!form.title.trim() || !form.schedule.trim() || submitting) return;
+    if (!form.title.trim() || !form.schedule.trim() || !maxRunsValid || submitting) return;
     setSubmitting(true);
     try {
       await onSubmit(form);
@@ -279,15 +290,33 @@ function TemplateFormDialog({
             <p className="text-xs text-muted-foreground">IANA timezone name, e.g. America/New_York</p>
           </div>
 
-          {/* Due date offset */}
-          <div className="space-y-1">
-            <label className="text-xs font-medium">Due date offset (hours)</label>
-            <Input
-              type="number"
-              placeholder="Optional, e.g. 72 for 3 days"
-              value={form.due_date_offset_hours}
-              onChange={(e) => set({ due_date_offset_hours: e.target.value })}
-            />
+          {/* Due date offset + Max runs */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Due date offset (hours)</label>
+              <Input
+                type="number"
+                placeholder="Optional, e.g. 72 for 3 days"
+                value={form.due_date_offset_hours}
+                onChange={(e) => set({ due_date_offset_hours: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium">Max runs</label>
+              <Input
+                type="number"
+                min={1}
+                placeholder="Blank = unlimited"
+                value={form.max_runs}
+                onChange={(e) => set({ max_runs: e.target.value })}
+                aria-invalid={!maxRunsValid}
+              />
+              <p className="text-xs text-muted-foreground">
+                {maxRunsValid
+                  ? "Stops creating issues after this many successful runs."
+                  : "Must be a positive integer."}
+              </p>
+            </div>
           </div>
 
           {/* Enabled */}
@@ -307,7 +336,7 @@ function TemplateFormDialog({
           <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
           <Button
             onClick={handleSubmit}
-            disabled={!form.title.trim() || !form.schedule.trim() || submitting}
+            disabled={!form.title.trim() || !form.schedule.trim() || !maxRunsValid || submitting}
           >
             {submitting ? "Saving..." : submitLabel}
           </Button>
@@ -336,6 +365,9 @@ function buildCreatePayload(form: TemplateFormData): CreateRecurringTemplateRequ
   if (form.due_date_offset_hours.trim()) {
     payload.due_date_offset_hours = parseInt(form.due_date_offset_hours, 10);
   }
+  if (form.max_runs.trim()) {
+    payload.max_runs = parseInt(form.max_runs, 10);
+  }
   return payload;
 }
 
@@ -346,6 +378,7 @@ function buildUpdatePayload(form: TemplateFormData): UpdateRecurringTemplateRequ
   // pointer values, so an explicit null is required to clear a field.
   const description = form.description.trim();
   const offset = form.due_date_offset_hours.trim();
+  const maxRuns = form.max_runs.trim();
   return {
     title: form.title.trim(),
     description: description ? description : null,
@@ -356,13 +389,16 @@ function buildUpdatePayload(form: TemplateFormData): UpdateRecurringTemplateRequ
     assignee_type: form.assignee_type,
     assignee_id: form.assignee_id,
     due_date_offset_hours: offset ? parseInt(offset, 10) : null,
+    max_runs: maxRuns ? parseInt(maxRuns, 10) : null,
   };
 }
 
 export function RecurringTemplateManager() {
   const templates = useRecurringTemplateStore((s) => s.templates);
   const loading = useRecurringTemplateStore((s) => s.loading);
+  const includeInactive = useRecurringTemplateStore((s) => s.includeInactive);
   const fetch = useRecurringTemplateStore((s) => s.fetch);
+  const setIncludeInactive = useRecurringTemplateStore((s) => s.setIncludeInactive);
 
   const user = useAuthStore((s) => s.user);
   const workspaceId = useWorkspaceStore((s) => s.workspace?.id);
@@ -384,8 +420,9 @@ export function RecurringTemplateManager() {
 
   const handleCreate = async (form: TemplateFormData) => {
     try {
-      const template = await api.createRecurringTemplate(buildCreatePayload(form));
-      useRecurringTemplateStore.getState().addTemplate(template);
+      await api.createRecurringTemplate(buildCreatePayload(form));
+      // Refetch so the new template lands in the correct active/inactive bucket.
+      await fetch();
       setShowCreate(false);
       toast.success("Template created");
     } catch (err) {
@@ -397,8 +434,10 @@ export function RecurringTemplateManager() {
   const handleUpdate = async (form: TemplateFormData) => {
     if (!editingTemplate) return;
     try {
-      const updated = await api.updateRecurringTemplate(editingTemplate.id, buildUpdatePayload(form));
-      useRecurringTemplateStore.getState().updateTemplate(editingTemplate.id, updated);
+      await api.updateRecurringTemplate(editingTemplate.id, buildUpdatePayload(form));
+      // Refetch so changes to enabled/max_runs that move the template across the
+      // active/inactive boundary are reflected in the visible list.
+      await fetch();
       setEditingTemplate(null);
       toast.success("Template updated");
     } catch (err) {
@@ -410,8 +449,8 @@ export function RecurringTemplateManager() {
   const handleToggleEnabled = async (template: RecurringTemplate) => {
     setTogglingId(template.id);
     try {
-      const updated = await api.updateRecurringTemplate(template.id, { enabled: !template.enabled });
-      useRecurringTemplateStore.getState().updateTemplate(template.id, updated);
+      await api.updateRecurringTemplate(template.id, { enabled: !template.enabled });
+      await fetch();
     } catch {
       toast.error("Failed to update template");
     } finally {
@@ -441,12 +480,22 @@ export function RecurringTemplateManager() {
             Automatically create issues on a schedule.
           </p>
         </div>
-        {canManage && (
-          <Button size="sm" variant="outline" onClick={() => setShowCreate(true)}>
-            <Plus className="h-4 w-4 mr-1" />
-            New template
-          </Button>
-        )}
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Switch
+              checked={includeInactive}
+              onCheckedChange={(v) => setIncludeInactive(v)}
+              className="scale-75"
+            />
+            Show inactive
+          </label>
+          {canManage && (
+            <Button size="sm" variant="outline" onClick={() => setShowCreate(true)}>
+              <Plus className="h-4 w-4 mr-1" />
+              New template
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="divide-y rounded-lg border">
@@ -457,71 +506,88 @@ export function RecurringTemplateManager() {
         )}
         {!loading && templates.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No recurring templates yet.{canManage ? " Create one to automatically generate issues on a schedule." : ""}
+            {includeInactive
+              ? "No recurring templates yet."
+              : "No active recurring templates."}
+            {canManage ? " Create one to automatically generate issues on a schedule." : ""}
           </div>
         )}
-        {templates.map((t) => (
-          <div key={t.id} className="flex items-start gap-3 px-4 py-3 group">
-            <div className="flex-1 min-w-0 space-y-0.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-medium truncate">{t.title}</span>
-                <Badge variant={t.enabled ? "default" : "secondary"} className="text-[10px] px-1.5 py-0 shrink-0">
-                  {t.enabled ? "enabled" : "disabled"}
-                </Badge>
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono shrink-0">
-                  {t.schedule}
-                </Badge>
-                <span className="text-[10px] text-muted-foreground shrink-0">{t.timezone}</span>
-              </div>
-              {t.description && (
-                <p className="text-xs text-muted-foreground truncate">{t.description}</p>
-              )}
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <RefreshCw className="h-3 w-3" />
-                  Next: {formatNextRun(t.next_run_at ?? undefined)}
-                </span>
-                {t.assignee_type && t.assignee_id && (
+        {templates.map((t) => {
+          const completed = isCompleted(t);
+          return (
+            <div key={t.id} className="flex items-start gap-3 px-4 py-3 group">
+              <div className="flex-1 min-w-0 space-y-0.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium truncate">{t.title}</span>
+                  {completed ? (
+                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
+                      <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
+                      completed
+                    </Badge>
+                  ) : (
+                    <Badge variant={t.enabled ? "default" : "secondary"} className="text-[10px] px-1.5 py-0 shrink-0">
+                      {t.enabled ? "enabled" : "disabled"}
+                    </Badge>
+                  )}
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono shrink-0">
+                    {t.schedule}
+                  </Badge>
+                  <span className="text-[10px] text-muted-foreground shrink-0">{t.timezone}</span>
+                </div>
+                {t.description && (
+                  <p className="text-xs text-muted-foreground truncate">{t.description}</p>
+                )}
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
                   <span className="flex items-center gap-1">
-                    <ActorAvatar actorType={t.assignee_type} actorId={t.assignee_id} size={14} />
-                    <span>{getActorName(t.assignee_type, t.assignee_id)}</span>
+                    <RefreshCw className="h-3 w-3" />
+                    Next: {formatNextRun(t.next_run_at ?? undefined)}
                   </span>
-                )}
-                {t.priority !== "medium" && (
-                  <span className="capitalize">{t.priority}</span>
-                )}
-              </div>
-            </div>
-
-            {canManage && (
-              <div className="flex items-center gap-1 shrink-0">
-                <Switch
-                  checked={t.enabled}
-                  onCheckedChange={() => handleToggleEnabled(t)}
-                  disabled={togglingId === t.id}
-                  className="scale-90"
-                />
-                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => setEditingTemplate(t)}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => setDeletingTemplate(t)}
-                    className="text-destructive hover:text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                  <span>
+                    Runs: {t.successful_runs_count}
+                    {t.max_runs != null ? ` / ${t.max_runs}` : ""}
+                  </span>
+                  {t.assignee_type && t.assignee_id && (
+                    <span className="flex items-center gap-1">
+                      <ActorAvatar actorType={t.assignee_type} actorId={t.assignee_id} size={14} />
+                      <span>{getActorName(t.assignee_type, t.assignee_id)}</span>
+                    </span>
+                  )}
+                  {t.priority !== "medium" && (
+                    <span className="capitalize">{t.priority}</span>
+                  )}
                 </div>
               </div>
-            )}
-          </div>
-        ))}
+
+              {canManage && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <Switch
+                    checked={t.enabled}
+                    onCheckedChange={() => handleToggleEnabled(t)}
+                    disabled={togglingId === t.id || completed}
+                    className="scale-90"
+                  />
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      onClick={() => setEditingTemplate(t)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      onClick={() => setDeletingTemplate(t)}
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {canManage && (

@@ -270,6 +270,31 @@ type PersonalAccessToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type RecurringIssueTemplate struct {
+	ID                  pgtype.UUID        `json:"id"`
+	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
+	Title               string             `json:"title"`
+	Description         pgtype.Text        `json:"description"`
+	Priority            string             `json:"priority"`
+	AssigneeType        pgtype.Text        `json:"assignee_type"`
+	AssigneeID          pgtype.UUID        `json:"assignee_id"`
+	DueDateOffsetHours  pgtype.Int4        `json:"due_date_offset_hours"`
+	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
+	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
+	Schedule            string             `json:"schedule"`
+	Timezone            string             `json:"timezone"`
+	Enabled             bool               `json:"enabled"`
+	LastTriggeredAt     pgtype.Timestamptz `json:"last_triggered_at"`
+	NextRunAt           pgtype.Timestamptz `json:"next_run_at"`
+	CreatedByID         pgtype.UUID        `json:"created_by_id"`
+	CreatedByType       string             `json:"created_by_type"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	MaxRuns             pgtype.Int4        `json:"max_runs"`
+	SuccessfulRunsCount int32              `json:"successful_runs_count"`
+}
+
 type RuntimeUsage struct {
 	ID               pgtype.UUID        `json:"id"`
 	RuntimeID        pgtype.UUID        `json:"runtime_id"`
@@ -327,6 +352,15 @@ type User struct {
 	Kind      string             `json:"kind"`
 }
 
+type UserNotificationChannel struct {
+	UserID      pgtype.UUID        `json:"user_id"`
+	ChannelType string             `json:"channel_type"`
+	ChannelID   string             `json:"channel_id"`
+	Enabled     bool               `json:"enabled"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type VerificationCode struct {
 	ID        pgtype.UUID        `json:"id"`
 	Email     string             `json:"email"`
@@ -373,38 +407,6 @@ type WebhookEventLog struct {
 	IssueID      pgtype.UUID        `json:"issue_id"`
 	ErrorMessage pgtype.Text        `json:"error_message"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-}
-
-type UserNotificationChannel struct {
-	UserID      pgtype.UUID        `json:"user_id"`
-	ChannelType string             `json:"channel_type"`
-	ChannelID   string             `json:"channel_id"`
-	Enabled     bool               `json:"enabled"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
-type RecurringIssueTemplate struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	Title               string             `json:"title"`
-	Description         pgtype.Text        `json:"description"`
-	Priority            string             `json:"priority"`
-	AssigneeType        pgtype.Text        `json:"assignee_type"`
-	AssigneeID          pgtype.UUID        `json:"assignee_id"`
-	DueDateOffsetHours  pgtype.Int4        `json:"due_date_offset_hours"`
-	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
-	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
-	Schedule            string             `json:"schedule"`
-	Timezone            string             `json:"timezone"`
-	Enabled             bool               `json:"enabled"`
-	LastTriggeredAt     pgtype.Timestamptz `json:"last_triggered_at"`
-	NextRunAt           pgtype.Timestamptz `json:"next_run_at"`
-	CreatedByID         pgtype.UUID        `json:"created_by_id"`
-	CreatedByType       string             `json:"created_by_type"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Workspace struct {

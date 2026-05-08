@@ -15,6 +15,8 @@ export interface RecurringTemplate {
   schedule: string;
   timezone: string;
   enabled: boolean;
+  max_runs?: number | null;
+  successful_runs_count: number;
   last_triggered_at?: string;
   next_run_at?: string;
   created_by_id: string;
@@ -33,6 +35,7 @@ export interface CreateRecurringTemplateRequest {
   schedule: string;
   timezone?: string;
   enabled?: boolean;
+  max_runs?: number | null;
 }
 
 export interface UpdateRecurringTemplateRequest {
@@ -45,4 +48,5 @@ export interface UpdateRecurringTemplateRequest {
   schedule?: string;
   timezone?: string;
   enabled?: boolean;
+  max_runs?: number | null;
 }

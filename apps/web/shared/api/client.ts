@@ -869,8 +869,14 @@ export class ApiClient {
   }
 
   // Recurring Issue Templates
-  async listRecurringTemplates(): Promise<RecurringTemplate[]> {
-    return this.fetch("/api/recurring-templates");
+  async listRecurringTemplates(options?: { includeInactive?: boolean }): Promise<RecurringTemplate[]> {
+    // The recurring templates list defaults to active (enabled and not yet at
+    // max_runs). Pass includeInactive=true to also receive disabled and
+    // completed templates so admins can re-enable or delete them.
+    const path = options?.includeInactive
+      ? "/api/recurring-templates?include_inactive=true"
+      : "/api/recurring-templates";
+    return this.fetch(path);
   }
 
   async createRecurringTemplate(data: CreateRecurringTemplateRequest): Promise<RecurringTemplate> {

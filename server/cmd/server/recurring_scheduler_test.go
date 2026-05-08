@@ -48,13 +48,21 @@ func TestSchedulerIdempotency(t *testing.T) {
 	id := parseUUID(templateID)
 
 	// First claim: should succeed.
-	_, err = queries.ClaimRecurringTemplate(ctx, id, oldTS, newNextRunAt)
+	_, err = queries.ClaimRecurringTemplate(ctx, db.ClaimRecurringTemplateParams{
+		ID:          id,
+		NextRunAt:   oldTS,
+		NextRunAt_2: newNextRunAt,
+	})
 	if err != nil {
 		t.Fatalf("first ClaimRecurringTemplate failed unexpectedly: %v", err)
 	}
 
 	// Second claim with same old next_run_at: should fail (no rows).
-	_, err = queries.ClaimRecurringTemplate(ctx, id, oldTS, newNextRunAt)
+	_, err = queries.ClaimRecurringTemplate(ctx, db.ClaimRecurringTemplateParams{
+		ID:          id,
+		NextRunAt:   oldTS,
+		NextRunAt_2: newNextRunAt,
+	})
 	if err == nil {
 		t.Fatal("second ClaimRecurringTemplate should have returned no rows, but succeeded")
 	}
@@ -134,7 +142,10 @@ func TestSchedulerTimezoneHandling(t *testing.T) {
 	})
 
 	queries := db.New(testPool)
-	tmpl, err := queries.GetRecurringTemplateInWorkspace(ctx, parseUUID(templateID), parseUUID(testWorkspaceID))
+	tmpl, err := queries.GetRecurringTemplateInWorkspace(ctx, db.GetRecurringTemplateInWorkspaceParams{
+		ID:          parseUUID(templateID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+	})
 	if err != nil {
 		t.Fatalf("GetRecurringTemplateInWorkspace failed: %v", err)
 	}
@@ -157,5 +168,278 @@ func TestSchedulerTimezoneHandling(t *testing.T) {
 		if d.ID.Bytes == parseUUIDBytes(templateID) {
 			t.Fatal("future template should not appear in due list")
 		}
+	}
+}
+
+// TestSchedulerUnlimitedRuns verifies that a template with NULL max_runs is
+// always considered eligible regardless of how many times it has fired.
+func TestSchedulerUnlimitedRuns(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	var templateID string
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO recurring_issue_template (
+			workspace_id, title, priority, schedule, timezone, enabled,
+			next_run_at, created_by_id, created_by_type, successful_runs_count
+		)
+		SELECT $1, 'Unlimited test', 'medium', '* * * * *', 'UTC', TRUE,
+		       now() - interval '1 minute',
+		       m.user_id, 'member', 100
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID).Scan(&templateID)
+	if err != nil {
+		t.Fatalf("failed to insert template: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM recurring_issue_template WHERE id = $1`, templateID)
+	})
+
+	queries := db.New(testPool)
+	due, err := queries.ListDueRecurringTemplates(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListDueRecurringTemplates failed: %v", err)
+	}
+
+	found := false
+	for _, d := range due {
+		if d.ID.Bytes == parseUUIDBytes(templateID) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("unlimited template with high run count should still be due")
+	}
+}
+
+// TestSchedulerCompletedTemplateSkipped verifies that a template whose
+// successful_runs_count has reached max_runs is excluded from the due list and
+// cannot be claimed.
+func TestSchedulerCompletedTemplateSkipped(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	oldNextRunAt := time.Now().Add(-time.Minute)
+	var templateID string
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO recurring_issue_template (
+			workspace_id, title, priority, schedule, timezone, enabled,
+			next_run_at, created_by_id, created_by_type, max_runs, successful_runs_count
+		)
+		SELECT $1, 'Completed test', 'medium', '* * * * *', 'UTC', TRUE, $2,
+		       m.user_id, 'member', 1, 1
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID, oldNextRunAt).Scan(&templateID)
+	if err != nil {
+		t.Fatalf("failed to insert template: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM recurring_issue_template WHERE id = $1`, templateID)
+	})
+
+	queries := db.New(testPool)
+	due, err := queries.ListDueRecurringTemplates(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListDueRecurringTemplates failed: %v", err)
+	}
+	for _, d := range due {
+		if d.ID.Bytes == parseUUIDBytes(templateID) {
+			t.Fatal("completed template should not appear in due list")
+		}
+	}
+
+	// Even an explicit claim must fail when max_runs has been reached.
+	_, err = queries.ClaimRecurringTemplate(ctx, db.ClaimRecurringTemplateParams{
+		ID:          parseUUID(templateID),
+		NextRunAt:   pgtype.Timestamptz{Time: oldNextRunAt, Valid: true},
+		NextRunAt_2: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true},
+	})
+	if err == nil {
+		t.Fatal("ClaimRecurringTemplate should refuse a completed template")
+	}
+}
+
+// TestSchedulerSingleRunCompletion verifies that incrementing the success count
+// for a max_runs=1 template clears next_run_at, retiring the template from the
+// due list. Combined with TestSchedulerCompletedTemplateSkipped this covers the
+// "stop after N successful runs" requirement end to end.
+func TestSchedulerSingleRunCompletion(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	oldNextRunAt := time.Now().Add(-time.Minute)
+	var templateID string
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO recurring_issue_template (
+			workspace_id, title, priority, schedule, timezone, enabled,
+			next_run_at, created_by_id, created_by_type, max_runs
+		)
+		SELECT $1, 'Single-run test', 'medium', '* * * * *', 'UTC', TRUE, $2,
+		       m.user_id, 'member', 1
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID, oldNextRunAt).Scan(&templateID)
+	if err != nil {
+		t.Fatalf("failed to insert template: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM recurring_issue_template WHERE id = $1`, templateID)
+	})
+
+	queries := db.New(testPool)
+	id := parseUUID(templateID)
+
+	// Claim should succeed for the first (and only) run.
+	newNextRunAt := pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true}
+	if _, err := queries.ClaimRecurringTemplate(ctx, db.ClaimRecurringTemplateParams{
+		ID:          id,
+		NextRunAt:   pgtype.Timestamptz{Time: oldNextRunAt, Valid: true},
+		NextRunAt_2: newNextRunAt,
+	}); err != nil {
+		t.Fatalf("first claim failed: %v", err)
+	}
+
+	// Record the successful run; this must clear next_run_at.
+	updated, err := queries.IncrementRecurringTemplateSuccess(ctx, id)
+	if err != nil {
+		t.Fatalf("IncrementRecurringTemplateSuccess failed: %v", err)
+	}
+	if updated.SuccessfulRunsCount != 1 {
+		t.Errorf("expected successful_runs_count=1, got %d", updated.SuccessfulRunsCount)
+	}
+	if updated.NextRunAt.Valid {
+		t.Errorf("expected next_run_at to be NULL after final run, got %v", updated.NextRunAt.Time)
+	}
+
+	// Template should no longer be returned as due.
+	due, err := queries.ListDueRecurringTemplates(ctx, 100)
+	if err != nil {
+		t.Fatalf("ListDueRecurringTemplates failed: %v", err)
+	}
+	for _, d := range due {
+		if d.ID.Bytes == parseUUIDBytes(templateID) {
+			t.Fatal("template that just finished its only run should not appear in due list")
+		}
+	}
+}
+
+// TestListActiveRecurringTemplatesFilters verifies that the active-only listing
+// hides both disabled templates and templates that have reached their max_runs.
+func TestListActiveRecurringTemplatesFilters(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+
+	// Active template: enabled, with available runs.
+	var activeID, disabledID, completedID string
+	err := testPool.QueryRow(ctx, `
+		INSERT INTO recurring_issue_template (
+			workspace_id, title, priority, schedule, timezone, enabled,
+			next_run_at, created_by_id, created_by_type
+		)
+		SELECT $1, 'Active', 'medium', '* * * * *', 'UTC', TRUE,
+		       now() + interval '1 hour',
+		       m.user_id, 'member'
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID).Scan(&activeID)
+	if err != nil {
+		t.Fatalf("insert active failed: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM recurring_issue_template WHERE id = $1`, activeID) })
+
+	err = testPool.QueryRow(ctx, `
+		INSERT INTO recurring_issue_template (
+			workspace_id, title, priority, schedule, timezone, enabled,
+			created_by_id, created_by_type
+		)
+		SELECT $1, 'Disabled', 'medium', '* * * * *', 'UTC', FALSE,
+		       m.user_id, 'member'
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID).Scan(&disabledID)
+	if err != nil {
+		t.Fatalf("insert disabled failed: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM recurring_issue_template WHERE id = $1`, disabledID) })
+
+	err = testPool.QueryRow(ctx, `
+		INSERT INTO recurring_issue_template (
+			workspace_id, title, priority, schedule, timezone, enabled,
+			created_by_id, created_by_type, max_runs, successful_runs_count
+		)
+		SELECT $1, 'Completed', 'medium', '* * * * *', 'UTC', TRUE,
+		       m.user_id, 'member', 3, 3
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID).Scan(&completedID)
+	if err != nil {
+		t.Fatalf("insert completed failed: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM recurring_issue_template WHERE id = $1`, completedID) })
+
+	queries := db.New(testPool)
+	active, err := queries.ListActiveRecurringTemplates(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("ListActiveRecurringTemplates failed: %v", err)
+	}
+
+	hasActive, hasDisabled, hasCompleted := false, false, false
+	for _, t := range active {
+		switch t.ID.Bytes {
+		case parseUUIDBytes(activeID):
+			hasActive = true
+		case parseUUIDBytes(disabledID):
+			hasDisabled = true
+		case parseUUIDBytes(completedID):
+			hasCompleted = true
+		}
+	}
+	if !hasActive {
+		t.Error("active template should be returned")
+	}
+	if hasDisabled {
+		t.Error("disabled template should NOT be returned by active listing")
+	}
+	if hasCompleted {
+		t.Error("completed template should NOT be returned by active listing")
+	}
+
+	// All three should be returned by the unfiltered listing.
+	all, err := queries.ListRecurringTemplates(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("ListRecurringTemplates failed: %v", err)
+	}
+	hasActive, hasDisabled, hasCompleted = false, false, false
+	for _, t := range all {
+		switch t.ID.Bytes {
+		case parseUUIDBytes(activeID):
+			hasActive = true
+		case parseUUIDBytes(disabledID):
+			hasDisabled = true
+		case parseUUIDBytes(completedID):
+			hasCompleted = true
+		}
+	}
+	if !hasActive || !hasDisabled || !hasCompleted {
+		t.Errorf("unfiltered listing should include all templates; got active=%v disabled=%v completed=%v",
+			hasActive, hasDisabled, hasCompleted)
 	}
 }
