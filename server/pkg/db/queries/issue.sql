@@ -80,3 +80,14 @@ RETURNING *;
 
 -- name: DeleteIssue :exec
 DELETE FROM issue WHERE id = $1;
+
+-- name: IncrementIssueAgentMentionChain :one
+UPDATE issue SET
+    agent_mention_chain_count = agent_mention_chain_count + 1
+WHERE id = $1
+RETURNING agent_mention_chain_count;
+
+-- name: ResetIssueAgentMentionChain :exec
+UPDATE issue SET
+    agent_mention_chain_count = 0
+WHERE id = $1;

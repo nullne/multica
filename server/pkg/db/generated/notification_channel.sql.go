@@ -11,6 +11,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteUserNotificationChannel = `-- name: DeleteUserNotificationChannel :exec
+DELETE FROM user_notification_channel
+WHERE user_id = $1 AND channel_type = $2
+`
+
+type DeleteUserNotificationChannelParams struct {
+	UserID      pgtype.UUID `json:"user_id"`
+	ChannelType string      `json:"channel_type"`
+}
+
+func (q *Queries) DeleteUserNotificationChannel(ctx context.Context, arg DeleteUserNotificationChannelParams) error {
+	_, err := q.db.Exec(ctx, deleteUserNotificationChannel, arg.UserID, arg.ChannelType)
+	return err
+}
+
 const getUserNotificationChannel = `-- name: GetUserNotificationChannel :one
 SELECT user_id, channel_type, channel_id, enabled, created_at, updated_at FROM user_notification_channel
 WHERE user_id = $1 AND channel_type = $2
@@ -33,6 +48,39 @@ func (q *Queries) GetUserNotificationChannel(ctx context.Context, arg GetUserNot
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listEnabledTelegramChannelsForUsers = `-- name: ListEnabledTelegramChannelsForUsers :many
+SELECT unc.user_id, unc.channel_id
+FROM user_notification_channel unc
+WHERE unc.channel_type = 'telegram'
+  AND unc.enabled = TRUE
+  AND unc.user_id = ANY($1::uuid[])
+`
+
+type ListEnabledTelegramChannelsForUsersRow struct {
+	UserID    pgtype.UUID `json:"user_id"`
+	ChannelID string      `json:"channel_id"`
+}
+
+func (q *Queries) ListEnabledTelegramChannelsForUsers(ctx context.Context, dollar_1 []pgtype.UUID) ([]ListEnabledTelegramChannelsForUsersRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledTelegramChannelsForUsers, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListEnabledTelegramChannelsForUsersRow{}
+	for rows.Next() {
+		var i ListEnabledTelegramChannelsForUsersRow
+		if err := rows.Scan(&i.UserID, &i.ChannelID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listUserNotificationChannels = `-- name: ListUserNotificationChannels :many
@@ -102,52 +150,4 @@ func (q *Queries) UpsertUserNotificationChannel(ctx context.Context, arg UpsertU
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-const deleteUserNotificationChannel = `-- name: DeleteUserNotificationChannel :exec
-DELETE FROM user_notification_channel
-WHERE user_id = $1 AND channel_type = $2
-`
-
-type DeleteUserNotificationChannelParams struct {
-	UserID      pgtype.UUID `json:"user_id"`
-	ChannelType string      `json:"channel_type"`
-}
-
-func (q *Queries) DeleteUserNotificationChannel(ctx context.Context, arg DeleteUserNotificationChannelParams) error {
-	_, err := q.db.Exec(ctx, deleteUserNotificationChannel, arg.UserID, arg.ChannelType)
-	return err
-}
-
-const listEnabledTelegramChannelsForUsers = `-- name: ListEnabledTelegramChannelsForUsers :many
-SELECT unc.user_id, unc.channel_id
-FROM user_notification_channel unc
-WHERE unc.channel_type = 'telegram'
-  AND unc.enabled = TRUE
-  AND unc.user_id = ANY($1::uuid[])
-`
-
-type ListEnabledTelegramChannelsForUsersRow struct {
-	UserID    pgtype.UUID `json:"user_id"`
-	ChannelID string      `json:"channel_id"`
-}
-
-func (q *Queries) ListEnabledTelegramChannelsForUsers(ctx context.Context, userIds []pgtype.UUID) ([]ListEnabledTelegramChannelsForUsersRow, error) {
-	rows, err := q.db.Query(ctx, listEnabledTelegramChannelsForUsers, userIds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListEnabledTelegramChannelsForUsersRow{}
-	for rows.Next() {
-		var i ListEnabledTelegramChannelsForUsersRow
-		if err := rows.Scan(&i.UserID, &i.ChannelID); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }

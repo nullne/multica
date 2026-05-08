@@ -167,12 +167,21 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		"issue_status":        issue.Status,
 	})
 
+	// A human member comment counts as explicit human intervention and resets
+	// any in-progress agent-to-agent mention chain on this issue.
+	if authorType == "member" {
+		if err := h.Queries.ResetIssueAgentMentionChain(r.Context(), issue.ID); err != nil {
+			slog.Warn("reset agent mention chain failed", "issue_id", issueID, "error", err)
+		}
+	}
+
 	// If the issue is assigned to an agent with on_comment trigger, enqueue a new task.
 	// Skip when the comment comes from the assigned agent itself to avoid loops.
 	// Also skip when the comment @mentions others but not the assignee agent —
 	// the user is talking to someone else, not requesting work from the assignee.
 	// Also skip when replying in a member-started thread without mentioning the
 	// assignee — the user is continuing a member-to-member conversation.
+	onCommentEnqueued := false
 	if authorType == "member" && h.shouldEnqueueOnComment(r.Context(), issue) &&
 		!h.commentMentionsOthersButNotAssignee(comment.Content, issue) &&
 		!h.isReplyToMemberThread(parentComment, comment.Content, issue) {
@@ -185,11 +194,13 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := h.TaskService.EnqueueTaskForIssue(r.Context(), issue, replyTo); err != nil {
 			slog.Warn("enqueue agent task on comment failed", "issue_id", issueID, "error", err)
+		} else {
+			onCommentEnqueued = true
 		}
 	}
 
 	// Trigger @mentioned agents: parse agent mentions and enqueue tasks for each.
-	h.enqueueMentionedAgentTasks(r.Context(), issue, comment, authorType, authorID)
+	h.enqueueMentionedAgentTasks(r.Context(), issue, comment, authorType, authorID, onCommentEnqueued)
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -283,17 +294,25 @@ func (h *Handler) postSystemNotice(ctx context.Context, issue db.Issue, content 
 	})
 }
 
+// AgentMentionChainLimit caps the number of consecutive agent-to-agent mention
+// handoffs allowed on a single issue without human intervention. Once reached,
+// further agent-triggered mention dispatches are blocked and a system notice is
+// posted. A human member comment resets the chain count.
+const AgentMentionChainLimit = 5
+
 // enqueueMentionedAgentTasks parses @agent mentions from comment content and
-// enqueues a task for each mentioned agent. Skips self-mentions, agents that
-// are already the issue's assignee (handled by on_comment), agents with
+// enqueues a task for each mentioned agent. Skips self-mentions, agents whose
+// task was already enqueued via the on_comment trigger above, agents with
 // on_mention trigger disabled, and private agents mentioned by non-owner
 // members (only the agent owner or workspace admin/owner can mention a
-// private agent).
+// private agent). When the comment author is an agent, this function also
+// enforces the agent-to-agent mention chain limit per issue.
 // Note: no status gate here — @mention is an explicit action and should work
 // even on done/cancelled issues (the agent can reopen the issue if needed).
-func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue, comment db.Comment, authorType, authorID string) {
+func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue, comment db.Comment, authorType, authorID string, onCommentEnqueued bool) {
 	wsID := uuidToString(issue.WorkspaceID)
 	mentions := util.ParseMentions(comment.Content)
+	chainLimitNoticePosted := false
 	for _, m := range mentions {
 		if m.Type != "agent" {
 			continue
@@ -303,9 +322,12 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			continue
 		}
 		agentUUID := parseUUID(m.ID)
-		// Prevent duplicate: skip if this agent is the issue's assignee
-		// (already handled by the on_comment trigger above).
-		if issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" &&
+		// Prevent duplicate: skip if the on_comment trigger already enqueued a
+		// task for this assignee in response to the same comment. We only
+		// suppress here when on_comment actually fired — agent-authored
+		// comments and member comments where on_comment was suppressed (e.g.
+		// @all broadcast) still flow through mention dispatch normally.
+		if onCommentEnqueued && issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" &&
 			issue.AssigneeID.Valid && uuidToString(issue.AssigneeID) == m.ID {
 			continue
 		}
@@ -315,6 +337,27 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 		noticeParent := comment.ID
 		if comment.ParentID.Valid {
 			noticeParent = comment.ParentID
+		}
+
+		// Agent-to-agent chain limit: when the comment is authored by an agent
+		// and we are about to enqueue a mention-triggered task for another
+		// agent, ensure the consecutive handoff count has not exceeded the
+		// configured limit. The chain resets on any human member comment.
+		if authorType == "agent" {
+			currentChain, err := h.getIssueAgentMentionChain(ctx, issue.ID)
+			if err != nil {
+				slog.Warn("load agent mention chain failed", "issue_id", uuidToString(issue.ID), "error", err)
+			} else if currentChain >= AgentMentionChainLimit {
+				if !chainLimitNoticePosted {
+					h.postSystemNotice(ctx, issue, fmt.Sprintf(
+						"Agent-to-agent mention chain limit reached (%d consecutive handoffs). "+
+							"Awaiting human input before further agent dispatches on this issue.",
+						AgentMentionChainLimit,
+					), noticeParent)
+					chainLimitNoticePosted = true
+				}
+				continue
+			}
 		}
 
 		// Load the agent to check visibility, archive status, and trigger config.
@@ -372,8 +415,26 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
 			h.postSystemNotice(ctx, issue, agentLink+" has no available runtime to execute the task.", noticeParent)
 			slog.Warn("enqueue mention agent task failed", "issue_id", uuidToString(issue.ID), "agent_id", m.ID, "error", err)
+			continue
+		}
+		// Successful agent-to-agent handoff — increment the chain count so we
+		// can stop runaway recursion. Member-authored mentions never count.
+		if authorType == "agent" {
+			if _, err := h.Queries.IncrementIssueAgentMentionChain(ctx, issue.ID); err != nil {
+				slog.Warn("increment agent mention chain failed", "issue_id", uuidToString(issue.ID), "error", err)
+			}
 		}
 	}
+}
+
+// getIssueAgentMentionChain reads the current consecutive agent-to-agent
+// mention chain count for an issue. Returns 0 if the issue cannot be loaded.
+func (h *Handler) getIssueAgentMentionChain(ctx context.Context, issueID pgtype.UUID) (int32, error) {
+	issue, err := h.Queries.GetIssue(ctx, issueID)
+	if err != nil {
+		return 0, err
+	}
+	return issue.AgentMentionChainCount, nil
 }
 
 func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
