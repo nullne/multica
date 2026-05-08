@@ -773,8 +773,14 @@ type CommentIssueActionConfig struct {
 
 // matchesFilters returns true when the action should run for this event,
 // based on the EventTypes/Repos/GitHubLabels filters. Empty filter lists
-// mean "match all".
+// mean "match all" — except for `*.labeled` events: those only fire when
+// the action has opted in via a non-empty GitHubLabels filter, so existing
+// actions configured before label filtering existed do not start receiving
+// extra triggers when a label is added to a PR/issue.
 func actionMatchesFilters(eventTypes, repos, githubLabels []string, evt wh.Event) bool {
+	if isGitHubLabeledEvent(evt.Type) && len(githubLabels) == 0 {
+		return false
+	}
 	if len(eventTypes) > 0 {
 		matched := false
 		for _, t := range eventTypes {
@@ -824,6 +830,12 @@ func actionMatchesFilters(eventTypes, repos, githubLabels []string, evt wh.Event
 		}
 	}
 	return true
+}
+
+// isGitHubLabeledEvent reports whether evt.Type is one of the GitHub
+// `labeled` action events emitted by the github adapter.
+func isGitHubLabeledEvent(eventType string) bool {
+	return eventType == "github.pull_request.labeled" || eventType == "github.issues.labeled"
 }
 
 // parseGitHubLabels turns the comma-separated label string the github

@@ -220,6 +220,54 @@ func TestActionMatchesFilters_GitHubLabels_TrimsWhitespace(t *testing.T) {
 	}
 }
 
+// Existing actions configured before the label-filter feature shipped
+// must not start receiving `labeled` events when their github_labels
+// filter is empty — the adapter accepts those events for new flows, but
+// they should be opted into explicitly.
+func TestActionMatchesFilters_LabeledRequiresExplicitGitHubLabels(t *testing.T) {
+	prLabeled := wh.Event{
+		Type: "github.pull_request.labeled",
+		Data: map[string]string{"repo": "acme/widgets", "labels": "needs-triage", "label_name": "needs-triage"},
+	}
+	issueLabeled := wh.Event{
+		Type: "github.issues.labeled",
+		Data: map[string]string{"repo": "acme/widgets", "labels": "p1", "label_name": "p1"},
+	}
+
+	// Empty filter set — preserves today's behavior of not triggering on labeled events.
+	if actionMatchesFilters(nil, nil, nil, prLabeled) {
+		t.Error("PR labeled should be filtered out when github_labels filter is empty")
+	}
+	if actionMatchesFilters(nil, nil, nil, issueLabeled) {
+		t.Error("issue labeled should be filtered out when github_labels filter is empty")
+	}
+
+	// Existing prefix event-type filter without a label filter must also not match.
+	if actionMatchesFilters([]string{"github.pull_request"}, nil, nil, prLabeled) {
+		t.Error("PR labeled should be filtered out under prefix event_types when github_labels is empty")
+	}
+	if actionMatchesFilters([]string{"github.issues"}, nil, nil, issueLabeled) {
+		t.Error("issue labeled should be filtered out under prefix event_types when github_labels is empty")
+	}
+
+	// Opting in via a matching github_labels filter lets the labeled event through.
+	if !actionMatchesFilters(nil, nil, []string{"needs-triage"}, prLabeled) {
+		t.Error("PR labeled with a matching github_labels filter should match")
+	}
+	if !actionMatchesFilters(nil, nil, []string{"p1"}, issueLabeled) {
+		t.Error("issue labeled with a matching github_labels filter should match")
+	}
+
+	// Non-labeled events must keep their existing empty-filter behavior.
+	prOpened := wh.Event{
+		Type: "github.pull_request.opened",
+		Data: map[string]string{"repo": "acme/widgets"},
+	}
+	if !actionMatchesFilters(nil, nil, nil, prOpened) {
+		t.Error("PR opened with empty filters should still match (regression)")
+	}
+}
+
 func TestValidateActionConfig_CommentIssueRequiresBot(t *testing.T) {
 	webhookNoBot := db.Webhook{}
 	cfg := CommentIssueActionConfig{ContentTemplate: "{{.body}}"}
