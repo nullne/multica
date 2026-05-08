@@ -87,21 +87,23 @@ func (a *githubAdapter) Parse(payload json.RawMessage, headers http.Header) ([]E
 	}}, nil
 }
 
-// isRelevantGitHubAction filters event actions so noisy webhooks like label
-// changes or assignment churn never reach the action pipeline.
+// isRelevantGitHubAction filters event actions so noisy webhooks like
+// assignment churn never reach the action pipeline. We accept "labeled"
+// for PRs and issues so label-filter actions can fire when a configured
+// label is added to an existing PR/issue after creation.
 func isRelevantGitHubAction(eventType, action string) bool {
 	switch eventType {
 	case "push":
 		return true
 	case "pull_request":
 		switch action {
-		case "opened", "synchronize", "reopened", "closed":
+		case "opened", "synchronize", "reopened", "closed", "labeled":
 			return true
 		}
 		return false
 	case "issues":
 		switch action {
-		case "opened", "reopened", "closed":
+		case "opened", "reopened", "closed", "labeled":
 			return true
 		}
 		return false
@@ -180,7 +182,13 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 				Ref string `json:"ref"`
 			} `json:"base"`
 			Merged bool `json:"merged"`
+			Labels []struct {
+				Name string `json:"name"`
+			} `json:"labels"`
 		} `json:"pull_request"`
+		Label struct {
+			Name string `json:"name"`
+		} `json:"label"`
 		Repository struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
@@ -194,7 +202,12 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 	}
 	sourceURLs := githubPRSourceURLs(ev.Repository.FullName, pr.Body, pr.HTMLURL)
 
-	return map[string]string{
+	var labelNames []string
+	for _, l := range pr.Labels {
+		labelNames = append(labelNames, l.Name)
+	}
+
+	data := map[string]string{
 		"action":      action,
 		"number":      fmt.Sprintf("%d", pr.Number),
 		"title":       pr.Title,
@@ -203,12 +216,18 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 		"html_url":    pr.HTMLURL,
 		"head_branch": pr.Head.Ref,
 		"base_branch": pr.Base.Ref,
+		"labels":      strings.Join(labelNames, ", "),
 		"source_url":  pr.HTMLURL,
 		"source_urls": strings.Join(sourceURLs, "\n"),
 		"source_kind": "pr",
 		"external_id": fmt.Sprintf("%s#%d", ev.Repository.FullName, pr.Number),
 		"body":        fmt.Sprintf("**PR [#%d](%s): %s**\n**Author:** %s\n**Branch:** `%s` → `%s`\n**Action:** %s\n\n%s", pr.Number, pr.HTMLURL, pr.Title, pr.User.Login, pr.Head.Ref, pr.Base.Ref, action, pr.Body),
 	}
+	if action == "labeled" && ev.Label.Name != "" {
+		data["label_name"] = ev.Label.Name
+		data["dedup_key"] = fmt.Sprintf("github:pull_request:labeled:%s:%s", pr.HTMLURL, ev.Label.Name)
+	}
+	return data
 }
 
 var (
@@ -278,6 +297,9 @@ func parseGitHubIssues(body []byte) map[string]string {
 				Name string `json:"name"`
 			} `json:"labels"`
 		} `json:"issue"`
+		Label struct {
+			Name string `json:"name"`
+		} `json:"label"`
 		Repository struct {
 			FullName string `json:"full_name"`
 		} `json:"repository"`
@@ -290,7 +312,7 @@ func parseGitHubIssues(body []byte) map[string]string {
 		labelNames = append(labelNames, l.Name)
 	}
 
-	return map[string]string{
+	data := map[string]string{
 		"action":      ev.Action,
 		"number":      fmt.Sprintf("%d", issue.Number),
 		"title":       issue.Title,
@@ -303,6 +325,11 @@ func parseGitHubIssues(body []byte) map[string]string {
 		"external_id": fmt.Sprintf("%s#%d", ev.Repository.FullName, issue.Number),
 		"body":        fmt.Sprintf("**GitHub Issue [#%d](%s): %s**\n**Author:** %s\n**Action:** %s\n\n%s", issue.Number, issue.HTMLURL, issue.Title, issue.User.Login, ev.Action, issue.Body),
 	}
+	if ev.Action == "labeled" && ev.Label.Name != "" {
+		data["label_name"] = ev.Label.Name
+		data["dedup_key"] = fmt.Sprintf("github:issues:labeled:%s:%s", issue.HTMLURL, ev.Label.Name)
+	}
+	return data
 }
 
 func parseGitHubIssueComment(body []byte) map[string]string {
@@ -369,6 +396,7 @@ func (a *githubAdapter) Keys() []AdapterKey {
 		{Key: "head_branch", Description: "PR head branch", Required: false},
 		{Key: "base_branch", Description: "PR base branch", Required: false},
 		{Key: "html_url", Description: "Direct URL to the PR / issue / comment", Required: false},
+		{Key: "labels", Description: "Comma-separated label names attached to the PR or issue", Required: false},
 		{Key: "source_url", Description: "Stable URL of the parent resource — used by issue_link reverse lookup", Required: true},
 		{Key: "source_urls", Description: "Ordered newline-separated candidate source URLs for reverse lookup", Required: false},
 		{Key: "source_kind", Description: "'pr' | 'issue' | 'commit'", Required: true},

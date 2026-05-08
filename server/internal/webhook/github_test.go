@@ -221,7 +221,9 @@ func TestGitHubAdapter_IssueCommentOnIssue(t *testing.T) {
 
 func TestGitHubAdapter_FiltersIrrelevantActions(t *testing.T) {
 	a := &githubAdapter{}
-	body := []byte(`{"action": "labeled", "pull_request": {"number": 1}, "repository": {"full_name": "org/repo"}}`)
+	// "assigned" is one of the actions we still drop; label-add is now passed
+	// through so label-filter actions can fire.
+	body := []byte(`{"action": "assigned", "pull_request": {"number": 1}, "repository": {"full_name": "org/repo"}}`)
 	headers := http.Header{}
 	headers.Set("X-GitHub-Event", "pull_request")
 
@@ -230,7 +232,116 @@ func TestGitHubAdapter_FiltersIrrelevantActions(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(events) != 0 {
-		t.Errorf("expected no events for labeled action, got %d", len(events))
+		t.Errorf("expected no events for assigned action, got %d", len(events))
+	}
+}
+
+func TestGitHubAdapter_PullRequestLabeled(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "labeled",
+		"pull_request": {
+			"number": 42,
+			"title": "Add login feature",
+			"body": "x",
+			"html_url": "https://github.com/org/repo/pull/42",
+			"user": {"login": "alice"},
+			"head": {"ref": "feat/login"},
+			"base": {"ref": "main"},
+			"labels": [{"name": "bug"}, {"name": "agent-task"}]
+		},
+		"label": {"name": "agent-task"},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "pull_request")
+
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.Type != "github.pull_request.labeled" {
+		t.Errorf("type = %q, want github.pull_request.labeled", ev.Type)
+	}
+	if ev.Data["labels"] != "bug, agent-task" {
+		t.Errorf("labels = %q, want 'bug, agent-task'", ev.Data["labels"])
+	}
+	if ev.Data["label_name"] != "agent-task" {
+		t.Errorf("label_name = %q, want agent-task", ev.Data["label_name"])
+	}
+	wantDedup := "github:pull_request:labeled:https://github.com/org/repo/pull/42:agent-task"
+	if ev.DedupKey != wantDedup {
+		t.Errorf("dedup_key = %q, want %q", ev.DedupKey, wantDedup)
+	}
+}
+
+func TestGitHubAdapter_IssueLabeled(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "labeled",
+		"issue": {
+			"number": 7,
+			"title": "Bug",
+			"body": "boom",
+			"html_url": "https://github.com/org/repo/issues/7",
+			"user": {"login": "bob"},
+			"labels": [{"name": "bug"}, {"name": "p1"}]
+		},
+		"label": {"name": "p1"},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "issues")
+
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.Type != "github.issues.labeled" {
+		t.Errorf("type = %q, want github.issues.labeled", ev.Type)
+	}
+	if ev.Data["label_name"] != "p1" {
+		t.Errorf("label_name = %q, want p1", ev.Data["label_name"])
+	}
+	wantDedup := "github:issues:labeled:https://github.com/org/repo/issues/7:p1"
+	if ev.DedupKey != wantDedup {
+		t.Errorf("dedup_key = %q, want %q", ev.DedupKey, wantDedup)
+	}
+}
+
+func TestGitHubAdapter_PullRequestLabelsExtracted(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "opened",
+		"pull_request": {
+			"number": 10,
+			"title": "T",
+			"body": "x",
+			"html_url": "https://github.com/org/repo/pull/10",
+			"user": {"login": "a"},
+			"head": {"ref": "h"},
+			"base": {"ref": "main"},
+			"labels": [{"name": "bug"}, {"name": "needs-review"}]
+		},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "pull_request")
+
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if events[0].Data["labels"] != "bug, needs-review" {
+		t.Errorf("labels = %q", events[0].Data["labels"])
 	}
 }
 

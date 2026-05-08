@@ -145,38 +145,126 @@ func TestMergeActionConfig_CommentIssue(t *testing.T) {
 
 func TestActionMatchesFilters_NoFilters(t *testing.T) {
 	evt := wh.Event{Type: "github.pull_request.opened", Data: map[string]string{"repo": "acme/widgets"}}
-	if !actionMatchesFilters(nil, nil, evt) {
+	if !actionMatchesFilters(nil, nil, nil, evt) {
 		t.Error("empty filters should match everything")
 	}
 }
 
 func TestActionMatchesFilters_EventTypePrefix(t *testing.T) {
 	evt := wh.Event{Type: "github.pull_request.opened", Data: map[string]string{"repo": "acme/widgets"}}
-	if !actionMatchesFilters([]string{"github.pull_request"}, nil, evt) {
+	if !actionMatchesFilters([]string{"github.pull_request"}, nil, nil, evt) {
 		t.Error("prefix match should accept github.pull_request.opened")
 	}
-	if actionMatchesFilters([]string{"github.issues"}, nil, evt) {
+	if actionMatchesFilters([]string{"github.issues"}, nil, nil, evt) {
 		t.Error("non-matching prefix should reject")
 	}
-	if !actionMatchesFilters([]string{"github.issues", "github.pull_request"}, nil, evt) {
+	if !actionMatchesFilters([]string{"github.issues", "github.pull_request"}, nil, nil, evt) {
 		t.Error("OR match should accept when one entry matches")
 	}
 }
 
 func TestActionMatchesFilters_RepoMatch(t *testing.T) {
 	evt := wh.Event{Type: "github.push", Data: map[string]string{"repo": "acme/widgets"}}
-	if !actionMatchesFilters(nil, []string{"acme/widgets"}, evt) {
+	if !actionMatchesFilters(nil, []string{"acme/widgets"}, nil, evt) {
 		t.Error("exact repo match should accept")
 	}
-	if actionMatchesFilters(nil, []string{"other/repo"}, evt) {
+	if actionMatchesFilters(nil, []string{"other/repo"}, nil, evt) {
 		t.Error("non-matching repo should reject")
 	}
 }
 
 func TestActionMatchesFilters_ExactEventType(t *testing.T) {
 	evt := wh.Event{Type: "github.push", Data: map[string]string{"repo": "acme/widgets"}}
-	if !actionMatchesFilters([]string{"github.push"}, nil, evt) {
+	if !actionMatchesFilters([]string{"github.push"}, nil, nil, evt) {
 		t.Error("exact event type should match")
+	}
+}
+
+func TestActionMatchesFilters_GitHubLabels(t *testing.T) {
+	evt := wh.Event{
+		Type: "github.pull_request.opened",
+		Data: map[string]string{
+			"repo":   "acme/widgets",
+			"labels": "bug, agent-task, p1",
+		},
+	}
+
+	if !actionMatchesFilters(nil, nil, nil, evt) {
+		t.Error("empty label filter should match")
+	}
+	if !actionMatchesFilters(nil, nil, []string{"agent-task"}, evt) {
+		t.Error("matching label should accept")
+	}
+	if !actionMatchesFilters(nil, nil, []string{"unrelated", "bug"}, evt) {
+		t.Error("OR match should accept when any label is present")
+	}
+	if actionMatchesFilters(nil, nil, []string{"unrelated"}, evt) {
+		t.Error("non-matching label should reject")
+	}
+
+	// Empty data labels: any non-empty filter rejects.
+	emptyLabels := wh.Event{Type: "github.pull_request.opened", Data: map[string]string{"repo": "acme/widgets"}}
+	if actionMatchesFilters(nil, nil, []string{"bug"}, emptyLabels) {
+		t.Error("event with no labels should not match label filter")
+	}
+}
+
+func TestActionMatchesFilters_GitHubLabels_TrimsWhitespace(t *testing.T) {
+	evt := wh.Event{
+		Type: "github.issues.labeled",
+		Data: map[string]string{"labels": "needs-triage"},
+	}
+	// Whitespace-padded entries should still match.
+	if !actionMatchesFilters(nil, nil, []string{"", " needs-triage "}, evt) {
+		t.Error("whitespace-padded filter entry should match label")
+	}
+}
+
+// Existing actions configured before the label-filter feature shipped
+// must not start receiving `labeled` events when their github_labels
+// filter is empty — the adapter accepts those events for new flows, but
+// they should be opted into explicitly.
+func TestActionMatchesFilters_LabeledRequiresExplicitGitHubLabels(t *testing.T) {
+	prLabeled := wh.Event{
+		Type: "github.pull_request.labeled",
+		Data: map[string]string{"repo": "acme/widgets", "labels": "needs-triage", "label_name": "needs-triage"},
+	}
+	issueLabeled := wh.Event{
+		Type: "github.issues.labeled",
+		Data: map[string]string{"repo": "acme/widgets", "labels": "p1", "label_name": "p1"},
+	}
+
+	// Empty filter set — preserves today's behavior of not triggering on labeled events.
+	if actionMatchesFilters(nil, nil, nil, prLabeled) {
+		t.Error("PR labeled should be filtered out when github_labels filter is empty")
+	}
+	if actionMatchesFilters(nil, nil, nil, issueLabeled) {
+		t.Error("issue labeled should be filtered out when github_labels filter is empty")
+	}
+
+	// Existing prefix event-type filter without a label filter must also not match.
+	if actionMatchesFilters([]string{"github.pull_request"}, nil, nil, prLabeled) {
+		t.Error("PR labeled should be filtered out under prefix event_types when github_labels is empty")
+	}
+	if actionMatchesFilters([]string{"github.issues"}, nil, nil, issueLabeled) {
+		t.Error("issue labeled should be filtered out under prefix event_types when github_labels is empty")
+	}
+
+	// Opting in via a matching github_labels filter lets the labeled event through.
+	if !actionMatchesFilters(nil, nil, []string{"needs-triage"}, prLabeled) {
+		t.Error("PR labeled with a matching github_labels filter should match")
+	}
+	if !actionMatchesFilters(nil, nil, []string{"p1"}, issueLabeled) {
+		t.Error("issue labeled with a matching github_labels filter should match")
+	}
+
+	// Non-labeled events must keep their existing empty-filter behavior.
+	prOpened := wh.Event{
+		Type: "github.pull_request.opened",
+		Data: map[string]string{"repo": "acme/widgets"},
+	}
+	if !actionMatchesFilters(nil, nil, nil, prOpened) {
+		t.Error("PR opened with empty filters should still match (regression)")
 	}
 }
 
