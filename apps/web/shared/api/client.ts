@@ -53,6 +53,9 @@ import type {
   AdapterInfo,
   BotUser,
   CreateBotUserRequest,
+  RecurringTemplate,
+  CreateRecurringTemplateRequest,
+  UpdateRecurringTemplateRequest,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
 
@@ -863,5 +866,28 @@ export class ApiClient {
 
   async listWebhookAdapters(): Promise<AdapterInfo[]> {
     return this.fetch("/api/webhook-adapters");
+  }
+
+  // Recurring Issue Templates
+  async listRecurringTemplates(): Promise<RecurringTemplate[]> {
+    return this.fetch("/api/recurring-templates");
+  }
+
+  async createRecurringTemplate(data: CreateRecurringTemplateRequest): Promise<RecurringTemplate> {
+    return this.fetch("/api/recurring-templates", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateRecurringTemplate(id: string, data: UpdateRecurringTemplateRequest): Promise<RecurringTemplate> {
+    return this.fetch(`/api/recurring-templates/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteRecurringTemplate(id: string): Promise<void> {
+    await this.fetch(`/api/recurring-templates/${id}`, { method: "DELETE" });
   }
 }
