@@ -313,6 +313,91 @@ func TestMentionDispatch_ChainSlotReleasedOnEnqueueFailure(t *testing.T) {
 	}
 }
 
+// TestTryReserveIssueAgentMentionChain_ReleaseAfterResetIsNoOp verifies the
+// reset-vs-rollback race: a release whose generation no longer matches must
+// not decrement the chain count, otherwise a stale rollback from a pre-reset
+// reservation would corrupt the post-reset chain budget.
+func TestTryReserveIssueAgentMentionChain_ReleaseAfterResetIsNoOp(t *testing.T) {
+	issueID := createTestIssue(t, "Mention dispatch: release after reset is no-op")
+
+	// Reserve a slot, capture the generation.
+	pre, err := testHandler.Queries.TryReserveIssueAgentMentionChain(
+		context.Background(),
+		dbq.TryReserveIssueAgentMentionChainParams{
+			ID:       parseUUID(issueID),
+			MaxCount: AgentMentionChainLimit,
+		},
+	)
+	if err != nil {
+		t.Fatalf("first reservation failed: %v", err)
+	}
+	if pre.AgentMentionChainCount != 1 {
+		t.Fatalf("expected count=1 after first reservation, got %d", pre.AgentMentionChainCount)
+	}
+
+	// Human reset bumps the generation and zeroes the count.
+	if err := testHandler.Queries.ResetIssueAgentMentionChain(
+		context.Background(), parseUUID(issueID),
+	); err != nil {
+		t.Fatalf("reset failed: %v", err)
+	}
+
+	// A new reservation reads the post-reset epoch.
+	post, err := testHandler.Queries.TryReserveIssueAgentMentionChain(
+		context.Background(),
+		dbq.TryReserveIssueAgentMentionChainParams{
+			ID:       parseUUID(issueID),
+			MaxCount: AgentMentionChainLimit,
+		},
+	)
+	if err != nil {
+		t.Fatalf("second reservation failed: %v", err)
+	}
+	if post.AgentMentionChainCount != 1 {
+		t.Fatalf("expected count=1 after post-reset reservation, got %d", post.AgentMentionChainCount)
+	}
+	if post.AgentMentionChainGeneration <= pre.AgentMentionChainGeneration {
+		t.Fatalf("expected reset to bump generation: pre=%d post=%d",
+			pre.AgentMentionChainGeneration, post.AgentMentionChainGeneration)
+	}
+
+	// The pre-reset rollback must be a no-op (stale generation).
+	rows, err := testHandler.Queries.ReleaseIssueAgentMentionChainSlot(
+		context.Background(),
+		dbq.ReleaseIssueAgentMentionChainSlotParams{
+			ID:         parseUUID(issueID),
+			Generation: pre.AgentMentionChainGeneration,
+		},
+	)
+	if err != nil {
+		t.Fatalf("stale release failed: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("expected stale release to affect 0 rows, got %d", rows)
+	}
+	if got := readAgentMentionChain(t, issueID); got != 1 {
+		t.Fatalf("post-reset chain count was corrupted by stale release: got %d", got)
+	}
+
+	// A release with the matching post-reset generation succeeds and decrements.
+	rows, err = testHandler.Queries.ReleaseIssueAgentMentionChainSlot(
+		context.Background(),
+		dbq.ReleaseIssueAgentMentionChainSlotParams{
+			ID:         parseUUID(issueID),
+			Generation: post.AgentMentionChainGeneration,
+		},
+	)
+	if err != nil {
+		t.Fatalf("matching release failed: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("expected matching release to affect 1 row, got %d", rows)
+	}
+	if got := readAgentMentionChain(t, issueID); got != 0 {
+		t.Fatalf("expected count=0 after matching release, got %d", got)
+	}
+}
+
 // TestTryReserveIssueAgentMentionChain_Concurrent drives the atomic reservation
 // query from many goroutines at once and verifies that the chain count never
 // exceeds the limit. This guards against the TOCTOU race that an earlier

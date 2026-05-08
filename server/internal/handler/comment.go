@@ -396,15 +396,19 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 		// Agent-to-agent chain guard. When the comment author is an agent we
 		// atomically reserve one slot before enqueueing — a single conditional
 		// UPDATE is the serialization point so concurrent agent comments can
-		// never collectively exceed AgentMentionChainLimit. If the enqueue
-		// itself fails, we release the slot so a subsequent retry has the same
-		// budget. Member-authored mentions never consume a slot.
+		// never collectively exceed AgentMentionChainLimit. We capture the
+		// generation tag at reservation time; the matching release will only
+		// decrement when the generation still matches, so a human-reset that
+		// races with this reservation can never cause our rollback to corrupt
+		// the post-reset chain. Member-authored mentions never consume a slot.
 		chainSlotReserved := false
+		var chainSlotGeneration int64
 		if authorType == "agent" {
-			if _, err := h.Queries.TryReserveIssueAgentMentionChain(ctx, db.TryReserveIssueAgentMentionChainParams{
+			row, err := h.Queries.TryReserveIssueAgentMentionChain(ctx, db.TryReserveIssueAgentMentionChainParams{
 				ID:       issue.ID,
 				MaxCount: AgentMentionChainLimit,
-			}); err != nil {
+			})
+			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					if !chainLimitNoticePosted {
 						h.postSystemNotice(ctx, issue, fmt.Sprintf(
@@ -420,11 +424,15 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 				continue
 			}
 			chainSlotReserved = true
+			chainSlotGeneration = row.AgentMentionChainGeneration
 		}
 
 		if _, err := h.TaskService.EnqueueTaskForMention(ctx, issue, agentUUID, replyTo); err != nil {
 			if chainSlotReserved {
-				if _, derr := h.Queries.ReleaseIssueAgentMentionChainSlot(ctx, issue.ID); derr != nil {
+				if _, derr := h.Queries.ReleaseIssueAgentMentionChainSlot(ctx, db.ReleaseIssueAgentMentionChainSlotParams{
+					ID:         issue.ID,
+					Generation: chainSlotGeneration,
+				}); derr != nil {
 					slog.Warn("release agent mention chain slot failed", "issue_id", uuidToString(issue.ID), "error", derr)
 				}
 			}
