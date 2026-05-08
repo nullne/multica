@@ -12,6 +12,7 @@ import {
   ChevronRight,
   GitBranch,
   Link2,
+  Loader2,
   MoreHorizontal,
   PanelRight,
   Plus,
@@ -64,7 +65,14 @@ import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/
 import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
-import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
+import {
+  TaskRunCard,
+  useIssueTaskRuns,
+  groupTaskRunsByTrigger,
+  isActiveTask,
+  scrollToTaskRun,
+} from "./agent-live-card";
+import type { AgentTask } from "@/shared/types/agent";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
@@ -713,6 +721,12 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
     subscribers, loading: subscribersLoading, isSubscribed, toggleSubscribe: handleToggleSubscribe, toggleSubscriber,
   } = useIssueSubscribers(id, user?.id);
 
+  // Agent task runs for this issue — used to render run cards inline at
+  // the point that triggered them (issue or comment).
+  const taskRuns = useIssueTaskRuns(id);
+  const taskRunBuckets = useMemo(() => groupTaskRunsByTrigger(taskRuns), [taskRuns]);
+  const activeTaskRun = useMemo(() => taskRuns.find(isActiveTask) ?? null, [taskRuns]);
+
   const loading = issueLoading;
 
   // Reset internal scroll to top whenever the displayed issue changes.
@@ -1292,20 +1306,9 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
               </div>
             </div>
 
-            {/* Agent live output */}
-            <div className="mt-4">
-              <AgentLiveCard
-                issueId={id}
-                agentName={issue.assignee_type === "agent" && issue.assignee_id ? getActorName("agent", issue.assignee_id) : undefined}
-              />
-            </div>
-
-            {/* Agent execution history */}
-            <div className="mt-3">
-              <TaskRunHistory issueId={id} />
-            </div>
-
-            {/* Timeline entries */}
+            {/* Timeline entries — agent task runs render inline at the
+                point that triggered them: issue-triggered runs at the top,
+                comment-triggered runs directly below their comment thread. */}
             <div className="mt-4 flex flex-col gap-3">
               {timelineLoading ? (
                 <div className="space-y-4">
@@ -1329,6 +1332,62 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     repliesByParent.set(e.parent_id, list);
                   }
                 }
+
+                // Resolve every comment id (top-level or reply) to its
+                // top-level ancestor so a task triggered by a reply renders
+                // beneath the thread that contains it.
+                const topLevelOf = new Map<string, string>();
+                for (const e of timeline) {
+                  if (e.type !== "comment") continue;
+                  if (!e.parent_id) topLevelOf.set(e.id, e.id);
+                }
+                for (const e of timeline) {
+                  if (e.type !== "comment" || !e.parent_id) continue;
+                  let cur: string | null = e.parent_id;
+                  let topId: string | null = null;
+                  const seen = new Set<string>();
+                  while (cur && !seen.has(cur)) {
+                    seen.add(cur);
+                    if (topLevelOf.has(cur)) {
+                      topId = topLevelOf.get(cur) ?? null;
+                      break;
+                    }
+                    const parent = timeline.find((t) => t.id === cur && t.type === "comment");
+                    cur = parent?.parent_id ?? null;
+                  }
+                  if (topId) topLevelOf.set(e.id, topId);
+                }
+
+                // Bucket comment-triggered task runs by their top-level
+                // comment id. Orphans (comment not in the loaded timeline)
+                // fall through to the issue-level bucket so they remain
+                // visible.
+                const runsByTopLevel = new Map<string, AgentTask[]>();
+                const orphanRuns: AgentTask[] = [];
+                for (const [commentId, runs] of taskRunBuckets.byCommentId) {
+                  const topId = topLevelOf.get(commentId);
+                  if (!topId) {
+                    orphanRuns.push(...runs);
+                    continue;
+                  }
+                  const list = runsByTopLevel.get(topId) ?? [];
+                  list.push(...runs);
+                  runsByTopLevel.set(topId, list);
+                }
+                for (const list of runsByTopLevel.values()) {
+                  list.sort(
+                    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+                  );
+                }
+
+                const issueLevelRuns = [...taskRunBuckets.issueTriggered, ...orphanRuns].sort(
+                  (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+                );
+
+                const fallbackAgentName =
+                  issue.assignee_type === "agent" && issue.assignee_id
+                    ? getActorName("agent", issue.assignee_id)
+                    : undefined;
 
                 // Coalesce: same actor + same action within 2 min → keep last only
                 const COALESCE_MS = 2 * 60 * 1000;
@@ -1366,22 +1425,36 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   }
                 }
 
-                return groups.map((group) => {
+                const renderedGroups = groups.map((group) => {
                   if (group.type === "comment") {
                     const entry = group.entries[0]!;
+                    const triggeredRuns = runsByTopLevel.get(entry.id) ?? [];
                     return (
-                      <div key={entry.id} id={`comment-${entry.id}`}>
-                        <CommentCard
-                          issueId={id}
-                          entry={entry}
-                          allReplies={repliesByParent}
-                          currentUserId={user?.id}
-                          onReply={submitReply}
-                          onEdit={editComment}
-                          onDelete={deleteComment}
-                          onToggleReaction={handleToggleReaction}
-                          highlightedCommentId={highlightedId}
-                        />
+                      <div key={entry.id} className="flex flex-col gap-3">
+                        <div id={`comment-${entry.id}`}>
+                          <CommentCard
+                            issueId={id}
+                            entry={entry}
+                            allReplies={repliesByParent}
+                            currentUserId={user?.id}
+                            onReply={submitReply}
+                            onEdit={editComment}
+                            onDelete={deleteComment}
+                            onToggleReaction={handleToggleReaction}
+                            highlightedCommentId={highlightedId}
+                          />
+                        </div>
+                        {triggeredRuns.length > 0 && (
+                          <div className="flex flex-col gap-2">
+                            {triggeredRuns.map((task) => (
+                              <TaskRunCard
+                                key={task.id}
+                                task={task}
+                                fallbackAgentName={fallbackAgentName}
+                              />
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   }
@@ -1432,6 +1505,23 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     </div>
                   );
                 });
+
+                return (
+                  <>
+                    {issueLevelRuns.length > 0 && (
+                      <div className="flex flex-col gap-2">
+                        {issueLevelRuns.map((task) => (
+                          <TaskRunCard
+                            key={task.id}
+                            task={task}
+                            fallbackAgentName={fallbackAgentName}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {renderedGroups}
+                  </>
+                );
               })()}
             </div>
 
@@ -1474,6 +1564,25 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
           {/* RIGHT: Properties sidebar */}
           <div className="overflow-y-auto border-l h-full">
             <div className="p-4 space-y-5">
+              {/* Active agent indicator — clicking jumps to the inline run card */}
+              {activeTaskRun && (
+                <button
+                  type="button"
+                  data-testid="sidebar-agent-working"
+                  onClick={() => scrollToTaskRun(activeTaskRun.id)}
+                  className="flex w-full items-center gap-2 rounded-md border border-info/20 bg-info/5 px-2.5 py-1.5 text-left transition-colors hover:bg-info/10"
+                >
+                  <Loader2 className="h-3 w-3 animate-spin text-info shrink-0" />
+                  <span className="text-xs font-medium text-info truncate">
+                    {(activeTaskRun.agent_id
+                      ? getActorName("agent", activeTaskRun.agent_id)
+                      : null) ?? "Agent"}{" "}
+                    is working
+                  </span>
+                  <ChevronRight className="h-3 w-3 ml-auto shrink-0 text-info/70" />
+                </button>
+              )}
+
               {/* Properties section */}
               <div>
                 <button
