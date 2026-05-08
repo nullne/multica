@@ -317,21 +317,46 @@ function TemplateFormDialog({
   );
 }
 
-function buildPayload(form: TemplateFormData): CreateRecurringTemplateRequest {
+function buildCreatePayload(form: TemplateFormData): CreateRecurringTemplateRequest {
+  // For create, omit fields the user did not set so the server applies its
+  // defaults (e.g. null assignee, null description).
   const payload: CreateRecurringTemplateRequest = {
     title: form.title.trim(),
-    description: form.description.trim() || undefined,
     priority: form.priority,
     schedule: form.schedule.trim(),
     timezone: form.timezone.trim() || "UTC",
     enabled: form.enabled,
-    assignee_type: form.assignee_type ?? undefined,
-    assignee_id: form.assignee_id ?? undefined,
   };
+  const description = form.description.trim();
+  if (description) payload.description = description;
+  if (form.assignee_type && form.assignee_id) {
+    payload.assignee_type = form.assignee_type;
+    payload.assignee_id = form.assignee_id;
+  }
   if (form.due_date_offset_hours.trim()) {
     payload.due_date_offset_hours = parseInt(form.due_date_offset_hours, 10);
   }
   return payload;
+}
+
+function buildUpdatePayload(form: TemplateFormData): UpdateRecurringTemplateRequest {
+  // For update, send every nullable field explicitly — null when cleared,
+  // the value when set — so the server can distinguish "clear" from "leave
+  // unchanged". The backend's PATCH handler reads the JSON keys, not the
+  // pointer values, so an explicit null is required to clear a field.
+  const description = form.description.trim();
+  const offset = form.due_date_offset_hours.trim();
+  return {
+    title: form.title.trim(),
+    description: description ? description : null,
+    priority: form.priority,
+    schedule: form.schedule.trim(),
+    timezone: form.timezone.trim() || "UTC",
+    enabled: form.enabled,
+    assignee_type: form.assignee_type,
+    assignee_id: form.assignee_id,
+    due_date_offset_hours: offset ? parseInt(offset, 10) : null,
+  };
 }
 
 export function RecurringTemplateManager() {
@@ -359,7 +384,7 @@ export function RecurringTemplateManager() {
 
   const handleCreate = async (form: TemplateFormData) => {
     try {
-      const template = await api.createRecurringTemplate(buildPayload(form));
+      const template = await api.createRecurringTemplate(buildCreatePayload(form));
       useRecurringTemplateStore.getState().addTemplate(template);
       setShowCreate(false);
       toast.success("Template created");
@@ -371,9 +396,8 @@ export function RecurringTemplateManager() {
 
   const handleUpdate = async (form: TemplateFormData) => {
     if (!editingTemplate) return;
-    const payload: UpdateRecurringTemplateRequest = buildPayload(form);
     try {
-      const updated = await api.updateRecurringTemplate(editingTemplate.id, payload);
+      const updated = await api.updateRecurringTemplate(editingTemplate.id, buildUpdatePayload(form));
       useRecurringTemplateStore.getState().updateTemplate(editingTemplate.id, updated);
       setEditingTemplate(null);
       toast.success("Template updated");

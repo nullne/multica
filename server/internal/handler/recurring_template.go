@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -234,11 +235,23 @@ func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Read body as raw bytes so we can detect which fields were explicitly
+	// sent in the request (including explicit JSON null), which lets PATCH
+	// callers clear nullable fields like assignee_id back to null.
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+
 	var req UpdateRecurringTemplateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	var rawFields map[string]json.RawMessage
+	_ = json.Unmarshal(bodyBytes, &rawFields)
 
 	// Start with existing values.
 	params := db.UpdateRecurringTemplateParams{
@@ -262,32 +275,38 @@ func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request
 	if req.Title != nil {
 		params.Title = *req.Title
 	}
-	if req.Description != nil {
-		params.Description = ptrToText(req.Description)
-	}
 	if req.Priority != nil {
 		params.Priority = *req.Priority
 	}
-	if req.AssigneeType != nil {
-		params.AssigneeType = ptrToText(req.AssigneeType)
-	}
-	if req.AssigneeID != nil {
-		params.AssigneeID = parseOptionalUUID(req.AssigneeID)
-	}
-	if req.DueDateOffsetHours != nil {
-		params.DueDateOffsetHours = pgtype.Int4{Int32: *req.DueDateOffsetHours, Valid: true}
-	}
-	if req.DispatchProvider != nil {
-		params.DispatchProvider = ptrToText(req.DispatchProvider)
-	}
-	if req.DispatchDaemonID != nil {
-		params.DispatchDaemonID = parseOptionalUUID(req.DispatchDaemonID)
-	}
-	if req.DispatchDaemonLabel != nil {
-		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
-	}
 	if req.Enabled != nil {
 		params.Enabled = *req.Enabled
+	}
+	// Nullable fields — only override when explicitly present in JSON
+	// so that explicit null clears the field while omission preserves it.
+	if _, ok := rawFields["description"]; ok {
+		params.Description = ptrToText(req.Description)
+	}
+	if _, ok := rawFields["assignee_type"]; ok {
+		params.AssigneeType = ptrToText(req.AssigneeType)
+	}
+	if _, ok := rawFields["assignee_id"]; ok {
+		params.AssigneeID = parseOptionalUUID(req.AssigneeID)
+	}
+	if _, ok := rawFields["due_date_offset_hours"]; ok {
+		if req.DueDateOffsetHours != nil {
+			params.DueDateOffsetHours = pgtype.Int4{Int32: *req.DueDateOffsetHours, Valid: true}
+		} else {
+			params.DueDateOffsetHours = pgtype.Int4{Valid: false}
+		}
+	}
+	if _, ok := rawFields["dispatch_provider"]; ok {
+		params.DispatchProvider = ptrToText(req.DispatchProvider)
+	}
+	if _, ok := rawFields["dispatch_daemon_id"]; ok {
+		params.DispatchDaemonID = parseOptionalUUID(req.DispatchDaemonID)
+	}
+	if _, ok := rawFields["dispatch_daemon_label"]; ok {
+		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
 	}
 
 	// Recompute next_run_at if schedule, timezone, or enabled changed.

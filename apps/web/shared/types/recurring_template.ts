@@ -37,11 +37,11 @@ export interface CreateRecurringTemplateRequest {
 
 export interface UpdateRecurringTemplateRequest {
   title?: string;
-  description?: string;
+  description?: string | null;
   priority?: IssuePriority;
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
-  due_date_offset_hours?: number;
+  due_date_offset_hours?: number | null;
   schedule?: string;
   timezone?: string;
   enabled?: boolean;
