@@ -97,6 +97,7 @@ const GITHUB_EVENT_GROUPS: {
       { value: "reopened", label: "Reopened" },
       { value: "closed", label: "Closed (unmerged)" },
       { value: "merged", label: "Merged" },
+      { value: "labeled", label: "Labeled" },
     ],
   },
   {
@@ -106,6 +107,7 @@ const GITHUB_EVENT_GROUPS: {
       { value: "opened", label: "Opened" },
       { value: "reopened", label: "Reopened" },
       { value: "closed", label: "Closed" },
+      { value: "labeled", label: "Labeled" },
     ],
   },
   {
@@ -616,6 +618,9 @@ function ActionSummary({
             {cfg.repos && cfg.repos.length > 0 && (
               <PropLine label="Repos" value={cfg.repos.join(", ")} />
             )}
+            {cfg.github_labels && cfg.github_labels.length > 0 && (
+              <PropLine label="GitHub labels" value={cfg.github_labels.join(", ")} />
+            )}
             {cfg.subscriber_ids && cfg.subscriber_ids.length > 0 && (
               <PropLine label="Subscribers" value={cfg.subscriber_ids.map(memberName).join(", ")} />
             )}
@@ -633,6 +638,9 @@ function ActionSummary({
             )}
             {cfg.repos && cfg.repos.length > 0 && (
               <PropLine label="Repos" value={cfg.repos.join(", ")} />
+            )}
+            {cfg.github_labels && cfg.github_labels.length > 0 && (
+              <PropLine label="GitHub labels" value={cfg.github_labels.join(", ")} />
             )}
           </div>
         );
@@ -1314,6 +1322,7 @@ function CreateIssueActionEditor({
         <FilterFields
           eventTypes={cfg.event_types ?? []}
           repos={cfg.repos ?? []}
+          githubLabels={cfg.github_labels ?? []}
           onChange={(partial) => onChange(partial)}
         />
       )}
@@ -1363,6 +1372,7 @@ function CommentIssueActionEditor({
         <FilterFields
           eventTypes={cfg.event_types ?? []}
           repos={cfg.repos ?? []}
+          githubLabels={cfg.github_labels ?? []}
           onChange={(partial) => onChange(partial)}
         />
       )}
@@ -1373,11 +1383,13 @@ function CommentIssueActionEditor({
 function FilterFields({
   eventTypes,
   repos,
+  githubLabels,
   onChange,
 }: {
   eventTypes: string[];
   repos: string[];
-  onChange: (partial: { event_types?: string[]; repos?: string[] }) => void;
+  githubLabels: string[];
+  onChange: (partial: { event_types?: string[]; repos?: string[]; github_labels?: string[] }) => void;
 }) {
   // Repository options come from the workspace's registered repos (Settings
   // -> Repositories). We display owner/repo and store owner/repo so the
@@ -1389,6 +1401,7 @@ function FilterFields({
 
   const setEventTypes = (next: string[]) => onChange({ event_types: next });
   const setRepos = (next: string[]) => onChange({ repos: next });
+  const setGitHubLabels = (next: string[]) => onChange({ github_labels: next });
 
   return (
     <div className="rounded-md border bg-muted/30 p-2 space-y-2">
@@ -1404,6 +1417,79 @@ function FilterFields({
           onChange={setRepos}
         />
       </div>
+
+      <div className="space-y-1.5">
+        <Label className="text-[11px]">GitHub labels (leave empty for all)</Label>
+        <GitHubLabelFilterInput selected={githubLabels} onChange={setGitHubLabels} />
+        <p className="text-[10px] text-muted-foreground">
+          Only fire when the PR/issue carries any of these GitHub labels. A `labeled` event with one of these labels also triggers.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Free-text multi-entry input for GitHub label filters. The list is stored
+// as plain label names — they are matched against the comma-separated label
+// names emitted by the github adapter. We accept Enter / comma to commit a
+// chip, and Backspace on an empty input to remove the last entry.
+function GitHubLabelFilterInput({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+
+  const addLabel = (raw: string) => {
+    const name = raw.trim();
+    if (!name) return;
+    if (selected.includes(name)) {
+      setDraft("");
+      return;
+    }
+    onChange([...selected, name]);
+    setDraft("");
+  };
+
+  const removeLabel = (name: string) => {
+    onChange(selected.filter((s) => s !== name));
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-md border bg-background px-2 py-1.5 min-h-9 focus-within:ring-1 focus-within:ring-ring">
+      {selected.map((name) => (
+        <span
+          key={name}
+          className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px]"
+        >
+          {name}
+          <button
+            type="button"
+            aria-label={`Remove label ${name}`}
+            onClick={() => removeLabel(name)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            addLabel(draft);
+          } else if (e.key === "Backspace" && draft === "" && selected.length > 0) {
+            removeLabel(selected[selected.length - 1]!);
+          }
+        }}
+        onBlur={() => addLabel(draft)}
+        className="flex-1 min-w-[120px] bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+        placeholder={selected.length === 0 ? "All labels" : "Add label..."}
+      />
     </div>
   );
 }
