@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	schedulerInterval = 60 * time.Second
+	schedulerInterval  = 60 * time.Second
 	schedulerBatchSize = int32(50)
 )
 
@@ -75,7 +75,11 @@ func fireTemplate(ctx context.Context, pool *pgxpool.Pool, queries *db.Queries, 
 
 	// Atomically claim the template. If another server instance already processed
 	// this occurrence, the UPDATE returns no rows and we skip it.
-	claimed, err := queries.ClaimRecurringTemplate(ctx, tmpl.ID, tmpl.NextRunAt, newNextRunAt)
+	claimed, err := queries.ClaimRecurringTemplate(ctx, db.ClaimRecurringTemplateParams{
+		ID:          tmpl.ID,
+		NextRunAt:   tmpl.NextRunAt,
+		NextRunAt_2: newNextRunAt,
+	})
 	if err != nil {
 		// ErrNoRows means another instance claimed it first — not an error.
 		slog.Debug("recurring scheduler: template already claimed or not due", "template_id", util.UUIDToString(tmpl.ID))
@@ -88,6 +92,14 @@ func fireTemplate(ctx context.Context, pool *pgxpool.Pool, queries *db.Queries, 
 	if err != nil {
 		slog.Warn("recurring scheduler: failed to create issue", "template_id", util.UUIDToString(claimed.ID), "error", err)
 		return
+	}
+
+	// Increment the successful run count only after the issue is committed —
+	// matching "completion based on successful issue creation, not merely a
+	// scheduler claim attempt." When the count reaches max_runs, the query
+	// also clears next_run_at so the template won't be picked up again.
+	if _, err := queries.IncrementRecurringTemplateSuccess(ctx, claimed.ID); err != nil {
+		slog.Warn("recurring scheduler: failed to record successful run", "template_id", util.UUIDToString(claimed.ID), "error", err)
 	}
 
 	slog.Info("recurring scheduler: issue created", "issue_id", util.UUIDToString(issue.ID), "template_id", util.UUIDToString(claimed.ID))
