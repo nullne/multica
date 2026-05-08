@@ -11,7 +11,9 @@ const logger = createLogger("recurring-template-store");
 interface RecurringTemplateState {
   templates: RecurringTemplate[];
   loading: boolean;
+  includeInactive: boolean;
   fetch: () => Promise<void>;
+  setIncludeInactive: (value: boolean) => Promise<void>;
   setTemplates: (templates: RecurringTemplate[]) => void;
   addTemplate: (template: RecurringTemplate) => void;
   updateTemplate: (id: string, updates: Partial<RecurringTemplate>) => void;
@@ -21,12 +23,15 @@ interface RecurringTemplateState {
 export const useRecurringTemplateStore = create<RecurringTemplateState>((set, get) => ({
   templates: [],
   loading: true,
+  includeInactive: false,
 
   fetch: async () => {
     const isInitialLoad = get().templates.length === 0;
     if (isInitialLoad) set({ loading: true });
     try {
-      const templates = await api.listRecurringTemplates();
+      const templates = await api.listRecurringTemplates({
+        includeInactive: get().includeInactive,
+      });
       logger.info("fetched", templates.length, "recurring templates");
       set({ templates, loading: false });
     } catch (err) {
@@ -34,6 +39,11 @@ export const useRecurringTemplateStore = create<RecurringTemplateState>((set, ge
       toast.error("Failed to load recurring templates");
       if (isInitialLoad) set({ loading: false });
     }
+  },
+
+  setIncludeInactive: async (value) => {
+    set({ includeInactive: value });
+    await get().fetch();
   },
 
   setTemplates: (templates) => set({ templates }),

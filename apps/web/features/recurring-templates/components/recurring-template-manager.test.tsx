@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockUser, mockWorkspace, mockMembers } from "@/test/helpers";
 import type { RecurringTemplate } from "@/shared/types";
@@ -77,12 +77,25 @@ vi.mock("@/shared/api", () => ({
 vi.mock("@/features/recurring-templates/store", async () => {
   const { create } = await import("zustand");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const store = create<any>((set: unknown) => {
+  const store = create<any>((set: unknown, get: unknown) => {
     void set;
+    void get;
     return {
       templates: [],
       loading: false,
-      fetch: vi.fn(),
+      includeInactive: false,
+      fetch: vi.fn(async () => {
+        const res = await mocks.api.listRecurringTemplates({
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          includeInactive: (store.getState() as any).includeInactive,
+        });
+        store.setState({ templates: res, loading: false });
+      }),
+      setIncludeInactive: vi.fn(async (value: boolean) => {
+        store.setState({ includeInactive: value });
+        const res = await mocks.api.listRecurringTemplates({ includeInactive: value });
+        store.setState({ templates: res });
+      }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       setTemplates: (t: any) => store.setState({ templates: t }),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -105,11 +118,9 @@ vi.mock("@/features/recurring-templates/store", async () => {
     };
   });
   return {
-    useRecurringTemplateStore: Object.assign(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (sel: any) => sel(store.getState()),
-      { getState: store.getState, setState: store.setState },
-    ),
+    // Return the zustand hook directly so React subscribes to state changes
+    // and re-renders when setState fires.
+    useRecurringTemplateStore: store,
   };
 });
 
@@ -126,6 +137,7 @@ const mockTemplate: RecurringTemplate = {
   schedule: "0 9 * * 1",
   timezone: "UTC",
   enabled: true,
+  successful_runs_count: 0,
   next_run_at: "2026-05-11T09:00:00Z",
   created_by_id: "user-1",
   created_by_type: "member",
@@ -139,8 +151,30 @@ beforeEach(() => {
   // Reset store with the mock template seeded so list-render tests don't
   // depend on the manager's mount-time fetch resolving first.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (useRecurringTemplateStore as any).setState({ templates: [mockTemplate], loading: false });
+  (useRecurringTemplateStore as any).setState({
+    templates: [mockTemplate],
+    loading: false,
+    includeInactive: false,
+  });
 });
+
+// Find the row's hover-only action toolbar (the div containing pencil/trash).
+function getRowActionButtons(rowEl: Element): HTMLButtonElement[] {
+  const groups = rowEl.querySelectorAll("div.flex");
+  const actionGroup = Array.from(groups).find((g) => {
+    const cls = g.getAttribute("class") ?? "";
+    return cls.includes("group-hover:opacity-100");
+  });
+  if (!actionGroup) throw new Error("hover action toolbar not found");
+  return Array.from(actionGroup.querySelectorAll("button"));
+}
+
+// Find the per-row enable/disable Switch (excludes the page-level "Show inactive" switch).
+function getRowSwitch(rowEl: Element): HTMLElement {
+  const sw = rowEl.querySelector('[role="switch"]');
+  if (!sw) throw new Error("row switch not found");
+  return sw as HTMLElement;
+}
 
 describe("RecurringTemplateManager", () => {
   it("renders the header and new template button for admins", () => {
@@ -154,6 +188,42 @@ describe("RecurringTemplateManager", () => {
     expect(screen.getByText("Weekly Review")).toBeInTheDocument();
     expect(screen.getByText("0 9 * * 1")).toBeInTheDocument();
     expect(screen.getByText(/Next:/)).toBeInTheDocument();
+  });
+
+  it("shows successful run count without max for unlimited templates", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (useRecurringTemplateStore as any).setState({
+      templates: [{ ...mockTemplate, successful_runs_count: 7 }],
+    });
+    render(<RecurringTemplateManager />);
+    expect(screen.getByText(/^Runs:\s*7$/)).toBeInTheDocument();
+  });
+
+  it("shows progress for templates with max_runs configured", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (useRecurringTemplateStore as any).setState({
+      templates: [{ ...mockTemplate, max_runs: 5, successful_runs_count: 2 }],
+    });
+    render(<RecurringTemplateManager />);
+    expect(screen.getByText(/^Runs:\s*2\s*\/\s*5$/)).toBeInTheDocument();
+  });
+
+  it("marks templates that reached max_runs as completed", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (useRecurringTemplateStore as any).setState({
+      templates: [
+        {
+          ...mockTemplate,
+          max_runs: 1,
+          successful_runs_count: 1,
+          next_run_at: undefined,
+        },
+      ],
+    });
+    render(<RecurringTemplateManager />);
+    expect(screen.getByText(/^completed$/i)).toBeInTheDocument();
+    // Completed templates must not render the "enabled" badge.
+    expect(screen.queryByText(/^enabled$/i)).not.toBeInTheDocument();
   });
 
   it("opens create dialog when New template is clicked", async () => {
@@ -196,12 +266,54 @@ describe("RecurringTemplateManager", () => {
     });
   });
 
+  it("includes max_runs when set in create payload", async () => {
+    mocks.api.createRecurringTemplate.mockResolvedValueOnce({
+      ...mockTemplate,
+      id: "tpl-onetime",
+      max_runs: 1,
+    });
+
+    const user = userEvent.setup();
+    render(<RecurringTemplateManager />);
+
+    await user.click(screen.getByRole("button", { name: /new template/i }));
+    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "One-time job");
+    await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+    await user.type(screen.getByPlaceholderText("Blank = unlimited"), "1");
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRecurringTemplate).toHaveBeenCalledWith(
+        expect.objectContaining({ max_runs: 1 }),
+      );
+    });
+  });
+
+  it("omits max_runs from the create payload when left blank", async () => {
+    mocks.api.createRecurringTemplate.mockResolvedValueOnce(mockTemplate);
+
+    const user = userEvent.setup();
+    render(<RecurringTemplateManager />);
+
+    await user.click(screen.getByRole("button", { name: /new template/i }));
+    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Forever");
+    await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRecurringTemplate).toHaveBeenCalled();
+    });
+    const payload = mocks.api.createRecurringTemplate.mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty("max_runs");
+  });
+
   it("sends explicit nulls for cleared fields when updating", async () => {
     const seededTemplate: RecurringTemplate = {
       ...mockTemplate,
       assignee_type: "member",
       assignee_id: "user-1",
       due_date_offset_hours: 48,
+      max_runs: 5,
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (useRecurringTemplateStore as any).setState({
@@ -214,29 +326,30 @@ describe("RecurringTemplateManager", () => {
       assignee_id: undefined,
       description: undefined,
       due_date_offset_hours: undefined,
+      max_runs: undefined,
     });
 
     const user = userEvent.setup();
     render(<RecurringTemplateManager />);
 
-    // Open the edit dialog. The pencil icon is the second hover-action button
-    // on the row (after the toggle switch).
     const row = screen.getByText("Weekly Review").closest(".group");
     if (!row) throw new Error("row not found");
-    const buttons = row.querySelectorAll("button");
-    const pencil = buttons[buttons.length - 2];
+    const buttons = getRowActionButtons(row);
+    const pencil = buttons[0];
     if (!pencil) throw new Error("edit button not found");
     await act(async () => {
       fireEvent.click(pencil);
     });
 
-    // Clear description and due-date offset, then save.
+    // Clear description, due-date offset, and max_runs, then save.
     const description = screen.getByPlaceholderText(
       "Optional description for issues created from this template",
     );
     await user.clear(description);
     const offset = screen.getByPlaceholderText("Optional, e.g. 72 for 3 days");
     await user.clear(offset);
+    const maxRuns = screen.getByPlaceholderText("Blank = unlimited");
+    await user.clear(maxRuns);
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() => {
@@ -245,6 +358,7 @@ describe("RecurringTemplateManager", () => {
         expect.objectContaining({
           description: null,
           due_date_offset_hours: null,
+          max_runs: null,
         }),
       );
     });
@@ -257,7 +371,7 @@ describe("RecurringTemplateManager", () => {
 
     const row = screen.getByText("Weekly Review").closest(".group");
     if (!row) throw new Error("row not found");
-    const buttons = row.querySelectorAll("button");
+    const buttons = getRowActionButtons(row);
     const trash = buttons[buttons.length - 1];
     if (!trash) throw new Error("delete button not found");
     await act(async () => {
@@ -277,20 +391,60 @@ describe("RecurringTemplateManager", () => {
   it("toggles enabled state via switch", async () => {
     const updatedTemplate = { ...mockTemplate, enabled: false };
     mocks.api.updateRecurringTemplate.mockResolvedValueOnce(updatedTemplate);
+    mocks.api.listRecurringTemplates.mockResolvedValue([updatedTemplate]);
 
     render(<RecurringTemplateManager />);
 
-    const switches = screen.getAllByRole("switch");
-    const first = switches[0];
-    if (!first) throw new Error("toggle switch not found");
+    const row = screen.getByText("Weekly Review").closest(".group");
+    if (!row) throw new Error("row not found");
+    const rowSwitch = getRowSwitch(row);
     await act(async () => {
-      fireEvent.click(first);
+      fireEvent.click(rowSwitch);
     });
 
     await waitFor(() => {
       expect(mocks.api.updateRecurringTemplate).toHaveBeenCalledWith("tpl-1", {
         enabled: false,
       });
+    });
+  });
+
+  it("requests inactive templates when 'Show inactive' is toggled on", async () => {
+    const inactive: RecurringTemplate = {
+      ...mockTemplate,
+      id: "tpl-disabled",
+      title: "Old Job",
+      enabled: false,
+    };
+    mocks.api.listRecurringTemplates.mockImplementation(
+      async (opts?: { includeInactive?: boolean }) =>
+        opts?.includeInactive ? [mockTemplate, inactive] : [mockTemplate],
+    );
+
+    render(<RecurringTemplateManager />);
+
+    // Wait for the mount-time fetch to settle so its promise resolution does
+    // not race with the toggle's refetch and clobber state out from under it.
+    await waitFor(() => {
+      expect(mocks.api.listRecurringTemplates).toHaveBeenCalledWith({
+        includeInactive: false,
+      });
+    });
+
+    const showInactiveLabel = screen.getByText(/show inactive/i);
+    const labelEl = showInactiveLabel.closest("label");
+    if (!labelEl) throw new Error("show inactive label not found");
+    const toggle = within(labelEl).getByRole("switch");
+    const user = userEvent.setup();
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect(mocks.api.listRecurringTemplates).toHaveBeenCalledWith({
+        includeInactive: true,
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Old Job")).toBeInTheDocument();
     });
   });
 });
