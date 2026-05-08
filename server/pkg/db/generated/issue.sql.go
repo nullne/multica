@@ -230,20 +230,6 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 	return i, err
 }
 
-const incrementIssueAgentMentionChain = `-- name: IncrementIssueAgentMentionChain :one
-UPDATE issue SET
-    agent_mention_chain_count = agent_mention_chain_count + 1
-WHERE id = $1
-RETURNING agent_mention_chain_count
-`
-
-func (q *Queries) IncrementIssueAgentMentionChain(ctx context.Context, id pgtype.UUID) (int32, error) {
-	row := q.db.QueryRow(ctx, incrementIssueAgentMentionChain, id)
-	var agent_mention_chain_count int32
-	err := row.Scan(&agent_mention_chain_count)
-	return agent_mention_chain_count, err
-}
-
 const listIssues = `-- name: ListIssues :many
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count FROM issue
 WHERE workspace_id = $1
@@ -368,6 +354,23 @@ func (q *Queries) ListIssuesByParent(ctx context.Context, parentIssueID pgtype.U
 	return items, nil
 }
 
+const releaseIssueAgentMentionChainSlot = `-- name: ReleaseIssueAgentMentionChainSlot :one
+UPDATE issue SET
+    agent_mention_chain_count = GREATEST(agent_mention_chain_count - 1, 0)
+WHERE id = $1
+RETURNING agent_mention_chain_count
+`
+
+// Releases a previously-reserved chain slot when the dispatch that consumed it
+// did not actually complete. GREATEST keeps the count at or above zero even if
+// a reset raced with the rollback.
+func (q *Queries) ReleaseIssueAgentMentionChainSlot(ctx context.Context, id pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, releaseIssueAgentMentionChainSlot, id)
+	var agent_mention_chain_count int32
+	err := row.Scan(&agent_mention_chain_count)
+	return agent_mention_chain_count, err
+}
+
 const resetIssueAgentMentionChain = `-- name: ResetIssueAgentMentionChain :exec
 UPDATE issue SET
     agent_mention_chain_count = 0
@@ -377,6 +380,29 @@ WHERE id = $1
 func (q *Queries) ResetIssueAgentMentionChain(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, resetIssueAgentMentionChain, id)
 	return err
+}
+
+const tryReserveIssueAgentMentionChain = `-- name: TryReserveIssueAgentMentionChain :one
+UPDATE issue SET
+    agent_mention_chain_count = agent_mention_chain_count + 1
+WHERE id = $1 AND agent_mention_chain_count < $2::int
+RETURNING agent_mention_chain_count
+`
+
+type TryReserveIssueAgentMentionChainParams struct {
+	ID       pgtype.UUID `json:"id"`
+	MaxCount int32       `json:"max_count"`
+}
+
+// Atomically reserves one slot in the agent-to-agent mention chain for this
+// issue. Returns the new count when the reservation succeeds. Returns no rows
+// (pgx.ErrNoRows) when the chain has already reached the supplied limit, so
+// concurrent callers cannot exceed the cap.
+func (q *Queries) TryReserveIssueAgentMentionChain(ctx context.Context, arg TryReserveIssueAgentMentionChainParams) (int32, error) {
+	row := q.db.QueryRow(ctx, tryReserveIssueAgentMentionChain, arg.ID, arg.MaxCount)
+	var agent_mention_chain_count int32
+	err := row.Scan(&agent_mention_chain_count)
+	return agent_mention_chain_count, err
 }
 
 const updateIssue = `-- name: UpdateIssue :one

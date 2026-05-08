@@ -3,11 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/internal/mention"
@@ -339,27 +341,6 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			noticeParent = comment.ParentID
 		}
 
-		// Agent-to-agent chain limit: when the comment is authored by an agent
-		// and we are about to enqueue a mention-triggered task for another
-		// agent, ensure the consecutive handoff count has not exceeded the
-		// configured limit. The chain resets on any human member comment.
-		if authorType == "agent" {
-			currentChain, err := h.getIssueAgentMentionChain(ctx, issue.ID)
-			if err != nil {
-				slog.Warn("load agent mention chain failed", "issue_id", uuidToString(issue.ID), "error", err)
-			} else if currentChain >= AgentMentionChainLimit {
-				if !chainLimitNoticePosted {
-					h.postSystemNotice(ctx, issue, fmt.Sprintf(
-						"Agent-to-agent mention chain limit reached (%d consecutive handoffs). "+
-							"Awaiting human input before further agent dispatches on this issue.",
-						AgentMentionChainLimit,
-					), noticeParent)
-					chainLimitNoticePosted = true
-				}
-				continue
-			}
-		}
-
 		// Load the agent to check visibility, archive status, and trigger config.
 		agent, err := h.Queries.GetAgent(ctx, agentUUID)
 		if err != nil {
@@ -411,30 +392,48 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 		if comment.ParentID.Valid {
 			replyTo = comment.ParentID
 		}
+
+		// Agent-to-agent chain guard. When the comment author is an agent we
+		// atomically reserve one slot before enqueueing — a single conditional
+		// UPDATE is the serialization point so concurrent agent comments can
+		// never collectively exceed AgentMentionChainLimit. If the enqueue
+		// itself fails, we release the slot so a subsequent retry has the same
+		// budget. Member-authored mentions never consume a slot.
+		chainSlotReserved := false
+		if authorType == "agent" {
+			if _, err := h.Queries.TryReserveIssueAgentMentionChain(ctx, db.TryReserveIssueAgentMentionChainParams{
+				ID:       issue.ID,
+				MaxCount: AgentMentionChainLimit,
+			}); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					if !chainLimitNoticePosted {
+						h.postSystemNotice(ctx, issue, fmt.Sprintf(
+							"Agent-to-agent mention chain limit reached (%d consecutive handoffs). "+
+								"Awaiting human input before further agent dispatches on this issue.",
+							AgentMentionChainLimit,
+						), noticeParent)
+						chainLimitNoticePosted = true
+					}
+					continue
+				}
+				slog.Warn("reserve agent mention chain slot failed", "issue_id", uuidToString(issue.ID), "error", err)
+				continue
+			}
+			chainSlotReserved = true
+		}
+
 		if _, err := h.TaskService.EnqueueTaskForMention(ctx, issue, agentUUID, replyTo); err != nil {
+			if chainSlotReserved {
+				if _, derr := h.Queries.ReleaseIssueAgentMentionChainSlot(ctx, issue.ID); derr != nil {
+					slog.Warn("release agent mention chain slot failed", "issue_id", uuidToString(issue.ID), "error", derr)
+				}
+			}
 			agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
 			h.postSystemNotice(ctx, issue, agentLink+" has no available runtime to execute the task.", noticeParent)
 			slog.Warn("enqueue mention agent task failed", "issue_id", uuidToString(issue.ID), "agent_id", m.ID, "error", err)
 			continue
 		}
-		// Successful agent-to-agent handoff — increment the chain count so we
-		// can stop runaway recursion. Member-authored mentions never count.
-		if authorType == "agent" {
-			if _, err := h.Queries.IncrementIssueAgentMentionChain(ctx, issue.ID); err != nil {
-				slog.Warn("increment agent mention chain failed", "issue_id", uuidToString(issue.ID), "error", err)
-			}
-		}
 	}
-}
-
-// getIssueAgentMentionChain reads the current consecutive agent-to-agent
-// mention chain count for an issue. Returns 0 if the issue cannot be loaded.
-func (h *Handler) getIssueAgentMentionChain(ctx context.Context, issueID pgtype.UUID) (int32, error) {
-	issue, err := h.Queries.GetIssue(ctx, issueID)
-	if err != nil {
-		return 0, err
-	}
-	return issue.AgentMentionChainCount, nil
 }
 
 func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {

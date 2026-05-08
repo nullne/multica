@@ -2,9 +2,14 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
+	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+	dbq "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 // agentMentionTriggerJSON is the JSON snippet enabling on_mention.
@@ -280,5 +285,84 @@ func TestMentionDispatch_AgentSelfMention_StillSkipped(t *testing.T) {
 	}
 	if notices := listSystemNoticesForIssue(t, issueID); len(notices) != 0 {
 		t.Fatalf("expected no system notices for self-mention, got %d: %v", len(notices), notices)
+	}
+}
+
+// TestMentionDispatch_ChainSlotReleasedOnEnqueueFailure verifies that when an
+// agent-authored mention reserves a chain slot but the underlying task enqueue
+// fails (e.g. no runtime is available for the target's providers), the slot is
+// released so a subsequent retry has the same budget.
+func TestMentionDispatch_ChainSlotReleasedOnEnqueueFailure(t *testing.T) {
+	issueID := createTestIssue(t, "Mention dispatch: slot release on failure")
+
+	speakerID := createTestAgent(t, "chain-release-speaker",
+		[]string{"codex"}, false, agentMentionTriggerJSON)
+	// Provider has no online runtime in the test fixture, so EnqueueTaskForMention
+	// will fail with "no online runtime for providers".
+	targetID := createTestAgent(t, "chain-release-target",
+		[]string{"claude"}, false, agentMentionTriggerJSON)
+
+	postAgentMention(t, issueID, speakerID, targetID)
+
+	if got := readAgentMentionChain(t, issueID); got != 0 {
+		t.Fatalf("expected chain count 0 after failed enqueue (slot released), got %d", got)
+	}
+	notices := listSystemNoticesForIssue(t, issueID)
+	if len(notices) == 0 {
+		t.Fatal("expected runtime-unavailable system notice, got none")
+	}
+}
+
+// TestTryReserveIssueAgentMentionChain_Concurrent drives the atomic reservation
+// query from many goroutines at once and verifies that the chain count never
+// exceeds the limit. This guards against the TOCTOU race that an earlier
+// non-atomic implementation suffered from.
+func TestTryReserveIssueAgentMentionChain_Concurrent(t *testing.T) {
+	issueID := createTestIssue(t, "Mention dispatch: concurrent reservation")
+
+	const limit = 5
+	const attempts = 32
+
+	var wg sync.WaitGroup
+	successCh := make(chan struct{}, attempts)
+	failureCh := make(chan struct{}, attempts)
+
+	wg.Add(attempts)
+	for i := 0; i < attempts; i++ {
+		go func() {
+			defer wg.Done()
+			_, err := testHandler.Queries.TryReserveIssueAgentMentionChain(
+				context.Background(),
+				dbq.TryReserveIssueAgentMentionChainParams{
+					ID:       parseUUID(issueID),
+					MaxCount: limit,
+				},
+			)
+			if err == nil {
+				successCh <- struct{}{}
+				return
+			}
+			if errors.Is(err, pgx.ErrNoRows) {
+				failureCh <- struct{}{}
+				return
+			}
+			t.Errorf("unexpected reservation error: %v", err)
+		}()
+	}
+	wg.Wait()
+	close(successCh)
+	close(failureCh)
+
+	successes := len(successCh)
+	failures := len(failureCh)
+	if successes != limit {
+		t.Fatalf("expected exactly %d successful reservations, got %d (failures=%d)",
+			limit, successes, failures)
+	}
+	if failures != attempts-limit {
+		t.Fatalf("expected %d limit-rejections, got %d", attempts-limit, failures)
+	}
+	if got := readAgentMentionChain(t, issueID); got != limit {
+		t.Fatalf("expected final chain count %d, got %d", limit, got)
 	}
 }

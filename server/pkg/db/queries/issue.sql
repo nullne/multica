@@ -81,9 +81,22 @@ RETURNING *;
 -- name: DeleteIssue :exec
 DELETE FROM issue WHERE id = $1;
 
--- name: IncrementIssueAgentMentionChain :one
+-- name: TryReserveIssueAgentMentionChain :one
+-- Atomically reserves one slot in the agent-to-agent mention chain for this
+-- issue. Returns the new count when the reservation succeeds. Returns no rows
+-- (pgx.ErrNoRows) when the chain has already reached the supplied limit, so
+-- concurrent callers cannot exceed the cap.
 UPDATE issue SET
     agent_mention_chain_count = agent_mention_chain_count + 1
+WHERE id = $1 AND agent_mention_chain_count < sqlc.arg(max_count)::int
+RETURNING agent_mention_chain_count;
+
+-- name: ReleaseIssueAgentMentionChainSlot :one
+-- Releases a previously-reserved chain slot when the dispatch that consumed it
+-- did not actually complete. GREATEST keeps the count at or above zero even if
+-- a reset raced with the rollback.
+UPDATE issue SET
+    agent_mention_chain_count = GREATEST(agent_mention_chain_count - 1, 0)
 WHERE id = $1
 RETURNING agent_mention_chain_count;
 
