@@ -2,10 +2,25 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
-import { Bot, ChevronRight, Loader2, ArrowDown, Brain, AlertCircle, Clock, CheckCircle2, XCircle, Square } from "lucide-react";
+import {
+  Bot,
+  ChevronRight,
+  Loader2,
+  ArrowDown,
+  Brain,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
+  Square,
+} from "lucide-react";
 import { api } from "@/shared/api";
 import { useWSEvent } from "@/features/realtime";
-import type { TaskMessagePayload, TaskCompletedPayload, TaskFailedPayload, TaskCancelledPayload } from "@/shared/types/events";
+import type {
+  TaskMessagePayload,
+  TaskCompletedPayload,
+  TaskFailedPayload,
+  TaskCancelledPayload,
+} from "@/shared/types/events";
 import type { AgentTask } from "@/shared/types/agent";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -24,6 +39,12 @@ interface TimelineItem {
   content?: string;
   input?: Record<string, unknown>;
   output?: string;
+}
+
+const ACTIVE_STATUSES: AgentTask["status"][] = ["queued", "dispatched", "running"];
+
+export function isActiveTask(task: AgentTask): boolean {
+  return ACTIVE_STATUSES.includes(task.status);
 }
 
 function formatElapsed(startedAt: string): string {
@@ -53,27 +74,20 @@ function shortenPath(p: string): string {
 function getToolSummary(item: TimelineItem): string {
   if (!item.input) return "";
   const inp = item.input as Record<string, string>;
-
-  // WebSearch / web search
   if (inp.query) return inp.query;
-  // File operations
   if (inp.file_path) return shortenPath(inp.file_path);
   if (inp.path) return shortenPath(inp.path);
   if (inp.pattern) return inp.pattern;
-  // Bash
   if (inp.description) return String(inp.description);
   if (inp.command) {
     const cmd = String(inp.command);
     return cmd.length > 100 ? cmd.slice(0, 100) + "..." : cmd;
   }
-  // Agent
   if (inp.prompt) {
     const p = String(inp.prompt);
     return p.length > 100 ? p.slice(0, 100) + "..." : p;
   }
-  // Skill
   if (inp.skill) return String(inp.skill);
-  // Fallback: show first string value
   for (const v of Object.values(inp)) {
     if (typeof v === "string" && v.length > 0 && v.length < 120) return v;
   }
@@ -96,139 +110,122 @@ function buildTimeline(msgs: TaskMessagePayload[]): TimelineItem[] {
   return items.sort((a, b) => a.seq - b.seq);
 }
 
-// ─── AgentLiveCard (real-time view) ────────────────────────────────────────
+// ─── TaskRunCard (inline, used for both active and completed runs) ─────────
 
-interface AgentLiveCardProps {
-  issueId: string;
-  agentName?: string;
+interface TaskRunCardProps {
+  task: AgentTask;
+  /** When provided, used as a fallback agent label if the agent isn't in the workspace store. */
+  fallbackAgentName?: string;
 }
 
-export function AgentLiveCard({ issueId, agentName }: AgentLiveCardProps) {
+/**
+ * TaskRunCard renders a single agent run inline in the activity stream.
+ *
+ * - Active runs (queued/dispatched/running) default to expanded with a live
+ *   "Agent is working" header and stream timeline messages over the websocket.
+ * - Completed/failed/cancelled runs default to collapsed; expanding fetches
+ *   the recorded messages on-demand.
+ *
+ * The wrapping div carries `id="task-run-<task.id>"` so other UI surfaces
+ * (e.g. the sidebar working indicator) can scroll to and expand it.
+ */
+export function TaskRunCard({ task, fallbackAgentName }: TaskRunCardProps) {
   const { getActorName } = useActorName();
-  const [activeTask, setActiveTask] = useState<AgentTask | null>(null);
-  const [items, setItems] = useState<TimelineItem[]>([]);
+  const runtimes = useRuntimeStore((s) => s.runtimes);
+  const daemons = useRuntimeStore((s) => s.daemons);
+
+  const active = isActiveTask(task);
+  const [open, setOpen] = useState(active);
+  const [items, setItems] = useState<TimelineItem[] | null>(active ? [] : null);
+  const seenSeqs = useRef<Set<number>>(new Set());
   const [elapsed, setElapsed] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
   const [cancelling, setCancelling] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const seenSeqs = useRef(new Set<string>());
 
-  // Check for active task on mount
+  // Listen for an explicit "expand" request — used by the sidebar working
+  // indicator click-to-jump behavior.
   useEffect(() => {
+    const onExpand = (e: Event) => {
+      const detail = (e as CustomEvent<{ taskId?: string }>).detail;
+      if (!detail || detail.taskId !== task.id) return;
+      setOpen(true);
+    };
+    window.addEventListener("multica:expand-task-run", onExpand as EventListener);
+    return () => window.removeEventListener("multica:expand-task-run", onExpand as EventListener);
+  }, [task.id]);
+
+  // Active tasks: subscribe to live messages and prime with anything already recorded.
+  useEffect(() => {
+    if (!active) return;
     let cancelled = false;
-    api.getActiveTaskForIssue(issueId).then(({ task }) => {
-      if (!cancelled) {
-        setActiveTask(task);
-        if (task) {
-          api.listTaskMessages(task.id).then((msgs) => {
-            if (!cancelled) {
-              const timeline = buildTimeline(msgs);
-              setItems(timeline);
-              for (const m of msgs) seenSeqs.current.add(`${m.task_id}:${m.seq}`);
-            }
-          }).catch(console.error);
-        }
-      }
-    }).catch(console.error);
+    seenSeqs.current = new Set();
+    api
+      .listTaskMessages(task.id)
+      .then((msgs) => {
+        if (cancelled) return;
+        setItems(buildTimeline(msgs));
+        for (const m of msgs) seenSeqs.current.add(m.seq);
+      })
+      .catch(console.error);
+    return () => {
+      cancelled = true;
+    };
+  }, [active, task.id]);
 
-    return () => { cancelled = true; };
-  }, [issueId]);
-
-  // Handle real-time task messages
   useWSEvent(
     "task:message",
-    useCallback((payload: unknown) => {
-      const msg = payload as TaskMessagePayload;
-      if (msg.issue_id !== issueId) return;
-      const key = `${msg.task_id}:${msg.seq}`;
-      if (seenSeqs.current.has(key)) return;
-      seenSeqs.current.add(key);
-
-      setItems((prev) => {
-        const item: TimelineItem = {
-          seq: msg.seq,
-          type: msg.type,
-          tool: msg.tool,
-          content: msg.content,
-          input: msg.input,
-          output: msg.output,
-        };
-        const next = [...prev, item];
-        next.sort((a, b) => a.seq - b.seq);
-        return next;
-      });
-    }, [issueId]),
+    useCallback(
+      (payload: unknown) => {
+        if (!active) return;
+        const msg = payload as TaskMessagePayload;
+        if (msg.task_id !== task.id) return;
+        if (seenSeqs.current.has(msg.seq)) return;
+        seenSeqs.current.add(msg.seq);
+        setItems((prev) => {
+          const item: TimelineItem = {
+            seq: msg.seq,
+            type: msg.type,
+            tool: msg.tool,
+            content: msg.content,
+            input: msg.input,
+            output: msg.output,
+          };
+          const next = [...(prev ?? []), item];
+          next.sort((a, b) => a.seq - b.seq);
+          return next;
+        });
+      },
+      [active, task.id],
+    ),
   );
 
-  // Handle task completion/failure
-  useWSEvent(
-    "task:completed",
-    useCallback((payload: unknown) => {
-      const p = payload as TaskCompletedPayload;
-      if (p.issue_id !== issueId) return;
-      setActiveTask(null);
-      setItems([]);
-      seenSeqs.current.clear();
-      setCancelling(false);
-    }, [issueId]),
-  );
-
-  useWSEvent(
-    "task:failed",
-    useCallback((payload: unknown) => {
-      const p = payload as TaskFailedPayload;
-      if (p.issue_id !== issueId) return;
-      setActiveTask(null);
-      setItems([]);
-      seenSeqs.current.clear();
-      setCancelling(false);
-    }, [issueId]),
-  );
-
-  useWSEvent(
-    "task:cancelled",
-    useCallback((payload: unknown) => {
-      const p = payload as TaskCancelledPayload;
-      if (p.issue_id !== issueId) return;
-      setActiveTask(null);
-      setItems([]);
-      seenSeqs.current.clear();
-      setCancelling(false);
-    }, [issueId]),
-  );
-
-  // Pick up new tasks — skip if we're already showing an active task to avoid
-  // replacing its timeline mid-execution (per-issue serialization in the
-  // backend prevents this race, but this is a defensive safeguard).
-  useWSEvent(
-    "task:dispatch",
-    useCallback(() => {
-      if (activeTask) return;
-      api.getActiveTaskForIssue(issueId).then(({ task }) => {
-        if (task) {
-          setActiveTask(task);
-          setItems([]);
-          seenSeqs.current.clear();
-        }
-      }).catch(console.error);
-    }, [issueId, activeTask]),
-  );
-
-  // Elapsed time
+  // Completed runs: lazy-load messages on first expand.
   useEffect(() => {
-    if (!activeTask?.started_at && !activeTask?.dispatched_at) return;
-    const ref = activeTask.started_at ?? activeTask.dispatched_at!;
+    if (active || !open || items !== null) return;
+    api
+      .listTaskMessages(task.id)
+      .then((msgs) => setItems(buildTimeline(msgs)))
+      .catch((e) => {
+        console.error(e);
+        setItems([]);
+      });
+  }, [active, open, items, task.id]);
+
+  // Live elapsed time for active runs.
+  useEffect(() => {
+    if (!active) return;
+    const ref = task.started_at ?? task.dispatched_at ?? task.created_at;
     setElapsed(formatElapsed(ref));
     const interval = setInterval(() => setElapsed(formatElapsed(ref)), 1000);
     return () => clearInterval(interval);
-  }, [activeTask?.started_at, activeTask?.dispatched_at]);
+  }, [active, task.started_at, task.dispatched_at, task.created_at]);
 
-  // Auto-scroll
+  // Auto-scroll the live timeline to the latest entry.
   useEffect(() => {
-    if (autoScroll && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [items, autoScroll]);
+    if (!active || !autoScroll || !scrollRef.current) return;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [items, autoScroll, active]);
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
@@ -237,234 +234,193 @@ export function AgentLiveCard({ issueId, agentName }: AgentLiveCardProps) {
   }, []);
 
   const handleCancel = useCallback(async () => {
-    if (!activeTask || cancelling) return;
+    if (!active || cancelling) return;
     setCancelling(true);
     try {
-      await api.cancelTask(issueId, activeTask.id);
+      await api.cancelTask(task.issue_id, task.id);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to cancel task");
       setCancelling(false);
     }
-  }, [activeTask, issueId, cancelling]);
+  }, [active, cancelling, task.id, task.issue_id]);
 
-  const runtimes = useRuntimeStore((s) => s.runtimes);
-  const daemons = useRuntimeStore((s) => s.daemons);
-
-  if (!activeTask) return null;
-
-  const toolCount = items.filter((i) => i.type === "tool_use").length;
-  const taskRuntime = runtimes.find((r) => r.id === activeTask.runtime_id);
+  const taskRuntime = runtimes.find((r) => r.id === task.runtime_id);
   const taskDaemon = taskRuntime?.daemon_ref ? daemons.find((d) => d.id === taskRuntime.daemon_ref) : null;
   const runtimeLabel = [
     taskDaemon?.device_name || taskDaemon?.daemon_id,
     taskRuntime?.provider,
-  ].filter(Boolean).join(" / ");
+  ]
+    .filter(Boolean)
+    .join(" / ");
 
+  const agentLabel =
+    (task.agent_id ? getActorName("agent", task.agent_id) : null) ?? fallbackAgentName ?? "Agent";
+
+  const duration =
+    task.started_at && task.completed_at ? formatDuration(task.started_at, task.completed_at) : null;
+
+  const toolCount = (items ?? []).filter((i) => i.type === "tool_use").length;
+
+  // Header layout differs between active and historical runs to keep the
+  // active state visually prominent (per the inline-task-runs design).
   return (
-    <div className="rounded-lg border border-info/20 bg-info/5">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2">
-        <div className="flex items-center justify-center h-5 w-5 rounded-full bg-info/10 text-info shrink-0">
-          <Bot className="h-3 w-3" />
-        </div>
-        <div className="flex items-center gap-1.5 text-xs font-medium min-w-0">
-          <Loader2 className="h-3 w-3 animate-spin text-info shrink-0" />
-          <span className="truncate">
-            {(activeTask?.agent_id ? getActorName("agent", activeTask.agent_id) : agentName) ?? "Agent"} is working
-          </span>
+    <div
+      id={`task-run-${task.id}`}
+      data-task-run-id={task.id}
+      data-task-run-status={task.status}
+      className={cn(
+        "rounded-lg border",
+        active ? "border-info/20 bg-info/5" : "border-border bg-card",
+      )}
+    >
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <div className="flex items-center gap-2 px-3 py-2">
+          <CollapsibleTrigger
+            // Render the trigger as a flexible expand-button that fills the
+            // available row width. Sibling action buttons (Stop, runtime
+            // link) live outside the trigger so we never nest a button
+            // inside another button.
+            className="flex flex-1 items-center gap-2 min-w-0 text-left"
+          >
+            <ChevronRight
+              className={cn(
+                "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-90",
+              )}
+            />
+            {active ? (
+              <span className="flex items-center justify-center h-5 w-5 rounded-full bg-info/10 text-info shrink-0">
+                <Bot className="h-3 w-3" />
+              </span>
+            ) : task.status === "completed" ? (
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
+            ) : (
+              <XCircle className="h-4 w-4 shrink-0 text-destructive" />
+            )}
+
+            {active ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium min-w-0">
+                <Loader2 className="h-3 w-3 animate-spin text-info shrink-0" />
+                <span className="truncate">{agentLabel} is working</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs min-w-0">
+                <span className="font-medium shrink-0">{agentLabel}</span>
+                <span className="text-muted-foreground shrink-0">
+                  {new Date(task.created_at).toLocaleString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+                {duration && (
+                  <span className="text-muted-foreground shrink-0">· {duration}</span>
+                )}
+              </span>
+            )}
+          </CollapsibleTrigger>
+
           {runtimeLabel && (
-            <Link href="/daemons" className="text-muted-foreground font-normal shrink-0 hover:text-foreground hover:underline transition-colors">
-              on {runtimeLabel}
+            <Link
+              href="/daemons"
+              className={cn(
+                "text-xs hover:underline transition-colors shrink-0 truncate",
+                active
+                  ? "text-muted-foreground font-normal hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {active ? `on ${runtimeLabel}` : runtimeLabel}
             </Link>
           )}
-        </div>
-        <span className="ml-auto text-xs text-muted-foreground tabular-nums shrink-0">{elapsed}</span>
-        {toolCount > 0 && (
-          <span className="text-xs text-muted-foreground shrink-0">
-            {toolCount} tool {toolCount === 1 ? "call" : "calls"}
-          </span>
-        )}
-        <button
-          onClick={handleCancel}
-          disabled={cancelling}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 shrink-0"
-          title="Stop agent"
-        >
-          {cancelling ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
+
+          {active ? (
+            <>
+              <span className="text-xs text-muted-foreground tabular-nums shrink-0">{elapsed}</span>
+              {toolCount > 0 && (
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {toolCount} tool {toolCount === 1 ? "call" : "calls"}
+                </span>
+              )}
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 shrink-0"
+                title="Stop agent"
+              >
+                {cancelling ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Square className="h-3 w-3" />
+                )}
+                <span>Stop</span>
+              </button>
+            </>
           ) : (
-            <Square className="h-3 w-3" />
-          )}
-          <span>Stop</span>
-        </button>
-      </div>
-
-      {/* Timeline content */}
-      {items.length > 0 && (
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="relative max-h-80 overflow-y-auto border-t border-info/10 px-3 py-2 space-y-0.5"
-        >
-          {items.map((item, idx) => (
-            <TimelineRow key={`${item.seq}-${idx}`} item={item} />
-          ))}
-
-          {!autoScroll && (
-            <button
-              onClick={() => {
-                if (scrollRef.current) {
-                  scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-                  setAutoScroll(true);
-                }
-              }}
-              className="sticky bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full bg-background border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground shadow-sm"
+            <span
+              className={cn(
+                "capitalize text-xs shrink-0",
+                task.status === "completed" && "text-success",
+                task.status === "failed" && "text-destructive",
+                task.status === "cancelled" && "text-muted-foreground",
+              )}
             >
-              <ArrowDown className="h-3 w-3" />
-              Latest
-            </button>
+              {task.status}
+            </span>
           )}
         </div>
-      )}
-    </div>
-  );
-}
 
-// ─── TaskRunHistory (past execution logs) ──────────────────────────────────
+        <CollapsibleContent>
+          {active ? (
+            (items ?? []).length > 0 && (
+              <div
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="relative max-h-80 overflow-y-auto border-t border-info/10 px-3 py-2 space-y-0.5"
+              >
+                {(items ?? []).map((item, idx) => (
+                  <TimelineRow key={`${item.seq}-${idx}`} item={item} />
+                ))}
 
-interface TaskRunHistoryProps {
-  issueId: string;
-}
-
-export function TaskRunHistory({ issueId }: TaskRunHistoryProps) {
-  const [tasks, setTasks] = useState<AgentTask[]>([]);
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    api.listTasksByIssue(issueId).then(setTasks).catch(console.error);
-  }, [issueId]);
-
-  // Refresh when a task completes
-  useWSEvent(
-    "task:completed",
-    useCallback((payload: unknown) => {
-      const p = payload as TaskCompletedPayload;
-      if (p.issue_id !== issueId) return;
-      api.listTasksByIssue(issueId).then(setTasks).catch(console.error);
-    }, [issueId]),
-  );
-
-  useWSEvent(
-    "task:failed",
-    useCallback((payload: unknown) => {
-      const p = payload as TaskFailedPayload;
-      if (p.issue_id !== issueId) return;
-      api.listTasksByIssue(issueId).then(setTasks).catch(console.error);
-    }, [issueId]),
-  );
-
-  // Refresh when a task is cancelled
-  useWSEvent(
-    "task:cancelled",
-    useCallback((payload: unknown) => {
-      const p = payload as TaskCancelledPayload;
-      if (p.issue_id !== issueId) return;
-      api.listTasksByIssue(issueId).then(setTasks).catch(console.error);
-    }, [issueId]),
-  );
-
-  const completedTasks = tasks.filter((t) => t.status === "completed" || t.status === "failed" || t.status === "cancelled");
-  if (completedTasks.length === 0) return null;
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
-        <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />
-        <Clock className="h-3 w-3" />
-        <span>Execution history ({completedTasks.length})</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="mt-1 space-y-2">
-          {completedTasks.map((task) => (
-            <TaskRunEntry key={task.id} task={task} />
-          ))}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
-function TaskRunEntry({ task }: { task: AgentTask }) {
-  const runtimes = useRuntimeStore((s) => s.runtimes);
-  const daemonsStore = useRuntimeStore((s) => s.daemons);
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<TimelineItem[] | null>(null);
-  const rt = runtimes.find((r) => r.id === task.runtime_id);
-  const dm = rt?.daemon_ref ? daemonsStore.find((d) => d.id === rt.daemon_ref) : null;
-  const runLabel = [dm?.device_name || dm?.daemon_id, rt?.provider].filter(Boolean).join(" / ");
-
-  const loadMessages = useCallback(() => {
-    if (items !== null) return; // already loaded
-    api.listTaskMessages(task.id).then((msgs) => {
-      setItems(buildTimeline(msgs));
-    }).catch((e) => {
-      console.error(e);
-      setItems([]);
-    });
-  }, [task.id, items]);
-
-  useEffect(() => {
-    if (open) loadMessages();
-  }, [open, loadMessages]);
-
-  const duration = task.started_at && task.completed_at
-    ? formatDuration(task.started_at, task.completed_at)
-    : null;
-
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent/30 transition-colors border border-transparent hover:border-border">
-        <ChevronRight className={cn("h-3 w-3 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
-        {task.status === "completed" ? (
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
-        ) : (
-          <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
-        )}
-        <span className="text-muted-foreground">
-          {new Date(task.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
-        </span>
-        {duration && <span className="text-muted-foreground">{duration}</span>}
-        {runLabel && (
-          <Link href="/daemons" className="text-muted-foreground hover:text-foreground hover:underline transition-colors" onClick={(e) => e.stopPropagation()}>
-            {runLabel}
-          </Link>
-        )}
-        <span className={cn("ml-auto capitalize", task.status === "completed" ? "text-success" : "text-destructive")}>
-          {task.status}
-        </span>
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="ml-5 mt-1 max-h-64 overflow-y-auto rounded border bg-muted/30 px-3 py-2 space-y-0.5">
-          {task.status === "failed" && task.error && (
-            <div className="rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive mb-1">
-              {task.error}
-            </div>
-          )}
-          {items === null ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Loading...
-            </div>
-          ) : items.length === 0 && !(task.status === "failed" && task.error) ? (
-            <p className="text-xs text-muted-foreground py-2">No execution data recorded.</p>
+                {!autoScroll && (
+                  <button
+                    onClick={() => {
+                      if (scrollRef.current) {
+                        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                        setAutoScroll(true);
+                      }
+                    }}
+                    className="sticky bottom-0 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full bg-background border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground shadow-sm"
+                  >
+                    <ArrowDown className="h-3 w-3" />
+                    Latest
+                  </button>
+                )}
+              </div>
+            )
           ) : (
-            items?.map((item, idx) => (
-              <TimelineRow key={`${item.seq}-${idx}`} item={item} />
-            ))
+            <div className="ml-5 mb-2 max-h-64 overflow-y-auto rounded border bg-muted/30 px-3 py-2 space-y-0.5 mr-3">
+              {task.status === "failed" && task.error && (
+                <div className="rounded bg-destructive/10 px-2 py-1.5 text-xs text-destructive mb-1">
+                  {task.error}
+                </div>
+              )}
+              {items === null ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading...
+                </div>
+              ) : items.length === 0 && !(task.status === "failed" && task.error) ? (
+                <p className="text-xs text-muted-foreground py-2">No execution data recorded.</p>
+              ) : (
+                items.map((item, idx) => <TimelineRow key={`${item.seq}-${idx}`} item={item} />)
+              )}
+            </div>
           )}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
   );
 }
 
@@ -586,4 +542,109 @@ function ErrorRow({ item }: { item: TimelineItem }) {
       <span className="text-destructive">{item.content}</span>
     </div>
   );
+}
+
+// ─── Hook: per-issue task runs (live updates via WS) ───────────────────────
+
+export function useIssueTaskRuns(issueId: string): AgentTask[] {
+  const [tasks, setTasks] = useState<AgentTask[]>([]);
+
+  const refresh = useCallback(() => {
+    api.listTasksByIssue(issueId).then(setTasks).catch(console.error);
+  }, [issueId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useWSEvent(
+    "task:dispatch",
+    useCallback(
+      (payload: unknown) => {
+        const p = payload as { issue_id?: string };
+        if (p?.issue_id !== issueId) return;
+        refresh();
+      },
+      [issueId, refresh],
+    ),
+  );
+
+  useWSEvent(
+    "task:completed",
+    useCallback(
+      (payload: unknown) => {
+        const p = payload as TaskCompletedPayload;
+        if (p?.issue_id !== issueId) return;
+        refresh();
+      },
+      [issueId, refresh],
+    ),
+  );
+
+  useWSEvent(
+    "task:failed",
+    useCallback(
+      (payload: unknown) => {
+        const p = payload as TaskFailedPayload;
+        if (p?.issue_id !== issueId) return;
+        refresh();
+      },
+      [issueId, refresh],
+    ),
+  );
+
+  useWSEvent(
+    "task:cancelled",
+    useCallback(
+      (payload: unknown) => {
+        const p = payload as TaskCancelledPayload;
+        if (p?.issue_id !== issueId) return;
+        refresh();
+      },
+      [issueId, refresh],
+    ),
+  );
+
+  return tasks;
+}
+
+/**
+ * Group tasks by their trigger (issue itself vs. specific comment).
+ * Ordering within each bucket is chronological (oldest first).
+ */
+export function groupTaskRunsByTrigger(tasks: AgentTask[]): {
+  issueTriggered: AgentTask[];
+  byCommentId: Map<string, AgentTask[]>;
+} {
+  const issueTriggered: AgentTask[] = [];
+  const byCommentId = new Map<string, AgentTask[]>();
+
+  const sorted = [...tasks].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+  );
+
+  for (const t of sorted) {
+    if (t.trigger_comment_id) {
+      const list = byCommentId.get(t.trigger_comment_id) ?? [];
+      list.push(t);
+      byCommentId.set(t.trigger_comment_id, list);
+    } else {
+      issueTriggered.push(t);
+    }
+  }
+
+  return { issueTriggered, byCommentId };
+}
+
+/** Programmatic helper: scroll to and expand a task run card. */
+export function scrollToTaskRun(taskId: string) {
+  const el = document.getElementById(`task-run-${taskId}`);
+  if (!el) return;
+  window.dispatchEvent(
+    new CustomEvent("multica:expand-task-run", { detail: { taskId } }),
+  );
+  // Allow the expansion to start before scrolling so the card lands centered.
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
 }

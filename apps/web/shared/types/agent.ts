@@ -78,6 +78,8 @@ export interface AgentTask {
   result: unknown;
   error: string | null;
   created_at: string;
+  /** Comment that triggered this run; absent/null when triggered by the issue itself. */
+  trigger_comment_id?: string | null;
 }
 
 export interface Agent {

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Issue, Comment, TimelineEntry } from "@/shared/types";
+import type { AgentTask } from "@/shared/types/agent";
 
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
@@ -153,6 +154,7 @@ const mockUpdateComment = vi.hoisted(() => vi.fn());
 const mockDeleteComment = vi.hoisted(() => vi.fn());
 const mockDeleteIssue = vi.hoisted(() => vi.fn());
 const mockUpdateIssue = vi.hoisted(() => vi.fn());
+const mockListTasksByIssue = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 
 vi.mock("@/shared/api", () => ({
   api: {
@@ -169,8 +171,9 @@ vi.mock("@/shared/api", () => ({
     subscribeToIssue: vi.fn().mockResolvedValue(undefined),
     unsubscribeFromIssue: vi.fn().mockResolvedValue(undefined),
     getActiveTaskForIssue: vi.fn().mockResolvedValue({ task: null }),
-    listTasksByIssue: vi.fn().mockResolvedValue([]),
+    listTasksByIssue: (...args: any[]) => mockListTasksByIssue(...args),
     listTaskMessages: vi.fn().mockResolvedValue([]),
+    cancelTask: vi.fn(),
     getSubIssues: vi.fn().mockResolvedValue({ issues: [], total: 0 }),
   },
 }));
@@ -395,5 +398,120 @@ describe("IssueDetailPage", () => {
 
     const wsLink = screen.getByText("Test WS");
     expect(wsLink.closest("a")).toHaveAttribute("href", "/issues");
+  });
+
+  describe("inline agent task runs", () => {
+    function makeTask(overrides: Partial<AgentTask>): AgentTask {
+      return {
+        id: "task-x",
+        agent_id: "agent-1",
+        runtime_id: "rt-1",
+        issue_id: "issue-1",
+        status: "completed",
+        priority: 0,
+        dispatched_at: null,
+        started_at: "2026-01-16T00:00:00Z",
+        completed_at: "2026-01-16T00:01:00Z",
+        result: null,
+        error: null,
+        created_at: "2026-01-16T00:00:00Z",
+        trigger_comment_id: null,
+        ...overrides,
+      };
+    }
+
+    it("does not render the standalone Execution history block", async () => {
+      mockGetIssue.mockResolvedValueOnce(mockIssue);
+      mockListTimeline.mockResolvedValueOnce(mockTimeline);
+      mockListTasksByIssue.mockResolvedValueOnce([
+        makeTask({ id: "task-1", trigger_comment_id: null }),
+      ]);
+      await renderPage();
+
+      await waitFor(() => {
+        expect(screen.getByText(/Started working on this/)).toBeInTheDocument();
+      });
+
+      // The previous "Execution history (N)" block should be gone — runs
+      // are now rendered inline at their trigger point.
+      expect(screen.queryByText(/Execution history/i)).not.toBeInTheDocument();
+    });
+
+    it("renders an issue-triggered task run before any comment", async () => {
+      mockGetIssue.mockResolvedValueOnce(mockIssue);
+      mockListTimeline.mockResolvedValueOnce(mockTimeline);
+      mockListTasksByIssue.mockResolvedValueOnce([
+        makeTask({ id: "task-issue", trigger_comment_id: null }),
+      ]);
+      const { container } = await renderPage();
+
+      await waitFor(() => {
+        expect(container.querySelector("#task-run-task-issue")).not.toBeNull();
+      });
+
+      const runEl = container.querySelector("#task-run-task-issue") as HTMLElement;
+      const firstComment = container.querySelector("#comment-comment-1") as HTMLElement;
+      expect(runEl).not.toBeNull();
+      expect(firstComment).not.toBeNull();
+      // Issue-triggered runs should appear before the first comment in DOM order.
+      expect(runEl.compareDocumentPosition(firstComment) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    });
+
+    it("renders a comment-triggered task run beneath its comment thread", async () => {
+      mockGetIssue.mockResolvedValueOnce(mockIssue);
+      mockListTimeline.mockResolvedValueOnce(mockTimeline);
+      mockListTasksByIssue.mockResolvedValueOnce([
+        makeTask({ id: "task-c1", trigger_comment_id: "comment-1" }),
+      ]);
+      const { container } = await renderPage();
+
+      await waitFor(() => {
+        expect(container.querySelector("#task-run-task-c1")).not.toBeNull();
+      });
+
+      const runEl = container.querySelector("#task-run-task-c1") as HTMLElement;
+      const triggerComment = container.querySelector("#comment-comment-1") as HTMLElement;
+      const otherComment = container.querySelector("#comment-comment-2") as HTMLElement;
+      expect(runEl).not.toBeNull();
+      // Run renders after its triggering comment...
+      expect(triggerComment.compareDocumentPosition(runEl) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+      // ...and before the next comment in the timeline.
+      expect(runEl.compareDocumentPosition(otherComment) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    });
+
+    it("shows a sidebar working indicator that scrolls to the inline run when clicked", async () => {
+      mockGetIssue.mockResolvedValueOnce(mockIssue);
+      mockListTimeline.mockResolvedValueOnce(mockTimeline);
+      mockListTasksByIssue.mockResolvedValueOnce([
+        makeTask({ id: "task-running", status: "running", trigger_comment_id: null }),
+      ]);
+
+      const scrollIntoView = vi.fn();
+      // jsdom doesn't implement scrollIntoView; inject it on the prototype so
+      // the click handler's call lands on a spy we control.
+      Element.prototype.scrollIntoView = scrollIntoView;
+
+      const { container } = await renderPage();
+
+      const indicator = await screen.findByTestId("sidebar-agent-working");
+      expect(indicator).toHaveTextContent(/working/i);
+      expect(container.querySelector("#task-run-task-running")).not.toBeNull();
+
+      const user = userEvent.setup();
+      await user.click(indicator);
+
+      // requestAnimationFrame is used to schedule the scroll; flush it.
+      await act(async () => {
+        await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+      });
+
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
   });
 });
