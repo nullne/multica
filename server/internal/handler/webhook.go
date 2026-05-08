@@ -751,6 +751,9 @@ type CreateIssueActionConfig struct {
 	// Optional event filters; matched against Event.Type and Event.Data["repo"].
 	EventTypes []string `json:"event_types,omitempty"`
 	Repos      []string `json:"repos,omitempty"`
+	// Optional GitHub label filter. When non-empty, the action only matches
+	// PR/issue events whose label set includes at least one of these names.
+	GitHubLabels []string `json:"github_labels,omitempty"`
 	// Optional member user IDs to subscribe to issues created by this action.
 	SubscriberIDs []string `json:"subscriber_ids,omitempty"`
 }
@@ -765,11 +768,13 @@ type CommentIssueActionConfig struct {
 	MentionAgentID  string   `json:"mention_agent_id,omitempty"`
 	EventTypes      []string `json:"event_types,omitempty"`
 	Repos           []string `json:"repos,omitempty"`
+	GitHubLabels    []string `json:"github_labels,omitempty"`
 }
 
 // matchesFilters returns true when the action should run for this event,
-// based on the EventTypes/Repos filters. Empty filter lists mean "match all".
-func actionMatchesFilters(eventTypes, repos []string, evt wh.Event) bool {
+// based on the EventTypes/Repos/GitHubLabels filters. Empty filter lists
+// mean "match all".
+func actionMatchesFilters(eventTypes, repos, githubLabels []string, evt wh.Event) bool {
 	if len(eventTypes) > 0 {
 		matched := false
 		for _, t := range eventTypes {
@@ -801,7 +806,41 @@ func actionMatchesFilters(eventTypes, repos []string, evt wh.Event) bool {
 			return false
 		}
 	}
+	if len(githubLabels) > 0 {
+		eventLabels := parseGitHubLabels(evt.Data["labels"])
+		matched := false
+		for _, want := range githubLabels {
+			want = strings.TrimSpace(want)
+			if want == "" {
+				continue
+			}
+			if _, ok := eventLabels[want]; ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
 	return true
+}
+
+// parseGitHubLabels turns the comma-separated label string the github
+// adapter writes into Event.Data["labels"] back into a set for membership
+// checks.
+func parseGitHubLabels(raw string) map[string]struct{} {
+	out := make(map[string]struct{})
+	if raw == "" {
+		return out
+	}
+	for _, part := range strings.Split(raw, ",") {
+		name := strings.TrimSpace(part)
+		if name != "" {
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 // --- Public ingest endpoint (token-authenticated) ---
@@ -932,7 +971,7 @@ func (h *Handler) runWebhookAction(ctx context.Context, webhook db.Webhook, acti
 		if err := json.Unmarshal(action.Config, &cfg); err != nil {
 			return false, pgtype.UUID{}, fmt.Errorf("invalid action config: %w", err)
 		}
-		if !actionMatchesFilters(cfg.EventTypes, cfg.Repos, evt) {
+		if !actionMatchesFilters(cfg.EventTypes, cfg.Repos, cfg.GitHubLabels, evt) {
 			return false, pgtype.UUID{}, nil
 		}
 		issueID, err := h.executeCreateIssueAction(ctx, webhook, cfg, evt, preexistingLink, hasPreexistingLink)
@@ -946,7 +985,7 @@ func (h *Handler) runWebhookAction(ctx context.Context, webhook db.Webhook, acti
 		if err := json.Unmarshal(action.Config, &cfg); err != nil {
 			return false, pgtype.UUID{}, fmt.Errorf("invalid action config: %w", err)
 		}
-		if !actionMatchesFilters(cfg.EventTypes, cfg.Repos, evt) {
+		if !actionMatchesFilters(cfg.EventTypes, cfg.Repos, cfg.GitHubLabels, evt) {
 			return false, pgtype.UUID{}, nil
 		}
 		issueID, ran, err := h.executeCommentIssueAction(ctx, webhook, cfg, evt)
