@@ -21,7 +21,7 @@ INSERT INTO issue (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
     $16, $17, $18
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation
 `
 
 type CreateIssueParams struct {
@@ -92,6 +92,8 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
 }
@@ -106,7 +108,7 @@ func (q *Queries) DeleteIssue(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getIssue = `-- name: GetIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation FROM issue
 WHERE id = $1
 `
 
@@ -138,12 +140,14 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
 }
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation FROM issue
 WHERE workspace_id = $1 AND number = $2
 `
 
@@ -180,12 +184,14 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
 }
 
 const getIssueInWorkspace = `-- name: GetIssueInWorkspace :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation FROM issue
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -222,12 +228,14 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
 }
 
 const listIssues = `-- name: ListIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation FROM issue
 WHERE workspace_id = $1
   AND ($4::text IS NULL OR status = $4)
   AND ($5::text IS NULL OR priority = $5)
@@ -286,6 +294,8 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]Issue
 			&i.DispatchProvider,
 			&i.DispatchDaemonID,
 			&i.DispatchDaemonLabel,
+			&i.AgentMentionChainCount,
+			&i.AgentMentionChainGeneration,
 		); err != nil {
 			return nil, err
 		}
@@ -295,6 +305,126 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]Issue
 		return nil, err
 	}
 	return items, nil
+}
+
+const listIssuesByParent = `-- name: ListIssuesByParent :many
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation FROM issue
+WHERE parent_issue_id = $1
+ORDER BY position ASC, created_at DESC
+`
+
+func (q *Queries) ListIssuesByParent(ctx context.Context, parentIssueID pgtype.UUID) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listIssuesByParent, parentIssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.VerifierAgentID,
+			&i.MaxVerificationRounds,
+			&i.CriteriaStatus,
+			&i.DispatchProvider,
+			&i.DispatchDaemonID,
+			&i.DispatchDaemonLabel,
+			&i.AgentMentionChainCount,
+			&i.AgentMentionChainGeneration,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const releaseIssueAgentMentionChainSlot = `-- name: ReleaseIssueAgentMentionChainSlot :execrows
+UPDATE issue SET
+    agent_mention_chain_count = agent_mention_chain_count - 1
+WHERE id = $1
+  AND agent_mention_chain_generation = $2::bigint
+  AND agent_mention_chain_count > 0
+`
+
+type ReleaseIssueAgentMentionChainSlotParams struct {
+	ID         pgtype.UUID `json:"id"`
+	Generation int64       `json:"generation"`
+}
+
+// Releases a previously-reserved chain slot. The generation match ensures we
+// only roll back when the chain still belongs to the same epoch as the
+// reservation — if a human reset has bumped the generation in between, this
+// becomes a no-op so the post-reset chain is not corrupted.
+func (q *Queries) ReleaseIssueAgentMentionChainSlot(ctx context.Context, arg ReleaseIssueAgentMentionChainSlotParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseIssueAgentMentionChainSlot, arg.ID, arg.Generation)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const resetIssueAgentMentionChain = `-- name: ResetIssueAgentMentionChain :exec
+UPDATE issue SET
+    agent_mention_chain_count = 0,
+    agent_mention_chain_generation = agent_mention_chain_generation + 1
+WHERE id = $1
+`
+
+// Resets the chain count and bumps the generation so any in-flight rollbacks
+// from the pre-reset epoch become no-ops.
+func (q *Queries) ResetIssueAgentMentionChain(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, resetIssueAgentMentionChain, id)
+	return err
+}
+
+const tryReserveIssueAgentMentionChain = `-- name: TryReserveIssueAgentMentionChain :one
+UPDATE issue SET
+    agent_mention_chain_count = agent_mention_chain_count + 1
+WHERE id = $1 AND agent_mention_chain_count < $2::int
+RETURNING agent_mention_chain_count, agent_mention_chain_generation
+`
+
+type TryReserveIssueAgentMentionChainParams struct {
+	ID       pgtype.UUID `json:"id"`
+	MaxCount int32       `json:"max_count"`
+}
+
+type TryReserveIssueAgentMentionChainRow struct {
+	AgentMentionChainCount      int32 `json:"agent_mention_chain_count"`
+	AgentMentionChainGeneration int64 `json:"agent_mention_chain_generation"`
+}
+
+// Atomically reserves one slot in the agent-to-agent mention chain for this
+// issue. Returns the new count and the current generation when the reservation
+// succeeds. Returns no rows (pgx.ErrNoRows) when the chain has already reached
+// the supplied limit, so concurrent callers cannot exceed the cap.
+func (q *Queries) TryReserveIssueAgentMentionChain(ctx context.Context, arg TryReserveIssueAgentMentionChainParams) (TryReserveIssueAgentMentionChainRow, error) {
+	row := q.db.QueryRow(ctx, tryReserveIssueAgentMentionChain, arg.ID, arg.MaxCount)
+	var i TryReserveIssueAgentMentionChainRow
+	err := row.Scan(&i.AgentMentionChainCount, &i.AgentMentionChainGeneration)
+	return i, err
 }
 
 const updateIssue = `-- name: UpdateIssue :one
@@ -315,7 +445,7 @@ UPDATE issue SET
     dispatch_daemon_label = $15,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation
 `
 
 type UpdateIssueParams struct {
@@ -380,59 +510,10 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
-}
-
-const listIssuesByParent = `-- name: ListIssuesByParent :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label FROM issue
-WHERE parent_issue_id = $1
-ORDER BY position ASC, created_at DESC
-`
-
-func (q *Queries) ListIssuesByParent(ctx context.Context, parentIssueID pgtype.UUID) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listIssuesByParent, parentIssueID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Issue{}
-	for rows.Next() {
-		var i Issue
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.Title,
-			&i.Description,
-			&i.Status,
-			&i.Priority,
-			&i.AssigneeType,
-			&i.AssigneeID,
-			&i.CreatorType,
-			&i.CreatorID,
-			&i.ParentIssueID,
-			&i.AcceptanceCriteria,
-			&i.ContextRefs,
-			&i.Position,
-			&i.DueDate,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.Number,
-			&i.VerifierAgentID,
-			&i.MaxVerificationRounds,
-			&i.CriteriaStatus,
-			&i.DispatchProvider,
-			&i.DispatchDaemonID,
-			&i.DispatchDaemonLabel,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const updateIssueAcceptanceCriteria = `-- name: UpdateIssueAcceptanceCriteria :one
@@ -441,7 +522,7 @@ UPDATE issue SET
     criteria_status = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation
 `
 
 type UpdateIssueAcceptanceCriteriaParams struct {
@@ -478,6 +559,8 @@ func (q *Queries) UpdateIssueAcceptanceCriteria(ctx context.Context, arg UpdateI
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
 }
@@ -487,7 +570,7 @@ UPDATE issue SET
     criteria_status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation
 `
 
 type UpdateIssueCriteriaStatusParams struct {
@@ -523,6 +606,8 @@ func (q *Queries) UpdateIssueCriteriaStatus(ctx context.Context, arg UpdateIssue
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
 }
@@ -532,7 +617,7 @@ UPDATE issue SET
     status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation
 `
 
 type UpdateIssueStatusParams struct {
@@ -568,6 +653,8 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.DispatchProvider,
 		&i.DispatchDaemonID,
 		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
 	)
 	return i, err
 }

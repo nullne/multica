@@ -80,3 +80,32 @@ RETURNING *;
 
 -- name: DeleteIssue :exec
 DELETE FROM issue WHERE id = $1;
+
+-- name: TryReserveIssueAgentMentionChain :one
+-- Atomically reserves one slot in the agent-to-agent mention chain for this
+-- issue. Returns the new count and the current generation when the reservation
+-- succeeds. Returns no rows (pgx.ErrNoRows) when the chain has already reached
+-- the supplied limit, so concurrent callers cannot exceed the cap.
+UPDATE issue SET
+    agent_mention_chain_count = agent_mention_chain_count + 1
+WHERE id = $1 AND agent_mention_chain_count < sqlc.arg(max_count)::int
+RETURNING agent_mention_chain_count, agent_mention_chain_generation;
+
+-- name: ReleaseIssueAgentMentionChainSlot :execrows
+-- Releases a previously-reserved chain slot. The generation match ensures we
+-- only roll back when the chain still belongs to the same epoch as the
+-- reservation — if a human reset has bumped the generation in between, this
+-- becomes a no-op so the post-reset chain is not corrupted.
+UPDATE issue SET
+    agent_mention_chain_count = agent_mention_chain_count - 1
+WHERE id = $1
+  AND agent_mention_chain_generation = sqlc.arg(generation)::bigint
+  AND agent_mention_chain_count > 0;
+
+-- name: ResetIssueAgentMentionChain :exec
+-- Resets the chain count and bumps the generation so any in-flight rollbacks
+-- from the pre-reset epoch become no-ops.
+UPDATE issue SET
+    agent_mention_chain_count = 0,
+    agent_mention_chain_generation = agent_mention_chain_generation + 1
+WHERE id = $1;

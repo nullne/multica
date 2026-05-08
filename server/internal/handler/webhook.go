@@ -1198,6 +1198,13 @@ func (h *Handler) executeCommentIssueAction(ctx context.Context, webhook db.Webh
 		"issue_status":        issue.Status,
 	})
 
+	// Bot-user webhook comment counts as human intervention — reset the
+	// agent-to-agent mention chain so subsequent agent dispatches are unblocked.
+	if err := h.Queries.ResetIssueAgentMentionChain(ctx, issue.ID); err != nil {
+		slog.Warn("webhook comment: reset agent mention chain failed", "issue_id", uuidToString(issue.ID), "error", err)
+	}
+
+	onCommentEnqueued := false
 	if h.shouldEnqueueOnComment(ctx, issue) && !h.commentMentionsOthersButNotAssignee(comment.Content, issue) {
 		replyTo := comment.ID
 		if comment.ParentID.Valid {
@@ -1205,10 +1212,12 @@ func (h *Handler) executeCommentIssueAction(ctx context.Context, webhook db.Webh
 		}
 		if _, err := h.TaskService.EnqueueTaskForIssue(ctx, issue, replyTo); err != nil {
 			slog.Warn("webhook comment: enqueue assignee task failed", "issue_id", uuidToString(issue.ID), "error", err)
+		} else {
+			onCommentEnqueued = true
 		}
 	}
 
-	h.enqueueMentionedAgentTasks(ctx, issue, comment, "member", botID)
+	h.enqueueMentionedAgentTasks(ctx, issue, comment, "member", botID, onCommentEnqueued)
 
 	return issue.ID, true, nil
 }
