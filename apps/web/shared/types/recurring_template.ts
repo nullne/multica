@@ -23,6 +23,7 @@ export interface RecurringTemplate {
   created_by_type: string;
   created_at: string;
   updated_at: string;
+  subscriber_ids: string[];
 }
 
 export interface CreateRecurringTemplateRequest {
@@ -32,10 +33,14 @@ export interface CreateRecurringTemplateRequest {
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
   due_date_offset_hours?: number;
+  dispatch_provider?: string | null;
+  dispatch_daemon_id?: string | null;
+  dispatch_daemon_label?: string | null;
   schedule: string;
   timezone?: string;
   enabled?: boolean;
   max_runs?: number | null;
+  subscriber_ids?: string[];
 }
 
 export interface UpdateRecurringTemplateRequest {
@@ -45,8 +50,12 @@ export interface UpdateRecurringTemplateRequest {
   assignee_type?: IssueAssigneeType | null;
   assignee_id?: string | null;
   due_date_offset_hours?: number | null;
+  dispatch_provider?: string | null;
+  dispatch_daemon_id?: string | null;
+  dispatch_daemon_label?: string | null;
   schedule?: string;
   timezone?: string;
   enabled?: boolean;
   max_runs?: number | null;
+  subscriber_ids?: string[];
 }

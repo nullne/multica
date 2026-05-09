@@ -6,8 +6,127 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/nullne/multica/server/internal/events"
+	"github.com/nullne/multica/server/internal/service"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
+
+// TestTemplateSubscriberPropagation seeds a template with member subscribers
+// plus a dispatch provider/daemon, fires the scheduler, and verifies that the
+// generated issue inherits both. Covers the requirement that scheduled issues
+// pick up the template's subscribers and agent dispatch settings.
+func TestTemplateSubscriberPropagation(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+	queries := db.New(testPool)
+
+	// Insert an agent so the template can be assigned to one.
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, runtime_mode, providers)
+		VALUES ($1, 'Subscriber test agent', 'cloud', ARRAY['claude'])
+		RETURNING id
+	`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID) })
+
+	// Insert a daemon so we can assert the dispatch settings round-trip.
+	var daemonID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO daemon (workspace_id, daemon_id, device_name, status)
+		VALUES ($1, $2, 'Test Device', 'online')
+		RETURNING id
+	`, testWorkspaceID, "daemon-"+t.Name()).Scan(&daemonID); err != nil {
+		t.Fatalf("insert daemon: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonID) })
+
+	// Get a member to use as subscriber.
+	var subscriberUserID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT user_id::text FROM member WHERE workspace_id = $1 LIMIT 1
+	`, testWorkspaceID).Scan(&subscriberUserID); err != nil {
+		t.Fatalf("query member: %v", err)
+	}
+
+	// Insert template due now, assigned to the agent, with dispatch settings.
+	oldNextRunAt := time.Now().Add(-time.Minute)
+	var templateID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO recurring_issue_template (
+			workspace_id, title, priority, schedule, timezone, enabled,
+			next_run_at, created_by_id, created_by_type,
+			assignee_type, assignee_id, dispatch_provider, dispatch_daemon_id
+		)
+		SELECT $1, 'Subscriber test', 'medium', '* * * * *', 'UTC', TRUE, $2,
+		       m.user_id, 'member', 'agent', $3, 'claude', $4
+		FROM member m WHERE m.workspace_id = $1 LIMIT 1
+		RETURNING id
+	`, testWorkspaceID, oldNextRunAt, agentID, daemonID).Scan(&templateID); err != nil {
+		t.Fatalf("insert template: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM recurring_issue_template WHERE id = $1`, templateID)
+	})
+
+	// Add a subscriber row.
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO recurring_template_subscriber (template_id, user_id)
+		VALUES ($1, $2)
+	`, templateID, subscriberUserID); err != nil {
+		t.Fatalf("insert template subscriber: %v", err)
+	}
+
+	// Sanity-check the subscribers query.
+	subs, err := queries.ListRecurringTemplateSubscribers(ctx, parseUUID(templateID))
+	if err != nil {
+		t.Fatalf("ListRecurringTemplateSubscribers: %v", err)
+	}
+	if len(subs) != 1 {
+		t.Fatalf("expected 1 template subscriber, got %d", len(subs))
+	}
+
+	// Trigger the scheduler.
+	bus := events.New()
+	taskSvc := service.NewTaskService(queries, nil, bus)
+	fireRecurringTemplates(ctx, testPool, queries, taskSvc, bus)
+
+	// Verify exactly one issue was created from this template — discover its id
+	// by selecting on the template's title (unique to this test) and asserting
+	// it inherited both the dispatch settings and the subscriber row.
+	var issueID, dispatchProvider, dispatchDaemonID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, COALESCE(dispatch_provider, ''), COALESCE(dispatch_daemon_id::text, '')
+		FROM issue WHERE workspace_id = $1 AND title = 'Subscriber test'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID, &dispatchProvider, &dispatchDaemonID); err != nil {
+		t.Fatalf("query generated issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	if dispatchProvider != "claude" {
+		t.Errorf("expected dispatch_provider 'claude', got %q", dispatchProvider)
+	}
+	if dispatchDaemonID != daemonID {
+		t.Errorf("expected dispatch_daemon_id %q, got %q", daemonID, dispatchDaemonID)
+	}
+
+	// Subscriber on the generated issue should match the template subscriber.
+	var rowCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM issue_subscriber
+		WHERE issue_id = $1 AND user_type = 'member' AND user_id = $2
+	`, issueID, subscriberUserID).Scan(&rowCount); err != nil {
+		t.Fatalf("query issue_subscriber: %v", err)
+	}
+	if rowCount != 1 {
+		t.Fatalf("expected template subscriber to be propagated to issue, got %d rows", rowCount)
+	}
+}
 
 // TestSchedulerIdempotency verifies that a template claimed by one instance
 // (next_run_at advanced) is skipped by a concurrent instance via ClaimRecurringTemplate.

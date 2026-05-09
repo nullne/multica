@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -15,31 +16,32 @@ import (
 
 // RecurringTemplateResponse is the JSON shape returned to clients.
 type RecurringTemplateResponse struct {
-	ID                  string  `json:"id"`
-	WorkspaceID         string  `json:"workspace_id"`
-	Title               string  `json:"title"`
-	Description         *string `json:"description"`
-	Priority            string  `json:"priority"`
-	AssigneeType        *string `json:"assignee_type"`
-	AssigneeID          *string `json:"assignee_id"`
-	DueDateOffsetHours  *int32  `json:"due_date_offset_hours"`
-	DispatchProvider    *string `json:"dispatch_provider"`
-	DispatchDaemonID    *string `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel *string `json:"dispatch_daemon_label"`
-	Schedule            string  `json:"schedule"`
-	Timezone            string  `json:"timezone"`
-	Enabled             bool    `json:"enabled"`
-	MaxRuns             *int32  `json:"max_runs"`
-	SuccessfulRunsCount int32   `json:"successful_runs_count"`
-	LastTriggeredAt     *string `json:"last_triggered_at"`
-	NextRunAt           *string `json:"next_run_at"`
-	CreatedByID         string  `json:"created_by_id"`
-	CreatedByType       string  `json:"created_by_type"`
-	CreatedAt           string  `json:"created_at"`
-	UpdatedAt           string  `json:"updated_at"`
+	ID                  string   `json:"id"`
+	WorkspaceID         string   `json:"workspace_id"`
+	Title               string   `json:"title"`
+	Description         *string  `json:"description"`
+	Priority            string   `json:"priority"`
+	AssigneeType        *string  `json:"assignee_type"`
+	AssigneeID          *string  `json:"assignee_id"`
+	DueDateOffsetHours  *int32   `json:"due_date_offset_hours"`
+	DispatchProvider    *string  `json:"dispatch_provider"`
+	DispatchDaemonID    *string  `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel *string  `json:"dispatch_daemon_label"`
+	Schedule            string   `json:"schedule"`
+	Timezone            string   `json:"timezone"`
+	Enabled             bool     `json:"enabled"`
+	MaxRuns             *int32   `json:"max_runs"`
+	SuccessfulRunsCount int32    `json:"successful_runs_count"`
+	LastTriggeredAt     *string  `json:"last_triggered_at"`
+	NextRunAt           *string  `json:"next_run_at"`
+	CreatedByID         string   `json:"created_by_id"`
+	CreatedByType       string   `json:"created_by_type"`
+	CreatedAt           string   `json:"created_at"`
+	UpdatedAt           string   `json:"updated_at"`
+	SubscriberIDs       []string `json:"subscriber_ids"`
 }
 
-func recurringTemplateToResponse(t db.RecurringIssueTemplate) RecurringTemplateResponse {
+func recurringTemplateToResponse(t db.RecurringIssueTemplate, subscriberIDs []string) RecurringTemplateResponse {
 	var dueDateOffset *int32
 	if t.DueDateOffsetHours.Valid {
 		dueDateOffset = &t.DueDateOffsetHours.Int32
@@ -47,6 +49,9 @@ func recurringTemplateToResponse(t db.RecurringIssueTemplate) RecurringTemplateR
 	var maxRuns *int32
 	if t.MaxRuns.Valid {
 		maxRuns = &t.MaxRuns.Int32
+	}
+	if subscriberIDs == nil {
+		subscriberIDs = []string{}
 	}
 	return RecurringTemplateResponse{
 		ID:                  uuidToString(t.ID),
@@ -71,23 +76,68 @@ func recurringTemplateToResponse(t db.RecurringIssueTemplate) RecurringTemplateR
 		CreatedByType:       t.CreatedByType,
 		CreatedAt:           timestampToString(t.CreatedAt),
 		UpdatedAt:           timestampToString(t.UpdatedAt),
+		SubscriberIDs:       subscriberIDs,
 	}
 }
 
+// listTemplateSubscriberIDs loads the member subscriber IDs for a template.
+// Errors are logged and treated as an empty list to keep template responses
+// usable even if the subscribers row read fails.
+func (h *Handler) listTemplateSubscriberIDs(ctx context.Context, templateID pgtype.UUID) []string {
+	rows, err := h.Queries.ListRecurringTemplateSubscribers(ctx, templateID)
+	if err != nil {
+		slog.Warn("list recurring template subscribers failed", "template_id", uuidToString(templateID), "error", err)
+		return []string{}
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = uuidToString(r.UserID)
+	}
+	return ids
+}
+
+// validateMemberSubscribers checks that every UUID is a member of the workspace.
+// Returns the list of parsed UUIDs (deduped, in input order) on success, or an
+// error message string on the first invalid entry.
+func (h *Handler) validateMemberSubscribers(ctx context.Context, workspaceID pgtype.UUID, ids []string) ([]pgtype.UUID, string) {
+	seen := make(map[string]bool, len(ids))
+	parsed := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uid := parseUUID(id)
+		if !uid.Valid {
+			return nil, "invalid subscriber id: " + id
+		}
+		_, err := h.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
+			UserID:      uid,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			return nil, "subscriber " + id + " is not a member of this workspace"
+		}
+		parsed = append(parsed, uid)
+	}
+	return parsed, ""
+}
+
 type CreateRecurringTemplateRequest struct {
-	Title               string  `json:"title"`
-	Description         *string `json:"description"`
-	Priority            *string `json:"priority"`
-	AssigneeType        *string `json:"assignee_type"`
-	AssigneeID          *string `json:"assignee_id"`
-	DueDateOffsetHours  *int32  `json:"due_date_offset_hours"`
-	DispatchProvider    *string `json:"dispatch_provider"`
-	DispatchDaemonID    *string `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel *string `json:"dispatch_daemon_label"`
-	Schedule            string  `json:"schedule"`
-	Timezone            string  `json:"timezone"`
-	Enabled             *bool   `json:"enabled"`
-	MaxRuns             *int32  `json:"max_runs"`
+	Title               string   `json:"title"`
+	Description         *string  `json:"description"`
+	Priority            *string  `json:"priority"`
+	AssigneeType        *string  `json:"assignee_type"`
+	AssigneeID          *string  `json:"assignee_id"`
+	DueDateOffsetHours  *int32   `json:"due_date_offset_hours"`
+	DispatchProvider    *string  `json:"dispatch_provider"`
+	DispatchDaemonID    *string  `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel *string  `json:"dispatch_daemon_label"`
+	Schedule            string   `json:"schedule"`
+	Timezone            string   `json:"timezone"`
+	Enabled             *bool    `json:"enabled"`
+	MaxRuns             *int32   `json:"max_runs"`
+	SubscriberIDs       []string `json:"subscriber_ids"`
 }
 
 func (h *Handler) CreateRecurringTemplate(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +208,12 @@ func (h *Handler) CreateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		maxRuns = pgtype.Int4{Int32: *req.MaxRuns, Valid: true}
 	}
 
+	subscriberUUIDs, errMsg := h.validateMemberSubscribers(r.Context(), parseUUID(workspaceID), req.SubscriberIDs)
+	if errMsg != "" {
+		writeError(w, http.StatusBadRequest, errMsg)
+		return
+	}
+
 	t, err := h.Queries.CreateRecurringTemplate(r.Context(), db.CreateRecurringTemplateParams{
 		WorkspaceID:         parseUUID(workspaceID),
 		Title:               req.Title,
@@ -183,7 +239,19 @@ func (h *Handler) CreateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, recurringTemplateToResponse(t))
+	subscriberIDs := make([]string, 0, len(subscriberUUIDs))
+	for _, uid := range subscriberUUIDs {
+		if err := h.Queries.AddRecurringTemplateSubscriber(r.Context(), db.AddRecurringTemplateSubscriberParams{
+			TemplateID: t.ID,
+			UserID:     uid,
+		}); err != nil {
+			slog.Warn("add recurring template subscriber failed", "template_id", uuidToString(t.ID), "user_id", uuidToString(uid), "error", err)
+			continue
+		}
+		subscriberIDs = append(subscriberIDs, uuidToString(uid))
+	}
+
+	writeJSON(w, http.StatusCreated, recurringTemplateToResponse(t, subscriberIDs))
 }
 
 func (h *Handler) ListRecurringTemplates(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +278,7 @@ func (h *Handler) ListRecurringTemplates(w http.ResponseWriter, r *http.Request)
 
 	resp := make([]RecurringTemplateResponse, len(templates))
 	for i, t := range templates {
-		resp[i] = recurringTemplateToResponse(t)
+		resp[i] = recurringTemplateToResponse(t, h.listTemplateSubscriberIDs(r.Context(), t.ID))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -235,23 +303,24 @@ func (h *Handler) GetRecurringTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, recurringTemplateToResponse(t))
+	writeJSON(w, http.StatusOK, recurringTemplateToResponse(t, h.listTemplateSubscriberIDs(r.Context(), t.ID)))
 }
 
 type UpdateRecurringTemplateRequest struct {
-	Title               *string `json:"title"`
-	Description         *string `json:"description"`
-	Priority            *string `json:"priority"`
-	AssigneeType        *string `json:"assignee_type"`
-	AssigneeID          *string `json:"assignee_id"`
-	DueDateOffsetHours  *int32  `json:"due_date_offset_hours"`
-	DispatchProvider    *string `json:"dispatch_provider"`
-	DispatchDaemonID    *string `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel *string `json:"dispatch_daemon_label"`
-	Schedule            *string `json:"schedule"`
-	Timezone            *string `json:"timezone"`
-	Enabled             *bool   `json:"enabled"`
-	MaxRuns             *int32  `json:"max_runs"`
+	Title               *string  `json:"title"`
+	Description         *string  `json:"description"`
+	Priority            *string  `json:"priority"`
+	AssigneeType        *string  `json:"assignee_type"`
+	AssigneeID          *string  `json:"assignee_id"`
+	DueDateOffsetHours  *int32   `json:"due_date_offset_hours"`
+	DispatchProvider    *string  `json:"dispatch_provider"`
+	DispatchDaemonID    *string  `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel *string  `json:"dispatch_daemon_label"`
+	Schedule            *string  `json:"schedule"`
+	Timezone            *string  `json:"timezone"`
+	Enabled             *bool    `json:"enabled"`
+	MaxRuns             *int32   `json:"max_runs"`
+	SubscriberIDs       []string `json:"subscriber_ids"`
 }
 
 func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request) {
@@ -390,6 +459,21 @@ func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Resolve subscriber updates before mutating: validating against the
+	// workspace surfaces a clear 400 instead of a silent no-op when the caller
+	// passes an invalid member id.
+	var subscriberUUIDs []pgtype.UUID
+	subscribersChanged := false
+	if _, ok := rawFields["subscriber_ids"]; ok {
+		subscribersChanged = true
+		var errMsg string
+		subscriberUUIDs, errMsg = h.validateMemberSubscribers(r.Context(), parseUUID(workspaceID), req.SubscriberIDs)
+		if errMsg != "" {
+			writeError(w, http.StatusBadRequest, errMsg)
+			return
+		}
+	}
+
 	updated, err := h.Queries.UpdateRecurringTemplate(r.Context(), params)
 	if err != nil {
 		if isNotFound(err) {
@@ -400,7 +484,21 @@ func (h *Handler) UpdateRecurringTemplate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, recurringTemplateToResponse(updated))
+	if subscribersChanged {
+		if err := h.Queries.ClearRecurringTemplateSubscribers(r.Context(), updated.ID); err != nil {
+			slog.Warn("clear recurring template subscribers failed", "template_id", uuidToString(updated.ID), "error", err)
+		}
+		for _, uid := range subscriberUUIDs {
+			if err := h.Queries.AddRecurringTemplateSubscriber(r.Context(), db.AddRecurringTemplateSubscriberParams{
+				TemplateID: updated.ID,
+				UserID:     uid,
+			}); err != nil {
+				slog.Warn("add recurring template subscriber failed", "template_id", uuidToString(updated.ID), "user_id", uuidToString(uid), "error", err)
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, recurringTemplateToResponse(updated, h.listTemplateSubscriberIDs(r.Context(), updated.ID)))
 }
 
 func (h *Handler) DeleteRecurringTemplate(w http.ResponseWriter, r *http.Request) {

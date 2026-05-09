@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Bell, Check, CheckCircle2, ChevronDown, Cpu, Monitor, Pencil, Plus, RefreshCw, Trash2, X as XIcon } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -32,10 +33,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import type {
+  AgentRuntime,
   IssueAssigneeType,
   IssuePriority,
+  ProviderAuthStatus,
   RecurringTemplate,
   CreateRecurringTemplateRequest,
   UpdateRecurringTemplateRequest,
@@ -43,7 +57,8 @@ import type {
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
-import { AssigneePicker } from "@/features/issues/components/pickers";
+import { AssigneePicker, DaemonPicker } from "@/features/issues/components/pickers";
+import { useRuntimeStore } from "@/features/runtimes";
 import { useRecurringTemplateStore } from "../store";
 
 const PRIORITY_OPTIONS: { value: IssuePriority; label: string }[] = [
@@ -72,6 +87,9 @@ interface TemplateFormData {
   max_runs: string;
   assignee_type: IssueAssigneeType | null;
   assignee_id: string | null;
+  dispatch_provider: string | null;
+  dispatch_daemon_id: string | null;
+  subscriber_ids: string[];
 }
 
 const DEFAULT_FORM: TemplateFormData = {
@@ -85,6 +103,9 @@ const DEFAULT_FORM: TemplateFormData = {
   max_runs: "",
   assignee_type: null,
   assignee_id: null,
+  dispatch_provider: null,
+  dispatch_daemon_id: null,
+  subscriber_ids: [],
 };
 
 function templateToForm(t: RecurringTemplate): TemplateFormData {
@@ -99,7 +120,43 @@ function templateToForm(t: RecurringTemplate): TemplateFormData {
     max_runs: t.max_runs != null ? String(t.max_runs) : "",
     assignee_type: t.assignee_type ?? null,
     assignee_id: t.assignee_id ?? null,
+    dispatch_provider: t.dispatch_provider ?? null,
+    dispatch_daemon_id: t.dispatch_daemon_id ?? null,
+    subscriber_ids: t.subscriber_ids ?? [],
   };
+}
+
+function getProviderAuth(
+  runtimes: AgentRuntime[],
+  daemonId: string | null,
+  provider: string | null,
+): ProviderAuthStatus {
+  if (!daemonId || !provider) return "unknown";
+  const rt = runtimes.find(
+    (r) => r.daemon_ref === daemonId && r.provider === provider,
+  );
+  return rt?.auth_status ?? "not_installed";
+}
+
+function pickBestProvider(
+  agentProviders: string[],
+  runtimes: AgentRuntime[],
+  daemonId: string | null,
+): string | null {
+  if (agentProviders.length === 0) return null;
+  if (!daemonId) return agentProviders[0] ?? null;
+  const ready = agentProviders.find((p) => {
+    const rt = runtimes.find((r) => r.daemon_ref === daemonId && r.provider === p);
+    return rt?.auth_status === "ready";
+  });
+  return ready ?? agentProviders[0] ?? null;
+}
+
+function ProviderAuthBadge({ status }: { status: ProviderAuthStatus }) {
+  if (status === "ready") return <span className="ml-auto h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />;
+  if (status === "unauthenticated") return <span className="ml-auto text-[10px] text-amber-500">unauth</span>;
+  if (status === "not_installed") return <span className="ml-auto text-[10px] text-muted-foreground">not installed</span>;
+  return null;
 }
 
 function formatNextRun(nextRunAt?: string): string {
@@ -116,6 +173,219 @@ function formatNextRun(nextRunAt?: string): string {
 
 function isCompleted(t: RecurringTemplate): boolean {
   return t.max_runs != null && t.successful_runs_count >= t.max_runs;
+}
+
+function SubscriberField({
+  selectedIds,
+  onChange,
+}: {
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const members = useWorkspaceStore((s) => s.members);
+  const { getMemberName } = useActorName();
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const selected = selectedIds
+    .map((id) => members.find((m) => m.user_id === id))
+    .filter((m): m is (typeof members)[number] => Boolean(m));
+
+  const filtered = members.filter((m) =>
+    m.name.toLowerCase().includes(filter.toLowerCase()),
+  );
+
+  const toggle = (userId: string) => {
+    if (selectedIds.includes(userId)) {
+      onChange(selectedIds.filter((id) => id !== userId));
+    } else {
+      onChange([...selectedIds, userId]);
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setFilter(""); }}>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full justify-start font-normal text-left"
+          />
+        }
+      >
+        <Bell className="size-3.5 text-muted-foreground" />
+        {selected.length === 0 ? (
+          <span className="text-muted-foreground">No subscribers</span>
+        ) : (
+          <span className="truncate">
+            {selected.length === 1
+              ? getMemberName(selected[0]!.user_id)
+              : `${selected.length} subscribers`}
+          </span>
+        )}
+        <ChevronDown className="ml-auto size-3.5 text-muted-foreground" />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-0">
+        <div className="px-2 py-1.5 border-b">
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter members..."
+            className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
+          />
+        </div>
+        <div className="p-1 max-h-60 overflow-y-auto">
+          {filtered.length === 0 && (
+            <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+              {filter ? "No members match" : "No members"}
+            </div>
+          )}
+          {filtered.map((m) => {
+            const isSelected = selectedIds.includes(m.user_id);
+            return (
+              <button
+                type="button"
+                key={m.user_id}
+                onClick={() => toggle(m.user_id)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+              >
+                <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
+                <span className="flex-1 truncate text-left">{m.name}</span>
+                {isSelected && <Check className="size-3.5 text-muted-foreground shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+        {selected.length > 0 && (
+          <div className="border-t p-1">
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent transition-colors"
+            >
+              <XIcon className="size-3" />
+              Clear all
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function DispatchFields({
+  agentId,
+  daemonId,
+  provider,
+  onDaemonChange,
+  onProviderChange,
+}: {
+  agentId: string;
+  daemonId: string | null;
+  provider: string | null;
+  onDaemonChange: (daemonId: string | null) => void;
+  onProviderChange: (provider: string | null) => void;
+}) {
+  const agents = useWorkspaceStore((s) => s.agents);
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const runtimes = useRuntimeStore((s) => s.runtimes);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
+
+  useEffect(() => {
+    fetchAllRuntimes();
+  }, [fetchAllRuntimes]);
+
+  const agent = agents.find((a) => a.id === agentId);
+  const providers = agent?.providers ?? [];
+  const daemonLocked = !!agent?.default_daemon_id;
+  const lockedDaemon = daemonLocked
+    ? daemons.find((d) => d.id === agent!.default_daemon_id)
+    : undefined;
+  const selectedDaemon = daemons.find((d) => d.id === daemonId);
+
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div className="space-y-1">
+        <label className="text-xs font-medium">Daemon</label>
+        {daemonLocked ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled
+            className="w-full justify-start font-normal opacity-70"
+          >
+            <Monitor className="size-3.5 text-muted-foreground" />
+            <span>{lockedDaemon?.device_name || lockedDaemon?.daemon_id || "Locked daemon"}</span>
+          </Button>
+        ) : (
+          <DaemonPicker
+            daemonId={daemonId}
+            provider={provider}
+            onSelect={(id) => {
+              onDaemonChange(id);
+              onProviderChange(pickBestProvider(providers, runtimes, id));
+            }}
+            align="start"
+            triggerRender={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-start font-normal"
+              />
+            }
+            trigger={
+              <>
+                <Monitor className="size-3.5 text-muted-foreground" />
+                <span className={selectedDaemon ? "" : "text-muted-foreground"}>
+                  {selectedDaemon
+                    ? selectedDaemon.device_name || selectedDaemon.daemon_id
+                    : "Any daemon"}
+                </span>
+                <ChevronDown className="ml-auto size-3.5 text-muted-foreground" />
+              </>
+            }
+          />
+        )}
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-medium">Provider</label>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-start font-normal"
+                disabled={providers.length === 0}
+              />
+            }
+          >
+            <Cpu className="size-3.5 text-muted-foreground" />
+            <span className={cn("flex-1 text-left capitalize", provider ? "" : "text-muted-foreground")}>
+              {provider ?? (providers.length === 0 ? "No providers" : "Pick provider")}
+            </span>
+            {provider && daemonId && (
+              <ProviderAuthBadge status={getProviderAuth(runtimes, daemonId, provider)} />
+            )}
+            <ChevronDown className="size-3.5 text-muted-foreground" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {providers.map((p) => {
+              const auth = getProviderAuth(runtimes, daemonId, p);
+              return (
+                <DropdownMenuItem key={p} onClick={() => onProviderChange(p)}>
+                  <span className="capitalize flex-1">{p}</span>
+                  <ProviderAuthBadge status={auth} />
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
 }
 
 function AssigneeField({
@@ -248,9 +518,43 @@ function TemplateFormDialog({
               <AssigneeField
                 assigneeType={form.assignee_type}
                 assigneeId={form.assignee_id}
-                onChange={(type, id) => set({ assignee_type: type, assignee_id: id })}
+                onChange={(type, id) => {
+                  if (type !== "agent") {
+                    set({
+                      assignee_type: type,
+                      assignee_id: id,
+                      dispatch_provider: null,
+                      dispatch_daemon_id: null,
+                    });
+                  } else {
+                    set({ assignee_type: type, assignee_id: id });
+                  }
+                }}
               />
             </div>
+          </div>
+
+          {/* Agent dispatch settings (daemon + provider) */}
+          {form.assignee_type === "agent" && form.assignee_id && (
+            <DispatchFields
+              agentId={form.assignee_id}
+              daemonId={form.dispatch_daemon_id}
+              provider={form.dispatch_provider}
+              onDaemonChange={(id) => set({ dispatch_daemon_id: id })}
+              onProviderChange={(p) => set({ dispatch_provider: p })}
+            />
+          )}
+
+          {/* Subscribers (member-only) */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium">Subscribers</label>
+            <SubscriberField
+              selectedIds={form.subscriber_ids}
+              onChange={(ids) => set({ subscriber_ids: ids })}
+            />
+            <p className="text-xs text-muted-foreground">
+              These members are auto-subscribed to every issue created from this template.
+            </p>
           </div>
 
           {/* Schedule */}
@@ -361,12 +665,20 @@ function buildCreatePayload(form: TemplateFormData): CreateRecurringTemplateRequ
   if (form.assignee_type && form.assignee_id) {
     payload.assignee_type = form.assignee_type;
     payload.assignee_id = form.assignee_id;
+    // Dispatch is meaningful only for agent assignees.
+    if (form.assignee_type === "agent") {
+      if (form.dispatch_provider) payload.dispatch_provider = form.dispatch_provider;
+      if (form.dispatch_daemon_id) payload.dispatch_daemon_id = form.dispatch_daemon_id;
+    }
   }
   if (form.due_date_offset_hours.trim()) {
     payload.due_date_offset_hours = parseInt(form.due_date_offset_hours, 10);
   }
   if (form.max_runs.trim()) {
     payload.max_runs = parseInt(form.max_runs, 10);
+  }
+  if (form.subscriber_ids.length > 0) {
+    payload.subscriber_ids = form.subscriber_ids;
   }
   return payload;
 }
@@ -379,6 +691,7 @@ function buildUpdatePayload(form: TemplateFormData): UpdateRecurringTemplateRequ
   const description = form.description.trim();
   const offset = form.due_date_offset_hours.trim();
   const maxRuns = form.max_runs.trim();
+  const isAgent = form.assignee_type === "agent" && !!form.assignee_id;
   return {
     title: form.title.trim(),
     description: description ? description : null,
@@ -390,6 +703,9 @@ function buildUpdatePayload(form: TemplateFormData): UpdateRecurringTemplateRequ
     assignee_id: form.assignee_id,
     due_date_offset_hours: offset ? parseInt(offset, 10) : null,
     max_runs: maxRuns ? parseInt(maxRuns, 10) : null,
+    dispatch_provider: isAgent ? form.dispatch_provider : null,
+    dispatch_daemon_id: isAgent ? form.dispatch_daemon_id : null,
+    subscriber_ids: form.subscriber_ids,
   };
 }
 
@@ -550,6 +866,12 @@ export function RecurringTemplateManager() {
                     <span className="flex items-center gap-1">
                       <ActorAvatar actorType={t.assignee_type} actorId={t.assignee_id} size={14} />
                       <span>{getActorName(t.assignee_type, t.assignee_id)}</span>
+                    </span>
+                  )}
+                  {t.subscriber_ids.length > 0 && (
+                    <span className="flex items-center gap-1">
+                      <Bell className="h-3 w-3" />
+                      {t.subscriber_ids.length}
                     </span>
                   )}
                   {t.priority !== "medium" && (
