@@ -8,6 +8,7 @@ import {
   Bot,
   Monitor,
   ChevronDown,
+  ChevronsUpDown,
   Settings,
   LogOut,
   Plus,
@@ -15,6 +16,7 @@ import {
   BookOpenText,
   SquarePen,
   CircleUser,
+  UserCog,
 } from "lucide-react";
 import { WorkspaceAvatar } from "@/features/workspace";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
@@ -81,6 +83,14 @@ export function AppSidebar() {
     useWorkspaceStore.getState().clearWorkspace();
   };
 
+  const userInitials = (user?.name ?? user?.email ?? "")
+    .split(/\s+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+
   return (
       <Sidebar variant="inset">
         {/* Workspace Switcher */}
@@ -106,12 +116,6 @@ export function AppSidebar() {
                   side="bottom"
                   sideOffset={4}
                 >
-                  <DropdownMenuGroup>
-                    <DropdownMenuLabel className="text-xs text-muted-foreground">
-                      {user?.email}
-                    </DropdownMenuLabel>
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
                   <DropdownMenuGroup className="group/ws-section">
                     <DropdownMenuLabel className="flex items-center text-xs text-muted-foreground">
                       Workspaces
@@ -143,13 +147,6 @@ export function AppSidebar() {
                         )}
                       </DropdownMenuItem>
                     ))}
-                  </DropdownMenuGroup>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuGroup>
-                    <DropdownMenuItem variant="destructive" onClick={logout}>
-                      <LogOut className="h-3.5 w-3.5" />
-                      Log out
-                    </DropdownMenuItem>
                   </DropdownMenuGroup>
                 </DropdownMenuContent>
                 </DropdownMenu>
@@ -219,7 +216,66 @@ export function AppSidebar() {
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
-        <SidebarFooter />
+
+        {/* User menu — opens upward */}
+        <SidebarFooter>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <SidebarMenuButton size="lg" className="gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+                        {user?.avatar_url ? (
+                          <img
+                            src={user.avatar_url}
+                            alt={user.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          userInitials || "?"
+                        )}
+                      </span>
+                      <span className="flex min-w-0 flex-1 flex-col text-left">
+                        <span className="truncate text-sm font-medium">
+                          {user?.name ?? "Account"}
+                        </span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {user?.email}
+                        </span>
+                      </span>
+                      <ChevronsUpDown className="size-3.5 text-muted-foreground" />
+                    </SidebarMenuButton>
+                  }
+                />
+                <DropdownMenuContent
+                  className="w-(--radix-dropdown-menu-trigger-width) min-w-56"
+                  align="start"
+                  side="top"
+                  sideOffset={4}
+                >
+                  <DropdownMenuLabel className="text-xs text-muted-foreground">
+                    {user?.email}
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem
+                      onClick={() => router.push("/account")}
+                    >
+                      <UserCog className="h-3.5 w-3.5" />
+                      Account settings
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={logout}>
+                    <LogOut className="h-3.5 w-3.5" />
+                    Log out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
         <SidebarRail />
       </Sidebar>
   );
