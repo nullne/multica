@@ -5,6 +5,9 @@ import { Lock, UserMinus } from "lucide-react";
 import type { Agent, IssueAssigneeType, UpdateIssueRequest } from "@/shared/types";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { useRuntimeStore } from "@/features/runtimes";
+import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
+import { resolveAssigneeChange } from "@/features/issues/utils/dispatch";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import {
   PropertyPicker,
@@ -23,6 +26,7 @@ export function canAssignAgent(agent: Agent, userId: string | undefined, memberR
 export function AssigneePicker({
   assigneeType,
   assigneeId,
+  verifierAgentId,
   onUpdate,
   trigger: customTrigger,
   triggerRender,
@@ -32,6 +36,8 @@ export function AssigneePicker({
 }: {
   assigneeType: IssueAssigneeType | null;
   assigneeId: string | null;
+  /** Current verifier on the issue — used to clear it if the new assignee is the same agent. */
+  verifierAgentId?: string | null;
   onUpdate: (updates: Partial<UpdateIssueRequest>) => void;
   trigger?: React.ReactNode;
   triggerRender?: React.ReactElement;
@@ -67,6 +73,24 @@ export function AssigneePicker({
       ? getActorName(assigneeType, assigneeId)
       : "Unassigned";
 
+  const emit = (type?: IssueAssigneeType | null, id?: string | null) => {
+    const runtimes = useRuntimeStore.getState().runtimes;
+    const savedDispatch =
+      type === "agent" && id
+        ? useIssueDefaultsStore.getState().getAgentDispatch(id)
+        : undefined;
+    onUpdate(
+      resolveAssigneeChange({
+        type,
+        id,
+        agents,
+        runtimes,
+        savedDispatch,
+        currentVerifierId: verifierAgentId ?? null,
+      }),
+    );
+  };
+
   return (
     <PropertyPicker
       open={open}
@@ -95,7 +119,7 @@ export function AssigneePicker({
       <PickerItem
         selected={!assigneeType && !assigneeId}
         onClick={() => {
-          onUpdate({ assignee_type: null, assignee_id: null });
+          emit(null, null);
           setOpen(false);
         }}
       >
@@ -111,10 +135,7 @@ export function AssigneePicker({
               key={m.user_id}
               selected={isSelected("member", m.user_id)}
               onClick={() => {
-                onUpdate({
-                  assignee_type: "member",
-                  assignee_id: m.user_id,
-                });
+                emit("member", m.user_id);
                 setOpen(false);
               }}
             >
@@ -137,10 +158,7 @@ export function AssigneePicker({
                 disabled={!allowed}
                 onClick={() => {
                   if (!allowed) return;
-                  onUpdate({
-                    assignee_type: "agent",
-                    assignee_id: a.id,
-                  });
+                  emit("agent", a.id);
                   setOpen(false);
                 }}
               >

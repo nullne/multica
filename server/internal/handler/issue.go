@@ -586,14 +586,66 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			params.MaxVerificationRounds = pgtype.Int4{Valid: false}
 		}
 	}
-	if _, ok := rawFields["dispatch_provider"]; ok {
+	_, dispatchProviderPresent := rawFields["dispatch_provider"]
+	_, dispatchDaemonIDPresent := rawFields["dispatch_daemon_id"]
+	_, dispatchDaemonLabelPresent := rawFields["dispatch_daemon_label"]
+	if dispatchProviderPresent {
 		params.DispatchProvider = ptrToText(req.DispatchProvider)
 	}
-	if _, ok := rawFields["dispatch_daemon_id"]; ok {
+	if dispatchDaemonIDPresent {
 		params.DispatchDaemonID = parseOptionalUUID(req.DispatchDaemonID)
 	}
-	if _, ok := rawFields["dispatch_daemon_label"]; ok {
+	if dispatchDaemonLabelPresent {
 		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
+	}
+
+	// Reconcile dispatch + verifier with the assignee.
+	// When the assignee transitions to a non-agent (member or unassigned),
+	// agent-only fields no longer apply and must be cleared. When the assignee
+	// transitions to a different agent and the caller did not explicitly set
+	// new dispatch hints, drop the previous agent's hints so runtime selection
+	// can fall back to the new agent's defaults instead of pinning to a stale
+	// daemon/provider that the new agent may not support.
+	assigneeFieldPresent := false
+	if _, ok := rawFields["assignee_type"]; ok {
+		assigneeFieldPresent = true
+	}
+	if _, ok := rawFields["assignee_id"]; ok {
+		assigneeFieldPresent = true
+	}
+	if assigneeFieldPresent {
+		newIsAgent := params.AssigneeType.Valid && params.AssigneeType.String == "agent" && params.AssigneeID.Valid
+		prevIsAgent := prevIssue.AssigneeType.Valid && prevIssue.AssigneeType.String == "agent" && prevIssue.AssigneeID.Valid
+		assigneeIdentityChanged := prevIssue.AssigneeType.String != params.AssigneeType.String ||
+			uuidToString(prevIssue.AssigneeID) != uuidToString(params.AssigneeID)
+
+		if !newIsAgent {
+			if !dispatchProviderPresent {
+				params.DispatchProvider = pgtype.Text{Valid: false}
+			}
+			if !dispatchDaemonIDPresent {
+				params.DispatchDaemonID = pgtype.UUID{Valid: false}
+			}
+			if !dispatchDaemonLabelPresent {
+				params.DispatchDaemonLabel = pgtype.Text{Valid: false}
+			}
+			if _, ok := rawFields["verifier_agent_id"]; !ok {
+				params.VerifierAgentID = pgtype.UUID{Valid: false}
+			}
+			if _, ok := rawFields["max_verification_rounds"]; !ok {
+				params.MaxVerificationRounds = pgtype.Int4{Valid: false}
+			}
+		} else if prevIsAgent && assigneeIdentityChanged {
+			if !dispatchProviderPresent {
+				params.DispatchProvider = pgtype.Text{Valid: false}
+			}
+			if !dispatchDaemonIDPresent {
+				params.DispatchDaemonID = pgtype.UUID{Valid: false}
+			}
+			if !dispatchDaemonLabelPresent {
+				params.DispatchDaemonLabel = pgtype.Text{Valid: false}
+			}
+		}
 	}
 	if _, ok := rawFields["parent_issue_id"]; ok {
 		if req.ParentIssueID != nil {
@@ -1134,8 +1186,12 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			AssigneeType:          prevIssue.AssigneeType,
 			AssigneeID:            prevIssue.AssigneeID,
 			VerifierAgentID:       prevIssue.VerifierAgentID,
+			ParentIssueID:         prevIssue.ParentIssueID,
 			DueDate:               prevIssue.DueDate,
 			MaxVerificationRounds: prevIssue.MaxVerificationRounds,
+			DispatchProvider:      prevIssue.DispatchProvider,
+			DispatchDaemonID:      prevIssue.DispatchDaemonID,
+			DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
 		}
 
 		if req.Updates.Title != nil {
@@ -1185,6 +1241,61 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				params.DueDate = pgtype.Timestamptz{Valid: false}
 			}
 		}
+		_, batchProviderPresent := rawUpdates["dispatch_provider"]
+		_, batchDaemonIDPresent := rawUpdates["dispatch_daemon_id"]
+		_, batchDaemonLabelPresent := rawUpdates["dispatch_daemon_label"]
+		if batchProviderPresent {
+			params.DispatchProvider = ptrToText(req.Updates.DispatchProvider)
+		}
+		if batchDaemonIDPresent {
+			params.DispatchDaemonID = parseOptionalUUID(req.Updates.DispatchDaemonID)
+		}
+		if batchDaemonLabelPresent {
+			params.DispatchDaemonLabel = ptrToText(req.Updates.DispatchDaemonLabel)
+		}
+
+		// Reconcile dispatch + verifier with assignee — see UpdateIssue for rationale.
+		batchAssigneeFieldPresent := false
+		if _, ok := rawUpdates["assignee_type"]; ok {
+			batchAssigneeFieldPresent = true
+		}
+		if _, ok := rawUpdates["assignee_id"]; ok {
+			batchAssigneeFieldPresent = true
+		}
+		if batchAssigneeFieldPresent {
+			newIsAgent := params.AssigneeType.Valid && params.AssigneeType.String == "agent" && params.AssigneeID.Valid
+			prevIsAgent := prevIssue.AssigneeType.Valid && prevIssue.AssigneeType.String == "agent" && prevIssue.AssigneeID.Valid
+			assigneeIdentityChanged := prevIssue.AssigneeType.String != params.AssigneeType.String ||
+				uuidToString(prevIssue.AssigneeID) != uuidToString(params.AssigneeID)
+
+			if !newIsAgent {
+				if !batchProviderPresent {
+					params.DispatchProvider = pgtype.Text{Valid: false}
+				}
+				if !batchDaemonIDPresent {
+					params.DispatchDaemonID = pgtype.UUID{Valid: false}
+				}
+				if !batchDaemonLabelPresent {
+					params.DispatchDaemonLabel = pgtype.Text{Valid: false}
+				}
+				if _, ok := rawUpdates["verifier_agent_id"]; !ok {
+					params.VerifierAgentID = pgtype.UUID{Valid: false}
+				}
+				if _, ok := rawUpdates["max_verification_rounds"]; !ok {
+					params.MaxVerificationRounds = pgtype.Int4{Valid: false}
+				}
+			} else if prevIsAgent && assigneeIdentityChanged {
+				if !batchProviderPresent {
+					params.DispatchProvider = pgtype.Text{Valid: false}
+				}
+				if !batchDaemonIDPresent {
+					params.DispatchDaemonID = pgtype.UUID{Valid: false}
+				}
+				if !batchDaemonLabelPresent {
+					params.DispatchDaemonLabel = pgtype.Text{Valid: false}
+				}
+			}
+		}
 
 		// Reject bot users as assignees.
 		if req.Updates.AssigneeType != nil && *req.Updates.AssigneeType == "member" && req.Updates.AssigneeID != nil {
@@ -1230,6 +1341,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			uuidToString(prevIssue.VerifierAgentID) != uuidToString(issue.VerifierAgentID)
 		statusChanged := req.Updates.Status != nil && prevIssue.Status != issue.Status
 		priorityChanged := req.Updates.Priority != nil && prevIssue.Priority != issue.Priority
+		dispatchChanged := prevIssue.DispatchProvider != issue.DispatchProvider ||
+			prevIssue.DispatchDaemonID != issue.DispatchDaemonID ||
+			prevIssue.DispatchDaemonLabel != issue.DispatchDaemonLabel
 
 		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
 			"issue":            resp,
@@ -1239,7 +1353,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			"priority_changed": priorityChanged,
 		})
 
-		if assigneeChanged || verifierChanged {
+		if assigneeChanged || verifierChanged || dispatchChanged {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 			if h.shouldEnqueueAgentTask(r.Context(), issue) {
 				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)

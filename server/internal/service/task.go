@@ -171,13 +171,27 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no providers configured")
 	}
 
-	// Use issue-level dispatch hints to constrain runtime selection.
+	// Use issue-level dispatch hints to constrain runtime selection. Hints that
+	// are incompatible with the current agent (e.g. a provider this agent does
+	// not support, left over from a previous assignment) are dropped rather
+	// than treated as hard constraints — otherwise a stale hint would fail
+	// every task even though a viable runtime exists.
+	providerHint := issue.DispatchProvider
+	if providerHint.Valid && !containsString(agent.Providers, providerHint.String) {
+		slog.Info("ignoring stale dispatch_provider hint not supported by agent",
+			"issue_id", util.UUIDToString(issue.ID),
+			"agent_id", util.UUIDToString(agentID),
+			"hint", providerHint.String,
+			"agent_providers", agent.Providers,
+		)
+		providerHint = pgtype.Text{}
+	}
 	params := db.FindAvailableRuntimeConstrainedParams{
 		WorkspaceID: issue.WorkspaceID,
 		Providers:   agent.Providers,
 	}
-	if issue.DispatchProvider.Valid {
-		params.Provider = issue.DispatchProvider
+	if providerHint.Valid {
+		params.Provider = providerHint
 	}
 	if issue.DispatchDaemonID.Valid {
 		params.DaemonID = issue.DispatchDaemonID
@@ -739,6 +753,15 @@ func maxRound(v int) int {
 		return 1
 	}
 	return v
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func priorityToInt(p string) int32 {
