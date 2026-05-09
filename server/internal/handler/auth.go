@@ -265,8 +265,19 @@ func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
 
 	email := strings.ToLower(strings.TrimSpace(identity.Email))
 	if !isEmailAllowed(email) {
-		writeError(w, http.StatusForbidden, "email not allowed")
-		return
+		// An invited member may not be on the env allowlist but already has a
+		// member record from the workspace invite flow. Treat that as proof of
+		// invitation.
+		isMember, memberErr := h.Queries.IsWorkspaceMemberByEmail(r.Context(), email)
+		if memberErr != nil {
+			slog.Warn("firebase login membership check failed", append(logger.RequestAttrs(r), "error", memberErr, "email", email)...)
+			writeError(w, http.StatusInternalServerError, "failed to verify membership")
+			return
+		}
+		if !isMember {
+			writeError(w, http.StatusForbidden, "email not allowed")
+			return
+		}
 	}
 
 	user, err := h.findOrCreateUser(r.Context(), email, identity.Name, identity.PictureURL)

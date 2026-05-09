@@ -32,3 +32,11 @@ FROM member m
 JOIN "user" u ON u.id = m.user_id
 WHERE m.workspace_id = $1
 ORDER BY m.created_at ASC;
+
+-- name: IsWorkspaceMemberByEmail :one
+SELECT EXISTS(
+    SELECT 1
+    FROM member m
+    JOIN "user" u ON u.id = m.user_id
+    WHERE u.email = $1
+) AS is_member;
