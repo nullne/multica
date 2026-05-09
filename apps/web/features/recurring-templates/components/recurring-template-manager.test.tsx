@@ -50,6 +50,8 @@ vi.mock("@/features/workspace", () => ({
 }));
 
 // Mock the assignee picker so it doesn't pull in heavy issue UI for tests.
+// Mirror the real picker contract: agent picks emit assignee + dispatch in
+// one patch (the in-popover confirmation step is what wires that up live).
 vi.mock("@/features/issues/components/pickers", () => ({
   AssigneePicker: ({
     trigger,
@@ -63,34 +65,32 @@ vi.mock("@/features/issues/components/pickers", () => ({
       <button
         type="button"
         data-testid="select-member"
-        onClick={() => onUpdate({ assignee_type: "member", assignee_id: "user-1" })}
+        onClick={() =>
+          onUpdate({
+            assignee_type: "member",
+            assignee_id: "user-1",
+            dispatch_provider: null,
+            dispatch_daemon_id: null,
+            dispatch_daemon_label: null,
+          })
+        }
       >
         Select Test User
       </button>
       <button
         type="button"
         data-testid="select-agent"
-        onClick={() => onUpdate({ assignee_type: "agent", assignee_id: "agent-1" })}
+        onClick={() =>
+          onUpdate({
+            assignee_type: "agent",
+            assignee_id: "agent-1",
+            dispatch_provider: "claude",
+            dispatch_daemon_id: "daemon-1",
+            dispatch_daemon_label: null,
+          })
+        }
       >
         Select Test Agent
-      </button>
-    </div>
-  ),
-  DaemonPicker: ({
-    trigger,
-    onSelect,
-  }: {
-    trigger: React.ReactNode;
-    onSelect: (id: string | null) => void;
-  }) => (
-    <div>
-      <div data-testid="daemon-trigger">{trigger}</div>
-      <button
-        type="button"
-        data-testid="select-daemon"
-        onClick={() => onSelect("daemon-1")}
-      >
-        Select Daemon
       </button>
     </div>
   ),
@@ -461,7 +461,7 @@ describe("RecurringTemplateManager", () => {
     });
   });
 
-  it("includes dispatch settings when assignee is an agent", async () => {
+  it("persists dispatch values emitted by the assignee picker for agent assignees", async () => {
     mocks.api.createRecurringTemplate.mockResolvedValueOnce({
       ...mockTemplate,
       id: "tpl-agent",
@@ -477,10 +477,9 @@ describe("RecurringTemplateManager", () => {
     await user.click(screen.getByRole("button", { name: /new template/i }));
     await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Agent Job");
     await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+    // The mocked AssigneePicker emits dispatch values alongside the assignee
+    // patch — mirroring the real picker's confirmation flow.
     await user.click(screen.getByTestId("select-agent"));
-
-    // Pick a daemon — provider auto-selects to "claude" (only configured option).
-    await user.click(screen.getByTestId("select-daemon"));
     await user.click(screen.getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => {
@@ -495,41 +494,36 @@ describe("RecurringTemplateManager", () => {
     });
   });
 
-  it("seeds default daemon/provider for agent assignees without manual daemon selection", async () => {
-    workspaceState.agents[0] = {
-      id: "agent-1",
-      name: "Test Agent",
-      providers: ["claude"],
-      default_daemon_id: "daemon-1",
-    };
+  it("clears dispatch values when switching from agent to member", async () => {
     mocks.api.createRecurringTemplate.mockResolvedValueOnce({
       ...mockTemplate,
-      id: "tpl-agent-default-daemon",
-      assignee_type: "agent",
-      assignee_id: "agent-1",
-      dispatch_provider: "claude",
-      dispatch_daemon_id: "daemon-1",
+      id: "tpl-member-after-agent",
+      assignee_type: "member",
+      assignee_id: "user-1",
     });
 
     const user = userEvent.setup();
     render(<RecurringTemplateManager />);
 
     await user.click(screen.getByRole("button", { name: /new template/i }));
-    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Locked Agent Job");
+    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Switch Job");
     await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
     await user.click(screen.getByTestId("select-agent"));
+    await user.click(screen.getByTestId("select-member"));
     await user.click(screen.getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => {
-      expect(mocks.api.createRecurringTemplate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          assignee_type: "agent",
-          assignee_id: "agent-1",
-          dispatch_daemon_id: "daemon-1",
-          dispatch_provider: "claude",
-        }),
-      );
+      expect(mocks.api.createRecurringTemplate).toHaveBeenCalled();
     });
+    const payload = mocks.api.createRecurringTemplate.mock.calls[0]?.[0] ?? {};
+    expect(payload).toMatchObject({
+      assignee_type: "member",
+      assignee_id: "user-1",
+    });
+    // Member assignees never carry a dispatch override — keep the create
+    // payload free of stale agent-only fields.
+    expect(payload).not.toHaveProperty("dispatch_provider");
+    expect(payload).not.toHaveProperty("dispatch_daemon_id");
   });
 
   it("calls deleteRecurringTemplate after confirmation", async () => {

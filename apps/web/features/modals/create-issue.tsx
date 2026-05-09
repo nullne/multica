@@ -2,10 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, Check, ChevronRight, Cpu, Monitor, Maximize2, Minimize2, ShieldCheck, ShieldOff, Tag, X as XIcon } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, Monitor, Maximize2, Minimize2, ShieldCheck, ShieldOff, Tag, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { IssueStatus, IssuePriority, IssueAssigneeType, Label, AgentRuntime, ProviderAuthStatus, UpdateIssueRequest } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueAssigneeType, Label, UpdateIssueRequest } from "@/shared/types";
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Button } from "@/components/ui/button";
 import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
 import { TitleEditor } from "@/components/common/title-editor";
-import { StatusIcon, PriorityIcon, AssigneePicker, canAssignAgent, DaemonPicker } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, AssigneePicker, canAssignAgent } from "@/features/issues/components";
 import { useRuntimeStore } from "@/features/runtimes";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { useLabelStore } from "@/features/labels";
@@ -42,29 +42,6 @@ import { api } from "@/shared/api";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { FileUploadButton } from "@/components/common/file-upload-button";
 import { ActorAvatar } from "@/components/common/actor-avatar";
-
-// ---------------------------------------------------------------------------
-// Provider auth helpers
-// ---------------------------------------------------------------------------
-
-function getProviderAuth(
-  runtimes: AgentRuntime[],
-  daemonId: string | undefined,
-  provider: string,
-): ProviderAuthStatus {
-  if (!daemonId) return "unknown";
-  const rt = runtimes.find(
-    (r) => r.daemon_ref === daemonId && r.provider === provider,
-  );
-  return rt?.auth_status ?? "not_installed";
-}
-
-function ProviderAuthBadge({ status }: { status: ProviderAuthStatus }) {
-  if (status === "ready") return <span className="h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />;
-  if (status === "unauthenticated") return <span className="ml-auto text-[10px] text-amber-500">unauth</span>;
-  if (status === "not_installed") return <span className="ml-auto text-[10px] text-muted-foreground">not installed</span>;
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // Pill trigger — shared rounded-full button style for toolbar
@@ -90,21 +67,11 @@ function PillButton({
   );
 }
 
-function DaemonTriggerLabel({ daemonId }: { daemonId?: string }) {
+function DispatchDaemonLabel({ daemonId }: { daemonId: string }) {
   const daemons = useRuntimeStore((s) => s.daemons);
-  const daemon = daemonId ? daemons.find((d) => d.id === daemonId) : undefined;
-  if (!daemon) return <span>Environment</span>;
-  return (
-    <>
-      <span>{daemon.device_name || daemon.daemon_id}</span>
-      <span
-        className={cn(
-          "h-1.5 w-1.5 shrink-0 rounded-full",
-          daemon.status === "online" ? "bg-green-500" : "bg-muted-foreground/40",
-        )}
-      />
-    </>
-  );
+  const daemon = daemons.find((d) => d.id === daemonId);
+  if (!daemon) return null;
+  return <span className="truncate">{daemon.device_name || daemon.daemon_id}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,12 +131,10 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [dispatchProvider, setDispatchProvider] = useState<string | undefined>(initDispatch.provider);
   const [dispatchDaemonId, setDispatchDaemonId] = useState<string | undefined>(initDispatch.daemonId);
   const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
-  const runtimes = useRuntimeStore((s) => s.runtimes);
 
   const selectedAgent = assigneeType === "agent" && assigneeId
     ? agents.find((a) => a.id === assigneeId)
     : null;
-  const daemonLocked = !!selectedAgent?.default_daemon_id;
 
   useEffect(() => {
     if (selectedAgent) fetchAllRuntimes();
@@ -395,7 +360,9 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
           <div className="flex items-center justify-between px-4 py-2">
             <div className="flex items-center gap-1.5">
               {/* Assignee — uses the shared picker so the agent dispatch
-                  confirmation step matches the issue detail entry points. */}
+                  confirmation step matches the issue detail entry points.
+                  Provider/environment render as secondary text alongside the
+                  agent name to keep this row uncluttered. */}
               <AssigneePicker
                 assigneeType={assigneeType ?? null}
                 assigneeId={assigneeId ?? null}
@@ -407,7 +374,24 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
                   assigneeType && assigneeId ? (
                     <>
                       <ActorAvatar actorType={assigneeType} actorId={assigneeId} size={16} />
-                      <span>{assigneeLabel}</span>
+                      <span className="truncate">{assigneeLabel}</span>
+                      {selectedAgent && (dispatchProvider || dispatchDaemonId) && (
+                        <span className="flex items-center gap-1 text-[10px] text-muted-foreground min-w-0">
+                          <span className="text-muted-foreground/70">·</span>
+                          {dispatchProvider && (
+                            <span className="capitalize shrink-0">{dispatchProvider}</span>
+                          )}
+                          {dispatchProvider && dispatchDaemonId && (
+                            <span className="shrink-0">·</span>
+                          )}
+                          {dispatchDaemonId && (
+                            <span className="inline-flex items-center gap-0.5 min-w-0">
+                              <Monitor className="h-2.5 w-2.5 shrink-0" />
+                              <DispatchDaemonLabel daemonId={dispatchDaemonId} />
+                            </span>
+                          )}
+                        </span>
+                      )}
                     </>
                   ) : (
                     <span className="text-muted-foreground">Assignee</span>
@@ -415,57 +399,9 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
                 }
               />
 
-              {/* Agent dispatch options — inline when assignee is an agent */}
+              {/* Agent-only fields beyond dispatch (verifier) */}
               {selectedAgent && (
                 <>
-                  {daemonLocked ? (
-                    <PillButton className="cursor-default opacity-80" disabled>
-                      <Monitor className="size-3.5 text-muted-foreground" />
-                      <DaemonTriggerLabel daemonId={dispatchDaemonId} />
-                    </PillButton>
-                  ) : (
-                    <DaemonPicker
-                      daemonId={dispatchDaemonId ?? null}
-                      provider={dispatchProvider ?? null}
-                      onSelect={(id) => {
-                        setDispatchDaemonId(id ?? undefined);
-                        const currentRuntimes = useRuntimeStore.getState().runtimes;
-                        setDispatchProvider(pickBestProvider(selectedAgent.providers ?? [], currentRuntimes, id ?? undefined));
-                      }}
-                      align="start"
-                      triggerRender={<PillButton />}
-                      trigger={
-                        <>
-                          <Monitor className="size-3.5 text-muted-foreground" />
-                          <DaemonTriggerLabel daemonId={dispatchDaemonId} />
-                        </>
-                      }
-                    />
-                  )}
-
-                  <DropdownMenu>
-                    <DropdownMenuTrigger render={
-                      <PillButton>
-                        <Cpu className="size-3.5 text-muted-foreground" />
-                        <span>{dispatchProvider ? dispatchProvider : "Provider"}</span>
-                        {dispatchProvider && dispatchDaemonId && (
-                          <ProviderAuthBadge status={getProviderAuth(runtimes, dispatchDaemonId, dispatchProvider)} />
-                        )}
-                      </PillButton>
-                    } />
-                    <DropdownMenuContent align="start">
-                      {(selectedAgent.providers ?? []).map((p) => {
-                        const auth = getProviderAuth(runtimes, dispatchDaemonId, p);
-                        return (
-                          <DropdownMenuItem key={p} onClick={() => setDispatchProvider(p)}>
-                            <span className="capitalize flex-1">{p}</span>
-                            <ProviderAuthBadge status={auth} />
-                          </DropdownMenuItem>
-                        );
-                      })}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-
                   {/* Verifier */}
                   <Popover open={verifierOpen} onOpenChange={(v) => { setVerifierOpen(v); if (!v) setVerifierFilter(""); }}>
                     <PopoverTrigger

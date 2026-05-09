@@ -65,6 +65,10 @@ const mockListBotUsers = vi.fn();
 const mockListWebhookAdapters = vi.fn();
 const mockListWorkspaceWebhookEvents = vi.fn();
 const mockListWebhookEvents = vi.fn();
+const mockCreateWebhook = vi.fn();
+const mockUpdateWebhook = vi.fn();
+const mockCreateWebhookAction = vi.fn();
+const mockUpdateWebhookAction = vi.fn();
 
 vi.mock("@/shared/api", () => ({
   api: {
@@ -74,7 +78,40 @@ vi.mock("@/shared/api", () => ({
     listWebhookAdapters: (...args: any[]) => mockListWebhookAdapters(...args),
     listWorkspaceWebhookEvents: (...args: any[]) => mockListWorkspaceWebhookEvents(...args),
     listWebhookEvents: (...args: any[]) => mockListWebhookEvents(...args),
+    createWebhook: (...args: any[]) => mockCreateWebhook(...args),
+    updateWebhook: (...args: any[]) => mockUpdateWebhook(...args),
+    createWebhookAction: (...args: any[]) => mockCreateWebhookAction(...args),
+    updateWebhookAction: (...args: any[]) => mockUpdateWebhookAction(...args),
   },
+}));
+
+// Mock the agent picker so the dialog tests don't pull in the real popover
+// machinery — the picker emits agent + dispatch in one go to mirror its real
+// confirmed-dispatch contract.
+vi.mock("@/features/issues/components/pickers", () => ({
+  AgentPicker: ({
+    trigger,
+    onChange,
+  }: {
+    trigger: React.ReactNode;
+    onChange: (v: { agentId: string; daemonId: string; provider: string }) => void;
+  }) => (
+    <div>
+      <div data-testid="agent-trigger">{trigger}</div>
+      <button
+        type="button"
+        data-testid="confirm-agent"
+        onClick={() =>
+          onChange({ agentId: "agent-1", daemonId: "daemon-1", provider: "claude" })
+        }
+      >
+        Confirm agent
+      </button>
+    </div>
+  ),
+  AgentDispatchTriggerContent: ({ value }: { value: { agentId: string | null } }) => (
+    <span data-testid="dispatch-trigger-content">{value.agentId ?? "Select agent"}</span>
+  ),
 }));
 
 function makeEvent(overrides: Partial<WebhookEvent> = {}): WebhookEvent {
@@ -299,6 +336,106 @@ describe("WebhooksTab — subscriber config display", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Alice")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("WebhooksTab — confirmed agent dispatch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListWebhooks.mockResolvedValue([]);
+    mockListDaemons.mockResolvedValue([]);
+    mockListBotUsers.mockResolvedValue([]);
+    mockListWebhookAdapters.mockResolvedValue([
+      { source_type: "standard", description: "Standard", keys: [], example: "" },
+    ]);
+    mockListWorkspaceWebhookEvents.mockResolvedValue([]);
+    mockListWebhookEvents.mockResolvedValue([]);
+  });
+
+  it("create dialog requires confirming an agent before saving", async () => {
+    mockCreateWebhook.mockResolvedValue({
+      webhook: { id: "wh-new", source_type: "standard" },
+      token: "tok_xyz",
+    });
+
+    render(<WebhooksTab />);
+    await waitFor(() => expect(mockListWebhooks).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: /create webhook/i }));
+    fireEvent.change(screen.getByLabelText(/^Name$/), { target: { value: "Alerts" } });
+
+    // Without confirming an agent, Create stays disabled — the form refuses
+    // to submit a partial agent assignment.
+    const createButton = screen.getByRole("button", { name: /^create$/i });
+    expect(createButton).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("confirm-agent"));
+    expect(createButton).toBeEnabled();
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(mockCreateWebhook).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent_id: "agent-1",
+          dispatch_provider: "claude",
+          dispatch_daemon_id: "daemon-1",
+        }),
+      );
+    });
+  });
+
+  it("edit dialog persists confirmed dispatch values onto existing actions", async () => {
+    const wh = makeWebhookWithActions();
+    wh.actions = [
+      {
+        id: "action-1",
+        webhook_id: "wh-1",
+        action_type: "create_issue",
+        config: {
+          agent_id: "agent-old",
+          title_template: "",
+          description_template: "",
+          labels: [],
+        },
+        enabled: true,
+        position: 0,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mockListWebhooks.mockResolvedValue([wh]);
+    mockUpdateWebhook.mockResolvedValue(undefined);
+    mockUpdateWebhookAction.mockResolvedValue(undefined);
+
+    render(<WebhooksTab />);
+    await waitFor(() => screen.getByText("My Webhook"));
+
+    // The card header packs the expand chevron first, then the action
+    // group (edit, toggle, regenerate, delete) — pencil-edit is index 1.
+    const cardContainer = screen.getByText("My Webhook").closest("div.flex.items-center.gap-3");
+    const editButton = cardContainer?.querySelectorAll("button")[1];
+    if (!editButton) throw new Error("Edit button not found");
+    fireEvent.click(editButton);
+
+    await waitFor(() => screen.getByRole("heading", { name: /^edit webhook$/i }));
+
+    // Confirm a fresh agent + dispatch via the picker, then save.
+    fireEvent.click(screen.getByTestId("confirm-agent"));
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateWebhookAction).toHaveBeenCalledWith(
+        "wh-1",
+        "action-1",
+        expect.objectContaining({
+          config: expect.objectContaining({
+            agent_id: "agent-1",
+            dispatch_provider: "claude",
+            dispatch_daemon_id: "daemon-1",
+          }),
+        }),
+      );
     });
   });
 });
