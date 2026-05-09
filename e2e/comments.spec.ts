@@ -17,7 +17,7 @@ test.describe("Comments", () => {
 
   test("can navigate to issue detail and see comment editor", async ({ page }) => {
     // Wait for issues to load and click first one.
-    const issueLink = page.locator('a[href^="/issues/"]').first();
+    const issueLink = page.locator('a[href*="/issues/"]').first();
     await expect(issueLink).toBeVisible({ timeout: 10000 });
     await issueLink.click();
     await page.waitForURL(/\/issues\/[\w-]+/);
