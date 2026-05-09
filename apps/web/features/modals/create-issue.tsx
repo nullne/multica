@@ -37,6 +37,7 @@ import { useIssueStore } from "@/features/issues";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
 import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
 import { issueUrl } from "@/features/issues/utils/url";
+import { pickBestProvider, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
 import { api } from "@/shared/api";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { FileUploadButton } from "@/components/common/file-upload-button";
@@ -56,20 +57,6 @@ function getProviderAuth(
     (r) => r.daemon_ref === daemonId && r.provider === provider,
   );
   return rt?.auth_status ?? "not_installed";
-}
-
-function pickBestProvider(
-  agentProviders: string[],
-  runtimes: AgentRuntime[],
-  daemonId: string | undefined,
-): string | undefined {
-  if (!daemonId || agentProviders.length === 0) return agentProviders[0];
-  const ready = agentProviders.find((p) => {
-    const rt = runtimes.find((r) => r.daemon_ref === daemonId && r.provider === p);
-    return rt?.auth_status === "ready";
-  });
-  if (ready) return ready;
-  return agentProviders[0];
 }
 
 function ProviderAuthBadge({ status }: { status: ProviderAuthStatus }) {
@@ -237,27 +224,39 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const updateStatus = (v: IssueStatus) => { setStatus(v); setDraft({ status: v }); };
   const updatePriority = (v: IssuePriority) => { setPriority(v); setDraft({ priority: v }); };
   const updateAssignee = (type?: IssueAssigneeType, id?: string) => {
+    const currentRuntimes = useRuntimeStore.getState().runtimes;
+    const savedDispatch =
+      type === "agent" && id
+        ? useIssueDefaultsStore.getState().getAgentDispatch(id)
+        : undefined;
+    const patch = resolveAssigneeChange({
+      type: type ?? null,
+      id: id ?? null,
+      agents,
+      runtimes: currentRuntimes,
+      savedDispatch,
+      currentVerifierId: verifierAgentId ?? null,
+    });
+
     setAssigneeType(type); setAssigneeId(id);
+    setDispatchDaemonId(patch.dispatch_daemon_id ?? undefined);
+    setDispatchProvider(patch.dispatch_provider ?? undefined);
     setDraft({ assigneeType: type, assigneeId: id });
-    if (type === "agent" && id) {
-      const agent = agents.find((a) => a.id === id);
-      const saved = useIssueDefaultsStore.getState().getAgentDispatch(id);
-      const currentRuntimes = useRuntimeStore.getState().runtimes;
-      const daemonId = agent?.default_daemon_id ?? saved?.daemonId ?? undefined;
-      setDispatchDaemonId(daemonId);
-      setDispatchProvider(saved?.provider ?? pickBestProvider(agent?.providers ?? [], currentRuntimes, daemonId));
-    } else {
-      setDispatchDaemonId(undefined);
-      setDispatchProvider(undefined);
+
+    if ("verifier_agent_id" in patch) {
+      setVerifierAgentId(patch.verifier_agent_id ?? undefined);
     }
-    if (type !== "agent" || !id) {
-      setVerifierAgentId(undefined);
-      setMaxVerificationRounds(undefined);
-      setDraft({ verifierAgentId: undefined, maxVerificationRounds: undefined });
-    } else if (verifierAgentId === id) {
-      setVerifierAgentId(undefined);
-      setDraft({ verifierAgentId: undefined });
+    if ("max_verification_rounds" in patch) {
+      setMaxVerificationRounds(patch.max_verification_rounds ?? undefined);
     }
+    setDraft({
+      verifierAgentId:
+        "verifier_agent_id" in patch ? (patch.verifier_agent_id ?? undefined) : verifierAgentId,
+      maxVerificationRounds:
+        "max_verification_rounds" in patch
+          ? (patch.max_verification_rounds ?? undefined)
+          : maxVerificationRounds,
+    });
   };
   const updateDueDate = (v: string | null) => { setDueDate(v); setDraft({ dueDate: v }); };
   const updateVerifier = (id?: string) => { setVerifierAgentId(id); setDraft({ verifierAgentId: id }); };
