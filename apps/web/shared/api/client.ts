@@ -773,11 +773,15 @@ export class ApiClient {
 
     const rid = makeRequestId();
     const start = Date.now();
+    const headers: Record<string, string> = {
+      "X-Request-ID": rid,
+      ...this.authHeaders(),
+    };
     this.logger.info("→ POST /api/upload-file", { rid });
 
     const res = await fetch(`${this.baseUrl}/api/upload-file`, {
       method: "POST",
-      headers: this.authHeaders(),
+      headers,
       body: formData,
       credentials: "include",
     });

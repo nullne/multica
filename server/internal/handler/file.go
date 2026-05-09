@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/nullne/multica/server/internal/logger"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
@@ -144,7 +145,13 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 
 	link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
 	if err != nil {
-		slog.Error("file upload failed", "error", err)
+		slog.Error("file upload failed", append(logger.RequestAttrs(r),
+			"error", err,
+			"workspace_id", workspaceID,
+			"filename", header.Filename,
+			"content_type", contentType,
+			"size_bytes", len(data),
+		)...)
 		writeError(w, http.StatusInternalServerError, "upload failed")
 		return
 	}
@@ -173,7 +180,13 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 
 		att, err := h.Queries.CreateAttachment(r.Context(), params)
 		if err != nil {
-			slog.Error("failed to create attachment record", "error", err)
+			slog.Error("failed to create attachment record", append(logger.RequestAttrs(r),
+				"error", err,
+				"workspace_id", workspaceID,
+				"issue_id", r.FormValue("issue_id"),
+				"comment_id", r.FormValue("comment_id"),
+				"filename", header.Filename,
+			)...)
 			// S3 upload succeeded but DB record failed — still return the link
 			// so the file is usable. Log the error for investigation.
 		} else {
