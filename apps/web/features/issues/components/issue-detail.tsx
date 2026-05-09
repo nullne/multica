@@ -64,7 +64,6 @@ import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEnt
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
 import { resolveAssigneeChange } from "@/features/issues/utils/dispatch";
-import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import {
@@ -792,27 +791,32 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
     [issue, id],
   );
 
-  const handleAssigneeChange = useCallback(
-    (type: "member" | "agent" | null, assigneeId: string | null) => {
+  // Quick-assign for member/unassigned. Agents go through the picker's
+  // in-popover confirmation step (see assigneePickerOpen + pendingAgentId).
+  const handleQuickAssign = useCallback(
+    (type: "member" | null, assigneeId: string | null) => {
       if (!issue) return;
-      const runtimes = useRuntimeStore.getState().runtimes;
-      const savedDispatch =
-        type === "agent" && assigneeId
-          ? useIssueDefaultsStore.getState().getAgentDispatch(assigneeId)
-          : undefined;
       handleUpdateField(
         resolveAssigneeChange({
           type,
           id: assigneeId,
           agents,
-          runtimes,
-          savedDispatch,
+          runtimes: useRuntimeStore.getState().runtimes,
           currentVerifierId: issue.verifier_agent_id,
         }),
       );
     },
     [issue, agents, handleUpdateField],
   );
+
+  // Controlled state lets the action dropdown pre-open the AssigneePicker
+  // straight into the dispatch confirmation view for a chosen agent.
+  const [assigneePickerOpen, setAssigneePickerOpen] = useState(false);
+  const [pendingAssigneeAgentId, setPendingAssigneeAgentId] = useState<string | null>(null);
+  const requestAgentAssignment = useCallback((agentId: string) => {
+    setPendingAssigneeAgentId(agentId);
+    setAssigneePickerOpen(true);
+  }, []);
 
   const descEditorRef = useRef<import("@/components/common/rich-text-editor").RichTextEditorRef>(null);
   const handleDescriptionUpload = useCallback(
@@ -1055,7 +1059,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
                     <DropdownMenuItem
-                      onClick={() => handleAssigneeChange(null, null)}
+                      onClick={() => handleQuickAssign(null, null)}
                     >
                       <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
                       Unassigned
@@ -1064,7 +1068,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     {members.filter((m) => m.kind !== "bot").map((m) => (
                       <DropdownMenuItem
                         key={m.user_id}
-                        onClick={() => handleAssigneeChange("member", m.user_id)}
+                        onClick={() => handleQuickAssign("member", m.user_id)}
                       >
                         <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
                         {m.name}
@@ -1074,7 +1078,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     {agents.filter((a) => canAssignAgent(a, user?.id, currentMemberRole)).map((a) => (
                       <DropdownMenuItem
                         key={a.id}
-                        onClick={() => handleAssigneeChange("agent", a.id)}
+                        onClick={() => requestAgentAssignment(a.id)}
                       >
                         <ActorAvatar actorType="agent" actorId={a.id} size={16} />
                         {a.name}
@@ -1665,6 +1669,10 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                       assigneeId={issue.assignee_id}
                       verifierAgentId={issue.verifier_agent_id}
                       onUpdate={handleUpdateField}
+                      open={assigneePickerOpen}
+                      onOpenChange={setAssigneePickerOpen}
+                      pendingAgentId={pendingAssigneeAgentId}
+                      onPendingAgentIdChange={setPendingAssigneeAgentId}
                       align="start"
                     />
                   </PropRow>
