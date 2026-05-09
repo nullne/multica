@@ -3,10 +3,17 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -16,9 +23,14 @@ import (
 )
 
 type S3Storage struct {
-	client     *s3.Client
-	bucket     string
-	publicBase string // public URL prefix, always ends with "/"
+	client       *s3.Client
+	bucket       string
+	publicBase   string // public URL prefix, always ends with "/"
+	gcsEndpoint  string
+	gcsAccessKey string
+	gcsSecretKey string
+	httpClient   *http.Client
+	useGCSXML    bool
 }
 
 // NewS3StorageFromEnv creates an S3Storage from environment variables.
@@ -74,6 +86,7 @@ func NewS3StorageFromEnv() *S3Storage {
 	endpoint := strings.TrimRight(os.Getenv("S3_ENDPOINT"), "/")
 	pathStyle := resolvePathStyle(endpoint, os.Getenv("S3_USE_PATH_STYLE"))
 
+	useGCSXML := isGCSEndpoint(endpoint) && accessKey != "" && secretKey != ""
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		if endpoint != "" {
 			o.BaseEndpoint = aws.String(endpoint)
@@ -97,10 +110,21 @@ func NewS3StorageFromEnv() *S3Storage {
 		"public_base", publicBase,
 	)
 	return &S3Storage{
-		client:     client,
-		bucket:     bucket,
-		publicBase: publicBase,
+		client:       client,
+		bucket:       bucket,
+		publicBase:   publicBase,
+		gcsEndpoint:  endpoint,
+		gcsAccessKey: accessKey,
+		gcsSecretKey: secretKey,
+		httpClient:   http.DefaultClient,
+		useGCSXML:    useGCSXML,
 	}
+}
+
+func isGCSEndpoint(endpoint string) bool {
+	host := strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+	host = strings.TrimSuffix(host, "/")
+	return host == "storage.googleapis.com"
 }
 
 // resolvePathStyle returns whether the S3 client should use path-style
@@ -192,6 +216,12 @@ func (s *S3Storage) Delete(ctx context.Context, key string) {
 	if key == "" {
 		return
 	}
+	if s.useGCSXML {
+		if err := s.deleteGCSObject(ctx, key); err != nil {
+			slog.Error("gcs DeleteObject failed", "key", key, "error", err)
+		}
+		return
+	}
 	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
@@ -210,18 +240,96 @@ func (s *S3Storage) DeleteKeys(ctx context.Context, keys []string) {
 
 func (s *S3Storage) Upload(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error) {
 	safe := sanitizeFilename(filename)
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+	if s.useGCSXML {
+		if err := s.uploadGCSObject(ctx, key, data, contentType, safe); err != nil {
+			return "", err
+		}
+		return s.publicBase + key, nil
+	}
+
+	input := &s3.PutObjectInput{
 		Bucket:             aws.String(s.bucket),
 		Key:                aws.String(key),
 		Body:               bytes.NewReader(data),
 		ContentType:        aws.String(contentType),
 		ContentDisposition: aws.String(fmt.Sprintf(`inline; filename="%s"`, safe)),
 		CacheControl:       aws.String("max-age=432000,public"),
-		StorageClass:       types.StorageClassIntelligentTiering,
-	})
+	}
+	if s.gcsEndpoint == "" {
+		input.StorageClass = types.StorageClassIntelligentTiering
+	}
+
+	_, err := s.client.PutObject(ctx, input)
 	if err != nil {
 		return "", fmt.Errorf("s3 PutObject: %w", err)
 	}
 
 	return s.publicBase + key, nil
+}
+
+func (s *S3Storage) uploadGCSObject(ctx context.Context, key string, data []byte, contentType string, safeFilename string) error {
+	req, err := s.newGCSXMLRequest(ctx, http.MethodPut, key, bytes.NewReader(data), contentType)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, safeFilename))
+	req.Header.Set("Cache-Control", "max-age=432000,public")
+	return s.doGCSXML(req)
+}
+
+func (s *S3Storage) deleteGCSObject(ctx context.Context, key string) error {
+	req, err := s.newGCSXMLRequest(ctx, http.MethodDelete, key, nil, "")
+	if err != nil {
+		return err
+	}
+	return s.doGCSXML(req)
+}
+
+func (s *S3Storage) newGCSXMLRequest(ctx context.Context, method string, key string, body io.Reader, contentType string) (*http.Request, error) {
+	endpoint := strings.TrimRight(s.gcsEndpoint, "/")
+	objectPath := escapedObjectPath(s.bucket, key)
+	req, err := http.NewRequestWithContext(ctx, method, endpoint+objectPath, body)
+	if err != nil {
+		return nil, err
+	}
+	date := time.Now().UTC().Format(http.TimeFormat)
+	req.Header.Set("Date", date)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	signature := s.gcsXMLSignature(method, contentType, date, objectPath)
+	req.Header.Set("Authorization", "AWS "+s.gcsAccessKey+":"+signature)
+	return req, nil
+}
+
+func escapedObjectPath(bucket, key string) string {
+	segments := append([]string{bucket}, strings.Split(key, "/")...)
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+	return "/" + strings.Join(segments, "/")
+}
+
+func (s *S3Storage) gcsXMLSignature(method, contentType, date, objectPath string) string {
+	stringToSign := method + "\n\n" + contentType + "\n" + date + "\n" + objectPath
+	mac := hmac.New(sha1.New, []byte(s.gcsSecretKey))
+	mac.Write([]byte(stringToSign))
+	return base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *S3Storage) doGCSXML(req *http.Request) error {
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("gcs xml %s: %w", req.Method, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return fmt.Errorf("gcs xml %s: status %d: %s", req.Method, resp.StatusCode, strings.TrimSpace(string(body)))
 }

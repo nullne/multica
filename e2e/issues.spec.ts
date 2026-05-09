@@ -30,7 +30,7 @@ test.describe("Issues", () => {
     await expect(page.locator(`text=${title}`).first()).toBeVisible({ timeout: 10000 });
 
     // Drill into detail page.
-    await page.locator(`a[href="/issues/${issue.id}"]`).first().click();
+    await page.locator(`a[href$="/issues/${issue.id}"]`).first().click();
     await page.waitForURL(/\/issues\/[\w-]+/);
     await expect(page.locator("text=Properties").first()).toBeVisible({ timeout: 10000 });
   });
