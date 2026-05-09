@@ -86,6 +86,22 @@ func (q *Queries) GetMemberByUserAndWorkspace(ctx context.Context, arg GetMember
 	return i, err
 }
 
+const isWorkspaceMemberByEmail = `-- name: IsWorkspaceMemberByEmail :one
+SELECT EXISTS(
+    SELECT 1
+    FROM member m
+    JOIN "user" u ON u.id = m.user_id
+    WHERE u.email = $1
+) AS is_member
+`
+
+func (q *Queries) IsWorkspaceMemberByEmail(ctx context.Context, email string) (bool, error) {
+	row := q.db.QueryRow(ctx, isWorkspaceMemberByEmail, email)
+	var is_member bool
+	err := row.Scan(&is_member)
+	return is_member, err
+}
+
 const listMembers = `-- name: ListMembers :many
 SELECT id, workspace_id, user_id, role, created_at FROM member
 WHERE workspace_id = $1

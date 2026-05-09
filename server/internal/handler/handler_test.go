@@ -721,6 +721,138 @@ func TestLoginWithFirebaseCreatesWorkspace(t *testing.T) {
 	}
 }
 
+func TestLoginWithFirebaseAllowsInvitedMember(t *testing.T) {
+	const email = "invited-member-login@example.invalid"
+	ctx := context.Background()
+
+	// Restrict the allowlist so this email would be rejected on its own.
+	t.Setenv("ALLOWED_EMAILS", "someone-else@multica.ai")
+	t.Setenv("ALLOWED_EMAIL_DOMAINS", "")
+
+	originalVerifier := testHandler.FirebaseVerifier
+	testHandler.FirebaseVerifier = stubFirebaseVerifier{
+		identity: &auth.FirebaseIdentity{
+			Email: email,
+			Name:  "Invited Member",
+		},
+	}
+
+	// Simulate the invite flow: create a user with this email and make them a
+	// member of the existing test workspace.
+	var invitedUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		RETURNING id
+	`, "Invited Member", email).Scan(&invitedUserID); err != nil {
+		t.Fatalf("seed invited user: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, invitedUserID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testHandler.FirebaseVerifier = originalVerifier
+		testPool.Exec(ctx, `DELETE FROM member WHERE user_id = $1`, invitedUserID)
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, invitedUserID)
+	})
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{"id_token": "firebase-token"})
+	req := httptest.NewRequest("POST", "/auth/firebase", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.LoginWithFirebase(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("LoginWithFirebase: expected 200 for invited member, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp LoginResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.User.Email != email {
+		t.Fatalf("LoginWithFirebase: expected email %q, got %q", email, resp.User.Email)
+	}
+}
+
+func TestLoginWithFirebaseRejectsNonMember(t *testing.T) {
+	const email = "stranger@example.invalid"
+	ctx := context.Background()
+
+	t.Setenv("ALLOWED_EMAILS", "someone-else@multica.ai")
+	t.Setenv("ALLOWED_EMAIL_DOMAINS", "")
+
+	originalVerifier := testHandler.FirebaseVerifier
+	testHandler.FirebaseVerifier = stubFirebaseVerifier{
+		identity: &auth.FirebaseIdentity{
+			Email: email,
+			Name:  "Stranger",
+		},
+	}
+
+	t.Cleanup(func() {
+		testHandler.FirebaseVerifier = originalVerifier
+		// In case the user got created somehow, clean up.
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+	})
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{"id_token": "firebase-token"})
+	req := httptest.NewRequest("POST", "/auth/firebase", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.LoginWithFirebase(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("LoginWithFirebase: expected 403 for non-member, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if _, err := testHandler.Queries.GetUserByEmail(ctx, email); err == nil {
+		t.Fatalf("LoginWithFirebase: rejected user should not have been created")
+	}
+}
+
+func TestLoginWithFirebaseHonorsAllowlist(t *testing.T) {
+	const email = "allowlisted@multica.ai"
+	ctx := context.Background()
+
+	t.Setenv("ALLOWED_EMAILS", email)
+	t.Setenv("ALLOWED_EMAIL_DOMAINS", "")
+
+	originalVerifier := testHandler.FirebaseVerifier
+	testHandler.FirebaseVerifier = stubFirebaseVerifier{
+		identity: &auth.FirebaseIdentity{
+			Email: email,
+			Name:  "Allowlisted User",
+		},
+	}
+
+	t.Cleanup(func() {
+		testHandler.FirebaseVerifier = originalVerifier
+		user, err := testHandler.Queries.GetUserByEmail(ctx, email)
+		if err == nil {
+			workspaces, listErr := testHandler.Queries.ListWorkspaces(ctx, user.ID)
+			if listErr == nil {
+				for _, workspace := range workspaces {
+					_ = testHandler.Queries.DeleteWorkspace(ctx, workspace.ID)
+				}
+			}
+		}
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+	})
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{"id_token": "firebase-token"})
+	req := httptest.NewRequest("POST", "/auth/firebase", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.LoginWithFirebase(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("LoginWithFirebase: expected 200 for allowlisted email, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestResolveActor(t *testing.T) {
 	ctx := context.Background()
 
