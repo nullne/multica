@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, Check, CheckCircle2, ChevronDown, Cpu, Monitor, Pencil, Plus, RefreshCw, Trash2, X as XIcon } from "lucide-react";
+import { Bell, Check, CheckCircle2, ChevronDown, Monitor, Pencil, Plus, RefreshCw, Trash2, X as XIcon } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -38,26 +37,19 @@ import {
   PopoverTrigger,
   PopoverContent,
 } from "@/components/ui/popover";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import type {
-  AgentRuntime,
   IssueAssigneeType,
   IssuePriority,
-  ProviderAuthStatus,
   RecurringTemplate,
   CreateRecurringTemplateRequest,
   UpdateRecurringTemplateRequest,
+  UpdateIssueRequest,
 } from "@/shared/types";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
-import { AssigneePicker, DaemonPicker } from "@/features/issues/components/pickers";
+import { AssigneePicker } from "@/features/issues/components/pickers";
 import { useRuntimeStore } from "@/features/runtimes";
 import { useRecurringTemplateStore } from "../store";
 
@@ -124,59 +116,6 @@ function templateToForm(t: RecurringTemplate): TemplateFormData {
     dispatch_daemon_id: t.dispatch_daemon_id ?? null,
     subscriber_ids: t.subscriber_ids ?? [],
   };
-}
-
-function getProviderAuth(
-  runtimes: AgentRuntime[],
-  daemonId: string | null,
-  provider: string | null,
-): ProviderAuthStatus {
-  if (!daemonId || !provider) return "unknown";
-  const rt = runtimes.find(
-    (r) => r.daemon_ref === daemonId && r.provider === provider,
-  );
-  return rt?.auth_status ?? "not_installed";
-}
-
-function pickBestProvider(
-  agentProviders: string[],
-  runtimes: AgentRuntime[],
-  daemonId: string | null,
-): string | null {
-  if (agentProviders.length === 0) return null;
-  if (!daemonId) return agentProviders[0] ?? null;
-  const ready = agentProviders.find((p) => {
-    const rt = runtimes.find((r) => r.daemon_ref === daemonId && r.provider === p);
-    return rt?.auth_status === "ready";
-  });
-  return ready ?? agentProviders[0] ?? null;
-}
-
-function resolveAgentDispatchDefaults(
-  agentId: string,
-  current: Pick<TemplateFormData, "dispatch_daemon_id" | "dispatch_provider">,
-  agents: ReturnType<typeof useWorkspaceStore.getState>["agents"],
-  runtimes: AgentRuntime[],
-): Pick<TemplateFormData, "dispatch_daemon_id" | "dispatch_provider"> {
-  const agent = agents.find((item) => item.id === agentId);
-  if (!agent) {
-    return {
-      dispatch_daemon_id: current.dispatch_daemon_id,
-      dispatch_provider: current.dispatch_provider,
-    };
-  }
-  const daemonId = current.dispatch_daemon_id ?? agent.default_daemon_id ?? null;
-  return {
-    dispatch_daemon_id: daemonId,
-    dispatch_provider: current.dispatch_provider ?? pickBestProvider(agent.providers ?? [], runtimes, daemonId),
-  };
-}
-
-function ProviderAuthBadge({ status }: { status: ProviderAuthStatus }) {
-  if (status === "ready") return <span className="ml-auto h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />;
-  if (status === "unauthenticated") return <span className="ml-auto text-[10px] text-amber-500">unauth</span>;
-  if (status === "not_installed") return <span className="ml-auto text-[10px] text-muted-foreground">not installed</span>;
-  return null;
 }
 
 function formatNextRun(nextRunAt?: string): string {
@@ -295,129 +234,26 @@ function SubscriberField({
   );
 }
 
-function DispatchFields({
-  agentId,
-  daemonId,
-  provider,
-  onDaemonChange,
-  onProviderChange,
-}: {
-  agentId: string;
-  daemonId: string | null;
-  provider: string | null;
-  onDaemonChange: (daemonId: string | null) => void;
-  onProviderChange: (provider: string | null) => void;
-}) {
-  const agents = useWorkspaceStore((s) => s.agents);
-  const daemons = useRuntimeStore((s) => s.daemons);
-  const runtimes = useRuntimeStore((s) => s.runtimes);
-  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
-
-  useEffect(() => {
-    fetchAllRuntimes();
-  }, [fetchAllRuntimes]);
-
-  const agent = agents.find((a) => a.id === agentId);
-  const providers = agent?.providers ?? [];
-  const daemonLocked = !!agent?.default_daemon_id;
-  const lockedDaemon = daemonLocked
-    ? daemons.find((d) => d.id === agent!.default_daemon_id)
-    : undefined;
-  const selectedDaemon = daemons.find((d) => d.id === daemonId);
-
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <div className="space-y-1">
-        <label className="text-xs font-medium">Daemon</label>
-        {daemonLocked ? (
-          <Button
-            type="button"
-            variant="outline"
-            disabled
-            className="w-full justify-start font-normal opacity-70"
-          >
-            <Monitor className="size-3.5 text-muted-foreground" />
-            <span>{lockedDaemon?.device_name || lockedDaemon?.daemon_id || "Locked daemon"}</span>
-          </Button>
-        ) : (
-          <DaemonPicker
-            daemonId={daemonId}
-            provider={provider}
-            onSelect={(id) => {
-              onDaemonChange(id);
-              onProviderChange(pickBestProvider(providers, runtimes, id));
-            }}
-            align="start"
-            triggerRender={
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full justify-start font-normal"
-              />
-            }
-            trigger={
-              <>
-                <Monitor className="size-3.5 text-muted-foreground" />
-                <span className={selectedDaemon ? "" : "text-muted-foreground"}>
-                  {selectedDaemon
-                    ? selectedDaemon.device_name || selectedDaemon.daemon_id
-                    : "Any daemon"}
-                </span>
-                <ChevronDown className="ml-auto size-3.5 text-muted-foreground" />
-              </>
-            }
-          />
-        )}
-      </div>
-      <div className="space-y-1">
-        <label className="text-xs font-medium">Provider</label>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full justify-start font-normal"
-                disabled={providers.length === 0}
-              />
-            }
-          >
-            <Cpu className="size-3.5 text-muted-foreground" />
-            <span className={cn("flex-1 text-left capitalize", provider ? "" : "text-muted-foreground")}>
-              {provider ?? (providers.length === 0 ? "No providers" : "Pick provider")}
-            </span>
-            {provider && daemonId && (
-              <ProviderAuthBadge status={getProviderAuth(runtimes, daemonId, provider)} />
-            )}
-            <ChevronDown className="size-3.5 text-muted-foreground" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            {providers.map((p) => {
-              const auth = getProviderAuth(runtimes, daemonId, p);
-              return (
-                <DropdownMenuItem key={p} onClick={() => onProviderChange(p)}>
-                  <span className="capitalize flex-1">{p}</span>
-                  <ProviderAuthBadge status={auth} />
-                </DropdownMenuItem>
-              );
-            })}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </div>
-  );
-}
-
 function AssigneeField({
   assigneeType,
   assigneeId,
+  dispatchProvider,
+  dispatchDaemonId,
   onChange,
 }: {
   assigneeType: IssueAssigneeType | null;
   assigneeId: string | null;
-  onChange: (type: IssueAssigneeType | null, id: string | null) => void;
+  dispatchProvider: string | null;
+  dispatchDaemonId: string | null;
+  onChange: (patch: Partial<UpdateIssueRequest>) => void;
 }) {
   const { getActorName } = useActorName();
+  const agents = useWorkspaceStore((s) => s.agents);
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const isAgent = assigneeType === "agent" && !!assigneeId;
+  const agent = isAgent ? agents.find((a) => a.id === assigneeId) : null;
+  const daemon = dispatchDaemonId ? daemons.find((d) => d.id === dispatchDaemonId) : null;
+  const daemonName = daemon?.device_name || daemon?.daemon_id || null;
   const label =
     assigneeType && assigneeId ? getActorName(assigneeType, assigneeId) : "Unassigned";
 
@@ -425,17 +261,13 @@ function AssigneeField({
     <AssigneePicker
       assigneeType={assigneeType}
       assigneeId={assigneeId}
-      onUpdate={(updates) => {
-        const nextType = (updates.assignee_type ?? null) as IssueAssigneeType | null;
-        const nextId = (updates.assignee_id ?? null) as string | null;
-        onChange(nextType, nextId);
-      }}
+      onUpdate={onChange}
       align="start"
       triggerRender={
         <Button
           type="button"
           variant="outline"
-          className="w-full justify-start font-normal"
+          className="w-full justify-start font-normal min-h-9"
         />
       }
       trigger={
@@ -443,9 +275,26 @@ function AssigneeField({
           {assigneeType && assigneeId ? (
             <ActorAvatar actorType={assigneeType} actorId={assigneeId} size={18} />
           ) : null}
-          <span className={assigneeType && assigneeId ? "" : "text-muted-foreground"}>
-            {label}
+          <span className="min-w-0 flex flex-col gap-0.5 leading-tight text-left">
+            <span className={`truncate ${assigneeType && assigneeId ? "" : "text-muted-foreground"}`}>
+              {label}
+            </span>
+            {isAgent && agent && (dispatchProvider || daemonName) && (
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground leading-none min-w-0">
+                {dispatchProvider && (
+                  <span className="capitalize shrink-0">{dispatchProvider}</span>
+                )}
+                {dispatchProvider && daemonName && <span className="shrink-0">·</span>}
+                {daemonName && (
+                  <span className="inline-flex items-center gap-0.5 min-w-0">
+                    <Monitor className="h-2.5 w-2.5 shrink-0" />
+                    <span className="truncate">{daemonName}</span>
+                  </span>
+                )}
+              </span>
+            )}
           </span>
+          <ChevronDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
         </>
       }
     />
@@ -465,27 +314,13 @@ function TemplateFormDialog({
   onSubmit: (data: TemplateFormData) => Promise<void>;
   submitLabel: string;
 }) {
-  const agents = useWorkspaceStore((s) => s.agents);
   const [form, setForm] = useState<TemplateFormData>(initial ?? DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    const nextForm = initial ?? DEFAULT_FORM;
-    if (nextForm.assignee_type !== "agent" || !nextForm.assignee_id) {
-      setForm(nextForm);
-      return;
-    }
-    setForm({
-      ...nextForm,
-      ...resolveAgentDispatchDefaults(
-        nextForm.assignee_id,
-        nextForm,
-        agents,
-        useRuntimeStore.getState().runtimes,
-      ),
-    });
-  }, [open, initial, agents]);
+    setForm(initial ?? DEFAULT_FORM);
+  }, [open, initial]);
 
   const set = (patch: Partial<TemplateFormData>) =>
     setForm((f) => ({ ...f, ...patch }));
@@ -553,44 +388,22 @@ function TemplateFormDialog({
               <AssigneeField
                 assigneeType={form.assignee_type}
                 assigneeId={form.assignee_id}
-                onChange={(type, id) => {
-                  if (type !== "agent") {
-                    set({
-                      assignee_type: type,
-                      assignee_id: id,
-                      dispatch_provider: null,
-                      dispatch_daemon_id: null,
-                    });
-                  } else {
-                    const nextDispatch = id
-                      ? resolveAgentDispatchDefaults(
-                        id,
-                        { dispatch_daemon_id: null, dispatch_provider: null },
-                        agents,
-                        useRuntimeStore.getState().runtimes,
-                      )
-                      : { dispatch_daemon_id: null, dispatch_provider: null };
-                    set({
-                      assignee_type: type,
-                      assignee_id: id,
-                      ...nextDispatch,
-                    });
-                  }
+                dispatchProvider={form.dispatch_provider}
+                dispatchDaemonId={form.dispatch_daemon_id}
+                onChange={(patch) => {
+                  const nextType = (patch.assignee_type ?? null) as IssueAssigneeType | null;
+                  const nextId = (patch.assignee_id ?? null) as string | null;
+                  set({
+                    assignee_type: nextType,
+                    assignee_id: nextId,
+                    dispatch_provider: nextType === "agent" ? (patch.dispatch_provider ?? null) : null,
+                    dispatch_daemon_id: nextType === "agent" ? (patch.dispatch_daemon_id ?? null) : null,
+                  });
                 }}
               />
             </div>
           </div>
 
-          {/* Agent dispatch settings (daemon + provider) */}
-          {form.assignee_type === "agent" && form.assignee_id && (
-            <DispatchFields
-              agentId={form.assignee_id}
-              daemonId={form.dispatch_daemon_id}
-              provider={form.dispatch_provider}
-              onDaemonChange={(id) => set({ dispatch_daemon_id: id })}
-              onProviderChange={(p) => set({ dispatch_provider: p })}
-            />
-          )}
 
           {/* Subscribers (member-only) */}
           <div className="space-y-1">
