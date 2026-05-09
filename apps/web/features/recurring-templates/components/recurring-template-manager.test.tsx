@@ -29,7 +29,7 @@ const workspaceState = {
       id: "agent-1",
       name: "Test Agent",
       providers: ["claude"],
-      default_daemon_id: null,
+      default_daemon_id: null as string | null,
     },
   ],
 };
@@ -208,6 +208,12 @@ const mockTemplate: RecurringTemplate = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workspaceState.agents[0] = {
+    id: "agent-1",
+    name: "Test Agent",
+    providers: ["claude"],
+    default_daemon_id: null,
+  };
   mocks.api.listRecurringTemplates.mockResolvedValue([mockTemplate]);
   // Reset store with the mock template seeded so list-render tests don't
   // depend on the manager's mount-time fetch resolving first.
@@ -475,6 +481,43 @@ describe("RecurringTemplateManager", () => {
 
     // Pick a daemon — provider auto-selects to "claude" (only configured option).
     await user.click(screen.getByTestId("select-daemon"));
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRecurringTemplate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          assignee_type: "agent",
+          assignee_id: "agent-1",
+          dispatch_daemon_id: "daemon-1",
+          dispatch_provider: "claude",
+        }),
+      );
+    });
+  });
+
+  it("seeds default daemon/provider for agent assignees without manual daemon selection", async () => {
+    workspaceState.agents[0] = {
+      id: "agent-1",
+      name: "Test Agent",
+      providers: ["claude"],
+      default_daemon_id: "daemon-1",
+    };
+    mocks.api.createRecurringTemplate.mockResolvedValueOnce({
+      ...mockTemplate,
+      id: "tpl-agent-default-daemon",
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+      dispatch_provider: "claude",
+      dispatch_daemon_id: "daemon-1",
+    });
+
+    const user = userEvent.setup();
+    render(<RecurringTemplateManager />);
+
+    await user.click(screen.getByRole("button", { name: /new template/i }));
+    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Locked Agent Job");
+    await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+    await user.click(screen.getByTestId("select-agent"));
     await user.click(screen.getByRole("button", { name: /^create$/i }));
 
     await waitFor(() => {

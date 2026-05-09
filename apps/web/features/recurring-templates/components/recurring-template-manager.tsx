@@ -152,6 +152,26 @@ function pickBestProvider(
   return ready ?? agentProviders[0] ?? null;
 }
 
+function resolveAgentDispatchDefaults(
+  agentId: string,
+  current: Pick<TemplateFormData, "dispatch_daemon_id" | "dispatch_provider">,
+  agents: ReturnType<typeof useWorkspaceStore.getState>["agents"],
+  runtimes: AgentRuntime[],
+): Pick<TemplateFormData, "dispatch_daemon_id" | "dispatch_provider"> {
+  const agent = agents.find((item) => item.id === agentId);
+  if (!agent) {
+    return {
+      dispatch_daemon_id: current.dispatch_daemon_id,
+      dispatch_provider: current.dispatch_provider,
+    };
+  }
+  const daemonId = current.dispatch_daemon_id ?? agent.default_daemon_id ?? null;
+  return {
+    dispatch_daemon_id: daemonId,
+    dispatch_provider: current.dispatch_provider ?? pickBestProvider(agent.providers ?? [], runtimes, daemonId),
+  };
+}
+
 function ProviderAuthBadge({ status }: { status: ProviderAuthStatus }) {
   if (status === "ready") return <span className="ml-auto h-1.5 w-1.5 rounded-full bg-green-500 shrink-0" />;
   if (status === "unauthenticated") return <span className="ml-auto text-[10px] text-amber-500">unauth</span>;
@@ -445,12 +465,27 @@ function TemplateFormDialog({
   onSubmit: (data: TemplateFormData) => Promise<void>;
   submitLabel: string;
 }) {
+  const agents = useWorkspaceStore((s) => s.agents);
   const [form, setForm] = useState<TemplateFormData>(initial ?? DEFAULT_FORM);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (open) setForm(initial ?? DEFAULT_FORM);
-  }, [open, initial]);
+    if (!open) return;
+    const nextForm = initial ?? DEFAULT_FORM;
+    if (nextForm.assignee_type !== "agent" || !nextForm.assignee_id) {
+      setForm(nextForm);
+      return;
+    }
+    setForm({
+      ...nextForm,
+      ...resolveAgentDispatchDefaults(
+        nextForm.assignee_id,
+        nextForm,
+        agents,
+        useRuntimeStore.getState().runtimes,
+      ),
+    });
+  }, [open, initial, agents]);
 
   const set = (patch: Partial<TemplateFormData>) =>
     setForm((f) => ({ ...f, ...patch }));
@@ -527,7 +562,19 @@ function TemplateFormDialog({
                       dispatch_daemon_id: null,
                     });
                   } else {
-                    set({ assignee_type: type, assignee_id: id });
+                    const nextDispatch = id
+                      ? resolveAgentDispatchDefaults(
+                        id,
+                        { dispatch_daemon_id: null, dispatch_provider: null },
+                        agents,
+                        useRuntimeStore.getState().runtimes,
+                      )
+                      : { dispatch_daemon_id: null, dispatch_provider: null };
+                    set({
+                      assignee_type: type,
+                      assignee_id: id,
+                      ...nextDispatch,
+                    });
                   }
                 }}
               />

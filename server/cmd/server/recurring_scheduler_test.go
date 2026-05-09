@@ -26,8 +26,8 @@ func TestTemplateSubscriberPropagation(t *testing.T) {
 	// Insert an agent so the template can be assigned to one.
 	var agentID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent (workspace_id, name, runtime_mode, providers)
-		VALUES ($1, 'Subscriber test agent', 'cloud', ARRAY['claude'])
+		INSERT INTO agent (workspace_id, name, providers)
+		VALUES ($1, 'Subscriber test agent', ARRAY['claude'])
 		RETURNING id
 	`, testWorkspaceID).Scan(&agentID); err != nil {
 		t.Fatalf("insert agent: %v", err)
