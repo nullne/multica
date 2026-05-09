@@ -10,6 +10,7 @@ import (
 
 	"github.com/nullne/multica/server/internal/cron"
 	"github.com/nullne/multica/server/internal/events"
+	"github.com/nullne/multica/server/internal/handler"
 	"github.com/nullne/multica/server/internal/service"
 	"github.com/nullne/multica/server/internal/util"
 	db "github.com/nullne/multica/server/pkg/db/generated"
@@ -104,16 +105,56 @@ func fireTemplate(ctx context.Context, pool *pgxpool.Pool, queries *db.Queries, 
 
 	slog.Info("recurring scheduler: issue created", "issue_id", util.UUIDToString(issue.ID), "template_id", util.UUIDToString(claimed.ID))
 
+	// Copy template member subscribers onto the new issue so they receive
+	// notifications matching admin intent. Reason "manual" — the listener
+	// reasons (creator/assignee/mentioned) describe automatic propagation
+	// rules, while template subscribers were chosen explicitly by an admin.
+	templateSubs, err := queries.ListRecurringTemplateSubscribers(ctx, claimed.ID)
+	if err != nil {
+		slog.Warn("recurring scheduler: list template subscribers failed", "template_id", util.UUIDToString(claimed.ID), "error", err)
+	}
+	for _, sub := range templateSubs {
+		if err := queries.AddIssueSubscriber(ctx, db.AddIssueSubscriberParams{
+			IssueID:  issue.ID,
+			UserType: "member",
+			UserID:   sub.UserID,
+			Reason:   "manual",
+		}); err != nil {
+			slog.Warn("recurring scheduler: add issue subscriber failed", "issue_id", util.UUIDToString(issue.ID), "user_id", util.UUIDToString(sub.UserID), "error", err)
+		}
+	}
+
+	// Publish using the standard IssueResponse payload shape so existing
+	// subscriber and notification listeners behave consistently with normal
+	// issue creation (auto-subscribe creator/assignee/mentioned, fan out
+	// inbox + Telegram notifications).
+	prefix := getIssuePrefix(ctx, queries, issue.WorkspaceID)
+	resp := handler.IssueToResponse(issue, prefix)
 	bus.Publish(events.Event{
 		Type:        protocol.EventIssueCreated,
 		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
 		ActorType:   "system",
 		Payload: map[string]any{
-			"issue_id":    util.UUIDToString(issue.ID),
+			"issue":       resp,
 			"template_id": util.UUIDToString(claimed.ID),
-			"number":      issue.Number,
 		},
 	})
+
+	// Re-publish subscriber:added events so connected clients see the
+	// template-driven subscriptions in real time, mirroring how the
+	// auto-subscribe listener publishes for creator/assignee/mentioned.
+	for _, sub := range templateSubs {
+		bus.Publish(events.Event{
+			Type:        protocol.EventSubscriberAdded,
+			WorkspaceID: util.UUIDToString(issue.WorkspaceID),
+			Payload: map[string]any{
+				"issue_id":  util.UUIDToString(issue.ID),
+				"user_type": "member",
+				"user_id":   util.UUIDToString(sub.UserID),
+				"reason":    "manual",
+			},
+		})
+	}
 
 	// Enqueue task when the issue is assigned to an agent.
 	if issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid {
@@ -121,6 +162,17 @@ func fireTemplate(ctx context.Context, pool *pgxpool.Pool, queries *db.Queries, 
 			slog.Warn("recurring scheduler: failed to enqueue task", "issue_id", util.UUIDToString(issue.ID), "error", err)
 		}
 	}
+}
+
+// getIssuePrefix returns the issue prefix for a workspace, falling back to
+// the empty string when the lookup fails (matching how other call sites
+// degrade silently for the prefix).
+func getIssuePrefix(ctx context.Context, queries *db.Queries, workspaceID pgtype.UUID) string {
+	ws, err := queries.GetWorkspace(ctx, workspaceID)
+	if err != nil {
+		return ""
+	}
+	return ws.IssuePrefix
 }
 
 // createIssueFromTemplate opens a transaction, increments the workspace issue counter,

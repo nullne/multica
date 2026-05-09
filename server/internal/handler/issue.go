@@ -100,6 +100,13 @@ func defaultAgentTriggers() []byte {
 	return b
 }
 
+// IssueToResponse converts a db.Issue into the wire-format IssueResponse.
+// Exported so callers outside this package (e.g. the recurring scheduler)
+// can publish events with the same payload shape as normal issue creation.
+func IssueToResponse(i db.Issue, issuePrefix string) IssueResponse {
+	return issueToResponse(i, issuePrefix)
+}
+
 func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
 	acceptanceCriteria := []any{}

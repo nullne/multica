@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addRecurringTemplateSubscriber = `-- name: AddRecurringTemplateSubscriber :exec
+INSERT INTO recurring_template_subscriber (template_id, user_id)
+VALUES ($1, $2)
+ON CONFLICT (template_id, user_id) DO NOTHING
+`
+
+type AddRecurringTemplateSubscriberParams struct {
+	TemplateID pgtype.UUID `json:"template_id"`
+	UserID     pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) AddRecurringTemplateSubscriber(ctx context.Context, arg AddRecurringTemplateSubscriberParams) error {
+	_, err := q.db.Exec(ctx, addRecurringTemplateSubscriber, arg.TemplateID, arg.UserID)
+	return err
+}
+
 const claimRecurringTemplate = `-- name: ClaimRecurringTemplate :one
 UPDATE recurring_issue_template
 SET last_triggered_at = now(),
@@ -57,6 +73,16 @@ func (q *Queries) ClaimRecurringTemplate(ctx context.Context, arg ClaimRecurring
 		&i.SuccessfulRunsCount,
 	)
 	return i, err
+}
+
+const clearRecurringTemplateSubscribers = `-- name: ClearRecurringTemplateSubscribers :exec
+DELETE FROM recurring_template_subscriber
+WHERE template_id = $1
+`
+
+func (q *Queries) ClearRecurringTemplateSubscribers(ctx context.Context, templateID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearRecurringTemplateSubscribers, templateID)
+	return err
 }
 
 const createRecurringTemplate = `-- name: CreateRecurringTemplate :one
@@ -340,6 +366,32 @@ func (q *Queries) ListDueRecurringTemplates(ctx context.Context, limit int32) ([
 	return items, nil
 }
 
+const listRecurringTemplateSubscribers = `-- name: ListRecurringTemplateSubscribers :many
+SELECT template_id, user_id, created_at FROM recurring_template_subscriber
+WHERE template_id = $1
+ORDER BY created_at
+`
+
+func (q *Queries) ListRecurringTemplateSubscribers(ctx context.Context, templateID pgtype.UUID) ([]RecurringTemplateSubscriber, error) {
+	rows, err := q.db.Query(ctx, listRecurringTemplateSubscribers, templateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RecurringTemplateSubscriber{}
+	for rows.Next() {
+		var i RecurringTemplateSubscriber
+		if err := rows.Scan(&i.TemplateID, &i.UserID, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecurringTemplates = `-- name: ListRecurringTemplates :many
 SELECT id, workspace_id, title, description, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, schedule, timezone, enabled, last_triggered_at, next_run_at, created_by_id, created_by_type, created_at, updated_at, max_runs, successful_runs_count FROM recurring_issue_template
 WHERE workspace_id = $1
@@ -387,6 +439,21 @@ func (q *Queries) ListRecurringTemplates(ctx context.Context, workspaceID pgtype
 		return nil, err
 	}
 	return items, nil
+}
+
+const removeRecurringTemplateSubscriber = `-- name: RemoveRecurringTemplateSubscriber :exec
+DELETE FROM recurring_template_subscriber
+WHERE template_id = $1 AND user_id = $2
+`
+
+type RemoveRecurringTemplateSubscriberParams struct {
+	TemplateID pgtype.UUID `json:"template_id"`
+	UserID     pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) RemoveRecurringTemplateSubscriber(ctx context.Context, arg RemoveRecurringTemplateSubscriberParams) error {
+	_, err := q.db.Exec(ctx, removeRecurringTemplateSubscriber, arg.TemplateID, arg.UserID)
+	return err
 }
 
 const updateRecurringTemplate = `-- name: UpdateRecurringTemplate :one

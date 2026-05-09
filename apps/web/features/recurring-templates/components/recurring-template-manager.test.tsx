@@ -24,7 +24,14 @@ const workspaceState = {
   workspace: mockWorkspace,
   workspaces: [mockWorkspace],
   members: mockMembers,
-  agents: [],
+  agents: [
+    {
+      id: "agent-1",
+      name: "Test Agent",
+      providers: ["claude"],
+      default_daemon_id: null as string | null,
+    },
+  ],
 };
 vi.mock("@/features/workspace", () => ({
   useWorkspaceStore: Object.assign(
@@ -60,7 +67,60 @@ vi.mock("@/features/issues/components/pickers", () => ({
       >
         Select Test User
       </button>
+      <button
+        type="button"
+        data-testid="select-agent"
+        onClick={() => onUpdate({ assignee_type: "agent", assignee_id: "agent-1" })}
+      >
+        Select Test Agent
+      </button>
     </div>
+  ),
+  DaemonPicker: ({
+    trigger,
+    onSelect,
+  }: {
+    trigger: React.ReactNode;
+    onSelect: (id: string | null) => void;
+  }) => (
+    <div>
+      <div data-testid="daemon-trigger">{trigger}</div>
+      <button
+        type="button"
+        data-testid="select-daemon"
+        onClick={() => onSelect("daemon-1")}
+      >
+        Select Daemon
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock("@/features/runtimes", () => ({
+  useRuntimeStore: Object.assign(
+    (selector: (s: unknown) => unknown) => {
+      const state = {
+        daemons: [
+          { id: "daemon-1", daemon_id: "d1", device_name: "Test Daemon", status: "online" },
+        ],
+        runtimes: [
+          { id: "rt-1", daemon_ref: "daemon-1", provider: "claude", auth_status: "ready" },
+        ],
+        fetchAll: vi.fn(),
+      };
+      return selector(state);
+    },
+    {
+      getState: () => ({
+        daemons: [
+          { id: "daemon-1", daemon_id: "d1", device_name: "Test Daemon", status: "online" },
+        ],
+        runtimes: [
+          { id: "rt-1", daemon_ref: "daemon-1", provider: "claude", auth_status: "ready" },
+        ],
+        fetchAll: vi.fn(),
+      }),
+    },
   ),
 }));
 
@@ -143,10 +203,17 @@ const mockTemplate: RecurringTemplate = {
   created_by_type: "member",
   created_at: "2026-05-01T00:00:00Z",
   updated_at: "2026-05-01T00:00:00Z",
+  subscriber_ids: [],
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workspaceState.agents[0] = {
+    id: "agent-1",
+    name: "Test Agent",
+    providers: ["claude"],
+    default_daemon_id: null,
+  };
   mocks.api.listRecurringTemplates.mockResolvedValue([mockTemplate]);
   // Reset store with the mock template seeded so list-render tests don't
   // depend on the manager's mount-time fetch resolving first.
@@ -359,6 +426,107 @@ describe("RecurringTemplateManager", () => {
           description: null,
           due_date_offset_hours: null,
           max_runs: null,
+        }),
+      );
+    });
+  });
+
+  it("includes selected subscribers in the create payload", async () => {
+    mocks.api.createRecurringTemplate.mockResolvedValueOnce({
+      ...mockTemplate,
+      id: "tpl-subs",
+      subscriber_ids: ["user-1"],
+    });
+
+    const user = userEvent.setup();
+    render(<RecurringTemplateManager />);
+
+    await user.click(screen.getByRole("button", { name: /new template/i }));
+    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Subscribed Job");
+    await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+
+    // Open subscribers picker and select Test User. There's a "Select Test User"
+    // button rendered by the assignee mock, so scope this to the popover.
+    await user.click(screen.getByText("No subscribers"));
+    const popover = await screen.findByPlaceholderText("Filter members...");
+    const popoverContent = popover.closest("[role=dialog]") ?? popover.parentElement!.parentElement!;
+    const memberButton = within(popoverContent as HTMLElement).getByRole("button", { name: /^test user$/i });
+    await user.click(memberButton);
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRecurringTemplate).toHaveBeenCalledWith(
+        expect.objectContaining({ subscriber_ids: ["user-1"] }),
+      );
+    });
+  });
+
+  it("includes dispatch settings when assignee is an agent", async () => {
+    mocks.api.createRecurringTemplate.mockResolvedValueOnce({
+      ...mockTemplate,
+      id: "tpl-agent",
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+      dispatch_provider: "claude",
+      dispatch_daemon_id: "daemon-1",
+    });
+
+    const user = userEvent.setup();
+    render(<RecurringTemplateManager />);
+
+    await user.click(screen.getByRole("button", { name: /new template/i }));
+    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Agent Job");
+    await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+    await user.click(screen.getByTestId("select-agent"));
+
+    // Pick a daemon — provider auto-selects to "claude" (only configured option).
+    await user.click(screen.getByTestId("select-daemon"));
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRecurringTemplate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          assignee_type: "agent",
+          assignee_id: "agent-1",
+          dispatch_daemon_id: "daemon-1",
+          dispatch_provider: "claude",
+        }),
+      );
+    });
+  });
+
+  it("seeds default daemon/provider for agent assignees without manual daemon selection", async () => {
+    workspaceState.agents[0] = {
+      id: "agent-1",
+      name: "Test Agent",
+      providers: ["claude"],
+      default_daemon_id: "daemon-1",
+    };
+    mocks.api.createRecurringTemplate.mockResolvedValueOnce({
+      ...mockTemplate,
+      id: "tpl-agent-default-daemon",
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+      dispatch_provider: "claude",
+      dispatch_daemon_id: "daemon-1",
+    });
+
+    const user = userEvent.setup();
+    render(<RecurringTemplateManager />);
+
+    await user.click(screen.getByRole("button", { name: /new template/i }));
+    await user.type(screen.getByPlaceholderText("Weekly standup issue"), "Locked Agent Job");
+    await user.type(screen.getByPlaceholderText("0 9 * * 1"), "0 9 * * *");
+    await user.click(screen.getByTestId("select-agent"));
+    await user.click(screen.getByRole("button", { name: /^create$/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRecurringTemplate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          assignee_type: "agent",
+          assignee_id: "agent-1",
+          dispatch_daemon_id: "daemon-1",
+          dispatch_provider: "claude",
         }),
       );
     });

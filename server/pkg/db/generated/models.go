@@ -297,6 +297,12 @@ type RecurringIssueTemplate struct {
 	SuccessfulRunsCount int32              `json:"successful_runs_count"`
 }
 
+type RecurringTemplateSubscriber struct {
+	TemplateID pgtype.UUID        `json:"template_id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type RuntimeUsage struct {
 	ID               pgtype.UUID        `json:"id"`
 	RuntimeID        pgtype.UUID        `json:"runtime_id"`

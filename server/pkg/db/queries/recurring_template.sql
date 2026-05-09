@@ -79,3 +79,21 @@ SET successful_runs_count = successful_runs_count + 1,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: ListRecurringTemplateSubscribers :many
+SELECT * FROM recurring_template_subscriber
+WHERE template_id = $1
+ORDER BY created_at;
+
+-- name: AddRecurringTemplateSubscriber :exec
+INSERT INTO recurring_template_subscriber (template_id, user_id)
+VALUES ($1, $2)
+ON CONFLICT (template_id, user_id) DO NOTHING;
+
+-- name: RemoveRecurringTemplateSubscriber :exec
+DELETE FROM recurring_template_subscriber
+WHERE template_id = $1 AND user_id = $2;
+
+-- name: ClearRecurringTemplateSubscribers :exec
+DELETE FROM recurring_template_subscriber
+WHERE template_id = $1;
