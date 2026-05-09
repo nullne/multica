@@ -77,7 +77,7 @@ function classifyDaemons(
 // before committing.
 // ---------------------------------------------------------------------------
 
-function AgentDispatchConfirm({
+export function AgentDispatchConfirm({
   agent,
   initialDaemonId,
   initialProvider,
