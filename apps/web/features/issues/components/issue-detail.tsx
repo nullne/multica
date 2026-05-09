@@ -63,8 +63,8 @@ import { ActorAvatar } from "@/components/common/actor-avatar";
 import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
-import { resolveAssigneeChange } from "@/features/issues/utils/dispatch";
-import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
+import { AgentDispatchConfirm } from "@/features/issues/components/pickers/assignee-picker";
+import { pickBestProvider, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import {
@@ -84,6 +84,7 @@ import { useIssueStore } from "@/features/issues";
 import { LabelPicker } from "@/features/labels/components";
 import { useIssueViewStore } from "@/features/issues/stores/view-store";
 import { useIssuesScopeStore } from "@/features/issues/stores/issues-scope-store";
+import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
 import { useIssueTimeline } from "@/features/issues/hooks/use-issue-timeline";
 import { useIssueReactions } from "@/features/issues/hooks/use-issue-reactions";
 import { useIssueSubscribers } from "@/features/issues/hooks/use-issue-subscribers";
@@ -792,27 +793,62 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
     [issue, id],
   );
 
-  const handleAssigneeChange = useCallback(
-    (type: "member" | "agent" | null, assigneeId: string | null) => {
+  // Quick-assign for member/unassigned. Agents go through the picker's
+  // in-popover confirmation step (see assigneePickerOpen + pendingAgentId).
+  const handleQuickAssign = useCallback(
+    (type: "member" | null, assigneeId: string | null) => {
       if (!issue) return;
-      const runtimes = useRuntimeStore.getState().runtimes;
-      const savedDispatch =
-        type === "agent" && assigneeId
-          ? useIssueDefaultsStore.getState().getAgentDispatch(assigneeId)
-          : undefined;
       handleUpdateField(
         resolveAssigneeChange({
           type,
           id: assigneeId,
           agents,
-          runtimes,
-          savedDispatch,
+          runtimes: useRuntimeStore.getState().runtimes,
           currentVerifierId: issue.verifier_agent_id,
         }),
       );
     },
     [issue, agents, handleUpdateField],
   );
+
+  const runtimes = useRuntimeStore((s) => s.runtimes);
+  const [actionAssigneeMenuOpen, setActionAssigneeMenuOpen] = useState(false);
+  const [actionPendingAssigneeAgentId, setActionPendingAssigneeAgentId] = useState<string | null>(null);
+  const actionPendingAssigneeAgent = actionPendingAssigneeAgentId
+    ? agents.find((a) => a.id === actionPendingAssigneeAgentId) ?? null
+    : null;
+  const initialActionAssigneeDispatch = useMemo(() => {
+    if (!actionPendingAssigneeAgent) return { daemonId: null as string | null, provider: null as string | null };
+    const saved = useIssueDefaultsStore.getState().getAgentDispatch(actionPendingAssigneeAgent.id);
+    const daemonId =
+      actionPendingAssigneeAgent.default_daemon_id ?? saved?.daemonId ?? null;
+    const provider =
+      saved?.provider ??
+      pickBestProvider(actionPendingAssigneeAgent.providers ?? [], runtimes, daemonId ?? undefined) ??
+      null;
+    return { daemonId, provider };
+  }, [actionPendingAssigneeAgent, runtimes]);
+  const handleConfirmActionAgentAssignment = useCallback((daemonId: string | null, provider: string | null) => {
+    if (!issue || !actionPendingAssigneeAgent) return;
+    const patch: Partial<UpdateIssueRequest> = {
+      assignee_type: "agent",
+      assignee_id: actionPendingAssigneeAgent.id,
+      dispatch_provider: provider,
+      dispatch_daemon_id: daemonId,
+      dispatch_daemon_label: null,
+    };
+    if (issue.verifier_agent_id === actionPendingAssigneeAgent.id) {
+      patch.verifier_agent_id = null;
+      patch.max_verification_rounds = null;
+    }
+    useIssueDefaultsStore.getState().setAgentDispatch(actionPendingAssigneeAgent.id, {
+      daemonId: daemonId ?? undefined,
+      provider: provider ?? undefined,
+    });
+    handleUpdateField(patch);
+    setActionPendingAssigneeAgentId(null);
+    setActionAssigneeMenuOpen(false);
+  }, [issue, actionPendingAssigneeAgent, handleUpdateField]);
 
   const descEditorRef = useRef<import("@/components/common/rich-text-editor").RichTextEditorRef>(null);
   const handleDescriptionUpload = useCallback(
@@ -1048,39 +1084,62 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                 </DropdownMenuSub>
 
                 {/* Assignee */}
-                <DropdownMenuSub>
+                <DropdownMenuSub
+                  open={actionAssigneeMenuOpen}
+                  onOpenChange={(open) => {
+                    setActionAssigneeMenuOpen(open);
+                    if (!open) setActionPendingAssigneeAgentId(null);
+                  }}
+                >
                   <DropdownMenuSubTrigger>
                     <UserMinus className="h-3.5 w-3.5" />
                     Assignee
                   </DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem
-                      onClick={() => handleAssigneeChange(null, null)}
-                    >
-                      <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
-                      Unassigned
-                      {!issue.assignee_type && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
-                    </DropdownMenuItem>
-                    {members.filter((m) => m.kind !== "bot").map((m) => (
-                      <DropdownMenuItem
-                        key={m.user_id}
-                        onClick={() => handleAssigneeChange("member", m.user_id)}
-                      >
-                        <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
-                        {m.name}
-                        {issue.assignee_type === "member" && issue.assignee_id === m.user_id && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
-                      </DropdownMenuItem>
-                    ))}
-                    {agents.filter((a) => canAssignAgent(a, user?.id, currentMemberRole)).map((a) => (
-                      <DropdownMenuItem
-                        key={a.id}
-                        onClick={() => handleAssigneeChange("agent", a.id)}
-                      >
-                        <ActorAvatar actorType="agent" actorId={a.id} size={16} />
-                        {a.name}
-                        {issue.assignee_type === "agent" && issue.assignee_id === a.id && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
-                      </DropdownMenuItem>
-                    ))}
+                  <DropdownMenuSubContent className={actionPendingAssigneeAgent ? "w-64 p-0" : undefined}>
+                    {actionPendingAssigneeAgent ? (
+                      <AgentDispatchConfirm
+                        key={actionPendingAssigneeAgent.id}
+                        agent={actionPendingAssigneeAgent}
+                        initialDaemonId={initialActionAssigneeDispatch.daemonId}
+                        initialProvider={initialActionAssigneeDispatch.provider}
+                        daemonLocked={!!actionPendingAssigneeAgent.default_daemon_id}
+                        onBack={() => setActionPendingAssigneeAgentId(null)}
+                        onConfirm={handleConfirmActionAgentAssignment}
+                      />
+                    ) : (
+                      <>
+                        <DropdownMenuItem
+                          onClick={() => handleQuickAssign(null, null)}
+                        >
+                          <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
+                          Unassigned
+                          {!issue.assignee_type && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
+                        </DropdownMenuItem>
+                        {members.filter((m) => m.kind !== "bot").map((m) => (
+                          <DropdownMenuItem
+                            key={m.user_id}
+                            onClick={() => handleQuickAssign("member", m.user_id)}
+                          >
+                            <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
+                            {m.name}
+                            {issue.assignee_type === "member" && issue.assignee_id === m.user_id && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
+                          </DropdownMenuItem>
+                        ))}
+                        {agents.filter((a) => canAssignAgent(a, user?.id, currentMemberRole)).map((a) => (
+                          <DropdownMenuItem
+                            key={a.id}
+                            onSelect={(event) => {
+                              event.preventDefault();
+                              setActionPendingAssigneeAgentId(a.id);
+                            }}
+                          >
+                            <ActorAvatar actorType="agent" actorId={a.id} size={16} />
+                            {a.name}
+                            {issue.assignee_type === "agent" && issue.assignee_id === a.id && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
+                          </DropdownMenuItem>
+                        ))}
+                      </>
+                    )}
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
 

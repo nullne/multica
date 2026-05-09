@@ -2,10 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, Check, ChevronRight, Cpu, Monitor, Maximize2, Minimize2, ShieldCheck, ShieldOff, Tag, UserMinus, X as XIcon } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, Cpu, Monitor, Maximize2, Minimize2, ShieldCheck, ShieldOff, Tag, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { IssueStatus, IssuePriority, IssueAssigneeType, Label, AgentRuntime, ProviderAuthStatus } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueAssigneeType, Label, AgentRuntime, ProviderAuthStatus, UpdateIssueRequest } from "@/shared/types";
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Button } from "@/components/ui/button";
 import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
 import { TitleEditor } from "@/components/common/title-editor";
-import { StatusIcon, PriorityIcon, canAssignAgent, DaemonPicker } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, AssigneePicker, canAssignAgent, DaemonPicker } from "@/features/issues/components";
 import { useRuntimeStore } from "@/features/runtimes";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { useLabelStore } from "@/features/labels";
@@ -37,7 +37,7 @@ import { useIssueStore } from "@/features/issues";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
 import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
 import { issueUrl } from "@/features/issues/utils/url";
-import { pickBestProvider, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
+import { pickBestProvider } from "@/features/issues/utils/dispatch";
 import { api } from "@/shared/api";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { FileUploadButton } from "@/components/common/file-upload-button";
@@ -180,10 +180,6 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
     return () => clearTimeout(t);
   }, []);
 
-  // Assignee popover
-  const [assigneeOpen, setAssigneeOpen] = useState(false);
-  const [assigneeFilter, setAssigneeFilter] = useState("");
-
   // Verifier popover
   const [verifierOpen, setVerifierOpen] = useState(false);
   const [verifierFilter, setVerifierFilter] = useState("");
@@ -198,10 +194,6 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const user = useAuthStore((s) => s.user);
   const currentMember = members.find((m) => m.user_id === user?.id);
   const memberRole = currentMember?.role;
-
-  const assigneeQuery = assigneeFilter.toLowerCase();
-  const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(assigneeQuery));
-  const filteredAgents = agents.filter((a) => !a.archived_at && a.name.toLowerCase().includes(assigneeQuery));
 
   const verifierQuery = verifierFilter.toLowerCase();
   const filteredVerifierAgents = agents.filter(
@@ -223,40 +215,27 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const updateTitle = (v: string) => { setTitle(v); setDraft({ title: v }); };
   const updateStatus = (v: IssueStatus) => { setStatus(v); setDraft({ status: v }); };
   const updatePriority = (v: IssuePriority) => { setPriority(v); setDraft({ priority: v }); };
-  const updateAssignee = (type?: IssueAssigneeType, id?: string) => {
-    const currentRuntimes = useRuntimeStore.getState().runtimes;
-    const savedDispatch =
-      type === "agent" && id
-        ? useIssueDefaultsStore.getState().getAgentDispatch(id)
-        : undefined;
-    const patch = resolveAssigneeChange({
-      type: type ?? null,
-      id: id ?? null,
-      agents,
-      runtimes: currentRuntimes,
-      savedDispatch,
-      currentVerifierId: verifierAgentId ?? null,
-    });
-
-    setAssigneeType(type); setAssigneeId(id);
+  const applyAssigneePatch = (patch: Partial<UpdateIssueRequest>) => {
+    const newType = (patch.assignee_type ?? undefined) as IssueAssigneeType | undefined;
+    const newId = patch.assignee_id ?? undefined;
+    setAssigneeType(newType);
+    setAssigneeId(newId);
     setDispatchDaemonId(patch.dispatch_daemon_id ?? undefined);
     setDispatchProvider(patch.dispatch_provider ?? undefined);
-    setDraft({ assigneeType: type, assigneeId: id });
+    setDraft({ assigneeType: newType, assigneeId: newId });
 
+    const draftUpdate: Parameters<typeof setDraft>[0] = {};
     if ("verifier_agent_id" in patch) {
-      setVerifierAgentId(patch.verifier_agent_id ?? undefined);
+      const v = patch.verifier_agent_id ?? undefined;
+      setVerifierAgentId(v);
+      draftUpdate.verifierAgentId = v;
     }
     if ("max_verification_rounds" in patch) {
-      setMaxVerificationRounds(patch.max_verification_rounds ?? undefined);
+      const m = patch.max_verification_rounds ?? undefined;
+      setMaxVerificationRounds(m);
+      draftUpdate.maxVerificationRounds = m;
     }
-    setDraft({
-      verifierAgentId:
-        "verifier_agent_id" in patch ? (patch.verifier_agent_id ?? undefined) : verifierAgentId,
-      maxVerificationRounds:
-        "max_verification_rounds" in patch
-          ? (patch.max_verification_rounds ?? undefined)
-          : maxVerificationRounds,
-    });
+    if (Object.keys(draftUpdate).length > 0) setDraft(draftUpdate);
   };
   const updateDueDate = (v: string | null) => { setDueDate(v); setDraft({ dueDate: v }); };
   const updateVerifier = (id?: string) => { setVerifierAgentId(id); setDraft({ verifierAgentId: id }); };
@@ -415,91 +394,26 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
           {/* Row 1: Assignee + agent dispatch options + Create button */}
           <div className="flex items-center justify-between px-4 py-2">
             <div className="flex items-center gap-1.5">
-              {/* Assignee */}
-              <Popover open={assigneeOpen} onOpenChange={(v) => { setAssigneeOpen(v); if (!v) setAssigneeFilter(""); }}>
-                <PopoverTrigger
-                  render={
-                    <PillButton>
-                      {assigneeType && assigneeId ? (
-                        <>
-                          <ActorAvatar actorType={assigneeType} actorId={assigneeId} size={16} />
-                          <span>{assigneeLabel}</span>
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground">Assignee</span>
-                      )}
-                    </PillButton>
-                  }
-                />
-                <PopoverContent align="start" className="w-52 p-0">
-                  <div className="px-2 py-1.5 border-b">
-                    <input
-                      type="text"
-                      value={assigneeFilter}
-                      onChange={(e) => setAssigneeFilter(e.target.value)}
-                      placeholder="Assign to..."
-                      className="w-full bg-transparent text-sm placeholder:text-muted-foreground outline-none"
-                    />
-                  </div>
-                  <div className="p-1 max-h-60 overflow-y-auto">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        updateAssignee(undefined, undefined);
-                        setAssigneeOpen(false);
-                      }}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                    >
-                      <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-muted-foreground">Unassigned</span>
-                    </button>
-
-                    {filteredMembers.length > 0 && (
-                      <>
-                        <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Members</div>
-                        {filteredMembers.map((m) => (
-                          <button
-                            type="button"
-                            key={m.user_id}
-                            onClick={() => {
-                              updateAssignee("member", m.user_id);
-                              setAssigneeOpen(false);
-                            }}
-                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                          >
-                            <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
-                            <span>{m.name}</span>
-                          </button>
-                        ))}
-                      </>
-                    )}
-
-                    {filteredAgents.length > 0 && (
-                      <>
-                        <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">Agents</div>
-                        {filteredAgents.map((a) => (
-                          <button
-                            type="button"
-                            key={a.id}
-                            onClick={() => {
-                              updateAssignee("agent", a.id);
-                              setAssigneeOpen(false);
-                            }}
-                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                          >
-                            <ActorAvatar actorType="agent" actorId={a.id} size={16} />
-                            <span>{a.name}</span>
-                          </button>
-                        ))}
-                      </>
-                    )}
-
-                    {filteredMembers.length === 0 && filteredAgents.length === 0 && assigneeFilter && (
-                      <div className="px-2 py-3 text-center text-sm text-muted-foreground">No results</div>
-                    )}
-                  </div>
-                </PopoverContent>
-              </Popover>
+              {/* Assignee — uses the shared picker so the agent dispatch
+                  confirmation step matches the issue detail entry points. */}
+              <AssigneePicker
+                assigneeType={assigneeType ?? null}
+                assigneeId={assigneeId ?? null}
+                verifierAgentId={verifierAgentId ?? null}
+                onUpdate={applyAssigneePatch}
+                align="start"
+                triggerRender={<PillButton />}
+                trigger={
+                  assigneeType && assigneeId ? (
+                    <>
+                      <ActorAvatar actorType={assigneeType} actorId={assigneeId} size={16} />
+                      <span>{assigneeLabel}</span>
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">Assignee</span>
+                  )
+                }
+              />
 
               {/* Agent dispatch options — inline when assignee is an agent */}
               {selectedAgent && (
