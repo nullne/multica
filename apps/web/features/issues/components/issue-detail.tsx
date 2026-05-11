@@ -673,7 +673,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const prevIssue = currentIndex > 0 ? navigationIssues[currentIndex - 1] : null;
   const nextIssue = currentIndex < navigationIssues.length - 1 ? navigationIssues[currentIndex + 1] : null;
   const { getActorName } = useActorName();
-  const { uploadWithToast } = useFileUpload();
+  const { uploadWithToast, uploading } = useFileUpload();
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: layoutId,
   });
@@ -1286,6 +1286,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
             )}
             <FileUploadButton
               size="sm"
+              busy={uploading}
               onSelect={(file) => descEditorRef.current?.uploadFile(file)}
             />
           </div>

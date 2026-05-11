@@ -16,7 +16,7 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
   const editorRef = useRef<RichTextEditorRef>(null);
   const [isEmpty, setIsEmpty] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const { uploadWithToast } = useFileUpload();
+  const { uploadWithToast, uploading } = useFileUpload();
 
   const handleUpload = async (file: File) => {
     return await uploadWithToast(file, { issueId });
@@ -50,6 +50,7 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
       <div className="absolute bottom-1 right-1.5 flex items-center gap-1">
         <FileUploadButton
           size="sm"
+          busy={uploading}
           onSelect={(file) => editorRef.current?.uploadFile(file)}
         />
         <Button

@@ -1,13 +1,19 @@
 "use client";
 
 import { useRef } from "react";
-import { Paperclip } from "lucide-react";
+import { Loader2, Paperclip } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface FileUploadButtonProps {
   /** Called with the selected File — caller handles upload. */
   onSelect: (file: File) => void;
+  /** Disables the button without indicating any specific reason. */
   disabled?: boolean;
+  /**
+   * Indicates an upload is in progress: swaps the icon to a spinner and
+   * prevents clicks so users don't accidentally start another upload.
+   */
+  busy?: boolean;
   className?: string;
   size?: "sm" | "default";
 }
@@ -15,6 +21,7 @@ interface FileUploadButtonProps {
 function FileUploadButton({
   onSelect,
   disabled,
+  busy,
   className,
   size = "default",
 }: FileUploadButtonProps) {
@@ -35,14 +42,21 @@ function FileUploadButton({
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
-        disabled={disabled}
+        disabled={disabled || busy}
+        aria-busy={busy || undefined}
+        aria-label={busy ? "Uploading file" : "Attach file"}
         className={cn(
-          "inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-50 disabled:pointer-events-none",
+          "inline-flex items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:pointer-events-none",
+          busy ? "opacity-100 text-foreground" : "disabled:opacity-50",
           btnSize,
           className,
         )}
       >
-        <Paperclip className={iconSize} />
+        {busy ? (
+          <Loader2 className={cn(iconSize, "animate-spin")} />
+        ) : (
+          <Paperclip className={iconSize} />
+        )}
       </button>
       <input
         ref={inputRef}

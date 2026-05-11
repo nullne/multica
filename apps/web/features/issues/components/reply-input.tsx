@@ -38,7 +38,7 @@ function ReplyInput({
   const [isEmpty, setIsEmpty] = useState(true);
   const [isExpanded, setIsExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const { uploadWithToast } = useFileUpload();
+  const { uploadWithToast, uploading } = useFileUpload();
 
   useEffect(() => {
     const el = measureRef.current;
@@ -100,6 +100,7 @@ function ReplyInput({
         <div className="absolute bottom-0 right-0 flex items-center gap-1 text-muted-foreground transition-colors group-focus-within/editor:text-foreground">
           <FileUploadButton
             size="sm"
+            busy={uploading}
             onSelect={(file) => editorRef.current?.uploadFile(file)}
           />
           <button
