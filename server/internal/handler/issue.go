@@ -290,7 +290,7 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	if err == nil && len(attachments) > 0 {
 		resp.Attachments = make([]AttachmentResponse, len(attachments))
 		for i, a := range attachments {
-			resp.Attachments[i] = h.attachmentToResponse(a)
+			resp.Attachments[i] = h.attachmentToResponse(r, a)
 		}
 	}
 
@@ -298,19 +298,23 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateIssueRequest struct {
-	Title                 string            `json:"title"`
-	Description           *string           `json:"description"`
-	Status                string            `json:"status"`
-	Priority              string            `json:"priority"`
-	AssigneeType          *string           `json:"assignee_type"`
-	AssigneeID            *string           `json:"assignee_id"`
-	VerifierAgentID       *string           `json:"verifier_agent_id"`
-	MaxVerificationRounds *int32            `json:"max_verification_rounds"`
-	ParentIssueID         *string           `json:"parent_issue_id"`
-	DueDate               *string           `json:"due_date"`
-	DispatchProvider      *string           `json:"dispatch_provider"`
-	DispatchDaemonID      *string           `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel   *string           `json:"dispatch_daemon_label"`
+	Title                 string  `json:"title"`
+	Description           *string `json:"description"`
+	Status                string  `json:"status"`
+	Priority              string  `json:"priority"`
+	AssigneeType          *string `json:"assignee_type"`
+	AssigneeID            *string `json:"assignee_id"`
+	VerifierAgentID       *string `json:"verifier_agent_id"`
+	MaxVerificationRounds *int32  `json:"max_verification_rounds"`
+	ParentIssueID         *string `json:"parent_issue_id"`
+	DueDate               *string `json:"due_date"`
+	DispatchProvider      *string `json:"dispatch_provider"`
+	DispatchDaemonID      *string `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel   *string `json:"dispatch_daemon_label"`
+	// AttachmentIDs are previously-uploaded attachment IDs to attach to the
+	// issue. They are linked before the agent task is enqueued so the agent
+	// can read them as soon as it starts.
+	AttachmentIDs []string `json:"attachment_ids"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -464,8 +468,31 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Link any pre-uploaded attachments to the new issue BEFORE dispatching
+	// the agent task. Without this ordering the daemon could claim the task
+	// and find the attachment list empty (the original race the CLI flow
+	// exhibited when --attachment was paired with --assignee).
+	if len(req.AttachmentIDs) > 0 {
+		if err := h.linkAttachmentsToIssueByIDs(r.Context(), issue.ID, issue.WorkspaceID, req.AttachmentIDs); err != nil {
+			slog.Error("failed to link attachments to issue", append(logger.RequestAttrs(r),
+				"error", err,
+				"issue_id", uuidToString(issue.ID),
+				"attachment_ids", req.AttachmentIDs,
+			)...)
+		}
+	}
+
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	resp := issueToResponse(issue, prefix)
+	if attachments, err := h.Queries.ListAttachmentsByIssue(r.Context(), db.ListAttachmentsByIssueParams{
+		IssueID:     issue.ID,
+		WorkspaceID: issue.WorkspaceID,
+	}); err == nil && len(attachments) > 0 {
+		resp.Attachments = make([]AttachmentResponse, len(attachments))
+		for i, a := range attachments {
+			resp.Attachments[i] = h.attachmentToResponse(r, a)
+		}
+	}
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
 	h.publish(protocol.EventIssueCreated, workspaceID, creatorType, actualCreatorID, map[string]any{"issue": resp})
 

@@ -238,6 +238,70 @@ func (s *S3Storage) DeleteKeys(ctx context.Context, keys []string) {
 	}
 }
 
+// DownloadResult is a streamed object fetched from the underlying bucket.
+// Callers must Close the Body when done.
+type DownloadResult struct {
+	Body          io.ReadCloser
+	ContentType   string
+	ContentLength int64
+}
+
+// Download fetches an object's bytes from the bucket. The caller is responsible
+// for closing Result.Body.
+//
+// For GCS endpoints with HMAC credentials we sign an XML GET; for any other
+// S3-compatible backend we use the AWS SDK's GetObject.
+func (s *S3Storage) Download(ctx context.Context, key string) (*DownloadResult, error) {
+	if key == "" {
+		return nil, fmt.Errorf("storage download: empty key")
+	}
+	if s.useGCSXML {
+		return s.downloadGCSObject(ctx, key)
+	}
+
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("s3 GetObject: %w", err)
+	}
+	res := &DownloadResult{Body: out.Body}
+	if out.ContentType != nil {
+		res.ContentType = *out.ContentType
+	}
+	if out.ContentLength != nil {
+		res.ContentLength = *out.ContentLength
+	}
+	return res, nil
+}
+
+func (s *S3Storage) downloadGCSObject(ctx context.Context, key string) (*DownloadResult, error) {
+	req, err := s.newGCSXMLRequest(ctx, http.MethodGet, key, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gcs xml GET: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		return nil, fmt.Errorf("gcs xml GET: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	res := &DownloadResult{
+		Body:          resp.Body,
+		ContentType:   resp.Header.Get("Content-Type"),
+		ContentLength: resp.ContentLength,
+	}
+	return res, nil
+}
+
 func (s *S3Storage) Upload(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error) {
 	safe := sanitizeFilename(filename)
 	if s.useGCSXML {

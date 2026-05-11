@@ -17,6 +17,10 @@ ORDER BY created_at ASC;
 SELECT * FROM attachment
 WHERE id = $1 AND workspace_id = $2;
 
+-- name: GetAttachmentByID :one
+SELECT * FROM attachment
+WHERE id = $1;
+
 -- name: ListAttachmentsByCommentIDs :many
 SELECT * FROM attachment
 WHERE comment_id = ANY($1::uuid[])
@@ -35,6 +39,14 @@ WHERE comment_id = $1;
 UPDATE attachment
 SET comment_id = $1
 WHERE issue_id = $2
+  AND comment_id IS NULL
+  AND id = ANY($3::uuid[]);
+
+-- name: LinkAttachmentsToIssue :exec
+UPDATE attachment
+SET issue_id = $1
+WHERE workspace_id = $2
+  AND issue_id IS NULL
   AND comment_id IS NULL
   AND id = ANY($3::uuid[]);
 
