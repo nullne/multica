@@ -358,22 +358,30 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 		body["dispatch_daemon_id"] = daemonID
 	}
 
-	var result map[string]any
-	if err := client.PostJSON(ctx, "/api/issues", body, &result); err != nil {
-		return fmt.Errorf("create issue: %w", err)
-	}
-
-	// Upload attachments and link them to the newly created issue.
-	issueID := strVal(result, "id")
+	// Upload attachments BEFORE creating the issue, so the agent task isn't
+	// dispatched until attachments are persisted and linkable. We pass empty
+	// issueID/commentID so the attachments remain "unlinked" until we
+	// reference them via attachment_ids on the issue create request.
+	var attachmentIDs []string
 	for _, filePath := range attachments {
 		data, readErr := os.ReadFile(filePath)
 		if readErr != nil {
 			return fmt.Errorf("read attachment %s: %w", filePath, readErr)
 		}
-		if _, uploadErr := client.UploadFile(ctx, data, filePath, issueID); uploadErr != nil {
+		id, uploadErr := client.UploadFile(ctx, data, filePath, "")
+		if uploadErr != nil {
 			return fmt.Errorf("upload attachment %s: %w", filePath, uploadErr)
 		}
+		attachmentIDs = append(attachmentIDs, id)
 		fmt.Fprintf(os.Stderr, "Uploaded %s\n", filePath)
+	}
+	if len(attachmentIDs) > 0 {
+		body["attachment_ids"] = attachmentIDs
+	}
+
+	var result map[string]any
+	if err := client.PostJSON(ctx, "/api/issues", body, &result); err != nil {
+		return fmt.Errorf("create issue: %w", err)
 	}
 
 	output, _ := cmd.Flags().GetString("output")

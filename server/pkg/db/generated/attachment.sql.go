@@ -101,6 +101,30 @@ func (q *Queries) GetAttachment(ctx context.Context, arg GetAttachmentParams) (A
 	return i, err
 }
 
+const getAttachmentByID = `-- name: GetAttachmentByID :one
+SELECT id, workspace_id, issue_id, comment_id, uploader_type, uploader_id, filename, url, content_type, size_bytes, created_at FROM attachment
+WHERE id = $1
+`
+
+func (q *Queries) GetAttachmentByID(ctx context.Context, id pgtype.UUID) (Attachment, error) {
+	row := q.db.QueryRow(ctx, getAttachmentByID, id)
+	var i Attachment
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.CommentID,
+		&i.UploaderType,
+		&i.UploaderID,
+		&i.Filename,
+		&i.Url,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const linkAttachmentsToComment = `-- name: LinkAttachmentsToComment :exec
 UPDATE attachment
 SET comment_id = $1
@@ -117,6 +141,26 @@ type LinkAttachmentsToCommentParams struct {
 
 func (q *Queries) LinkAttachmentsToComment(ctx context.Context, arg LinkAttachmentsToCommentParams) error {
 	_, err := q.db.Exec(ctx, linkAttachmentsToComment, arg.CommentID, arg.IssueID, arg.Column3)
+	return err
+}
+
+const linkAttachmentsToIssue = `-- name: LinkAttachmentsToIssue :exec
+UPDATE attachment
+SET issue_id = $1
+WHERE workspace_id = $2
+  AND issue_id IS NULL
+  AND comment_id IS NULL
+  AND id = ANY($3::uuid[])
+`
+
+type LinkAttachmentsToIssueParams struct {
+	IssueID     pgtype.UUID   `json:"issue_id"`
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	Column3     []pgtype.UUID `json:"column_3"`
+}
+
+func (q *Queries) LinkAttachmentsToIssue(ctx context.Context, arg LinkAttachmentsToIssueParams) error {
+	_, err := q.db.Exec(ctx, linkAttachmentsToIssue, arg.IssueID, arg.WorkspaceID, arg.Column3)
 	return err
 }
 
