@@ -19,7 +19,7 @@ import TableHeader from "@tiptap/extension-table-header";
 import TableCell from "@tiptap/extension-table-cell";
 import { Table } from "@tiptap/extension-table";
 import { Markdown } from "@tiptap/markdown";
-import { Extension } from "@tiptap/core";
+import { Extension, Node } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Slice } from "@tiptap/pm/model";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,7 @@ import type { UploadResult } from "@/shared/hooks/use-file-upload";
 import { BaseMentionExtension } from "./mention-extension";
 import { createMentionSuggestion } from "./mention-suggestion";
 import { CodeBlockView } from "./code-block-view";
+import { FileUploadPlaceholderView } from "./file-upload-placeholder-view";
 import { markdownToHtml } from "./markdown-to-html";
 import "./rich-text-editor.css";
 
@@ -124,6 +125,8 @@ function createMarkdownPasteExtension() {
 // File upload extension (paste + drop) with blob URL instant preview
 // ---------------------------------------------------------------------------
 
+const FILE_UPLOAD_PLACEHOLDER_NAME = "fileUploadPlaceholder";
+
 function removeImageBySrc(editor: ReturnType<typeof useEditor>, src: string) {
   if (!editor) return;
   const { tr } = editor.state;
@@ -139,9 +142,54 @@ function removeImageBySrc(editor: ReturnType<typeof useEditor>, src: string) {
   if (deleted) editor.view.dispatch(tr);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function findPlaceholderById(editor: any, uploadId: string): { pos: number; size: number } | null {
+  let result: { pos: number; size: number } | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  editor.state.doc.descendants((node: any, pos: number) => {
+    if (result) return false;
+    if (node.type.name === FILE_UPLOAD_PLACEHOLDER_NAME && node.attrs.uploadId === uploadId) {
+      result = { pos, size: node.nodeSize };
+      return false;
+    }
+  });
+  return result;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function removePlaceholder(editor: any, uploadId: string) {
+  if (!editor) return;
+  const found = findPlaceholderById(editor, uploadId);
+  if (!found) return;
+  const { tr } = editor.state;
+  tr.delete(found.pos, found.pos + found.size);
+  editor.view.dispatch(tr);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function replacePlaceholderWithLink(editor: any, uploadId: string, filename: string, href: string) {
+  if (!editor) return;
+  const found = findPlaceholderById(editor, uploadId);
+  if (!found) return;
+  const linkMarkType = editor.schema.marks.link;
+  const marks = linkMarkType ? [linkMarkType.create({ href })] : [];
+  const textNode = editor.schema.text(filename, marks);
+  const { tr } = editor.state;
+  tr.replaceWith(found.pos, found.pos + found.size, textNode);
+  editor.view.dispatch(tr);
+}
+
+let placeholderCounter = 0;
+function nextUploadId(): string {
+  placeholderCounter += 1;
+  return `upload-${Date.now()}-${placeholderCounter}`;
+}
+
 /**
- * Shared upload flow: insert blob preview → upload → replace with real URL.
- * Used by both paste/drop (at cursor) and button upload (at end of doc).
+ * Shared upload flow: insert blob/placeholder preview → upload → replace with
+ * real URL. Used by both paste/drop (at cursor) and button upload (at end of
+ * doc). Non-image uploads use an inline placeholder chip so users see
+ * in-progress feedback immediately, mirroring the image-uploading state.
  */
 async function uploadAndInsertFile(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -185,14 +233,26 @@ async function uploadAndInsertFile(
       URL.revokeObjectURL(blobUrl);
     }
   } else {
-    // Non-image: upload first, then insert link
-    const result = await handler(file);
-    if (!result) return;
-    const linkText = `[${result.filename}](${result.link})`;
+    const uploadId = nextUploadId();
+    const placeholderNode = {
+      type: FILE_UPLOAD_PLACEHOLDER_NAME,
+      attrs: { uploadId, filename: file.name },
+    };
     if (pos !== undefined) {
-      editor.chain().focus().insertContentAt(pos, linkText).run();
+      editor.chain().focus().insertContentAt(pos, placeholderNode).run();
     } else {
-      editor.chain().focus().insertContent(linkText).run();
+      editor.chain().focus().insertContent(placeholderNode).run();
+    }
+
+    try {
+      const result = await handler(file);
+      if (result) {
+        replacePlaceholderWithLink(editor, uploadId, result.filename, result.link);
+      } else {
+        removePlaceholder(editor, uploadId);
+      }
+    } catch {
+      removePlaceholder(editor, uploadId);
     }
   }
 }
@@ -238,6 +298,43 @@ function createFileUploadExtension(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// File upload placeholder — transient inline node showing upload progress
+// for non-image attachments. Replaced with a link on success, removed on
+// failure. Stripped from markdown output via renderMarkdown.
+// ---------------------------------------------------------------------------
+
+const FileUploadPlaceholderExtension = Node.create({
+  name: FILE_UPLOAD_PLACEHOLDER_NAME,
+  inline: true,
+  group: "inline",
+  atom: true,
+  selectable: false,
+  draggable: false,
+
+  addAttributes() {
+    return {
+      uploadId: { default: null },
+      filename: { default: "" },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: "span[data-file-upload-placeholder]" }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ["span", { "data-file-upload-placeholder": "", ...HTMLAttributes }];
+  },
+
+  addNodeView() {
+    return ReactNodeViewRenderer(FileUploadPlaceholderView);
+  },
+
+  // Keep placeholders out of serialized markdown — they are transient UI only.
+  renderMarkdown: () => "",
+});
 
 // ---------------------------------------------------------------------------
 // Component
@@ -350,6 +447,7 @@ const RichTextEditor = forwardRef<RichTextEditorRef, RichTextEditorProps>(
         TableRow,
         TableHeader,
         TableCell,
+        FileUploadPlaceholderExtension,
         Markdown,
         createMarkdownPasteExtension(),
         createSubmitExtension(() => onSubmitRef.current?.()),

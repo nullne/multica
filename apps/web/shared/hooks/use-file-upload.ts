@@ -19,7 +19,11 @@ export interface UploadContext {
 }
 
 export function useFileUpload() {
-  const [uploading, setUploading] = useState(false);
+  // Track active uploads as a counter so parallel uploads (paste/drop multiple
+  // files, button click during an in-flight upload) keep the busy state set
+  // until the last upload settles.
+  const [activeCount, setActiveCount] = useState(0);
+  const uploading = activeCount > 0;
 
   const upload = useCallback(
     async (file: File, ctx?: UploadContext): Promise<UploadResult | null> => {
@@ -27,7 +31,7 @@ export function useFileUpload() {
         throw new Error("File exceeds 100 MB limit");
       }
 
-      setUploading(true);
+      setActiveCount((n) => n + 1);
       try {
         const att: Attachment = await api.uploadFile(file, {
           issueId: ctx?.issueId,
@@ -35,7 +39,7 @@ export function useFileUpload() {
         });
         return { id: att.id, filename: att.filename, link: att.url };
       } finally {
-        setUploading(false);
+        setActiveCount((n) => n - 1);
       }
     },
     [],

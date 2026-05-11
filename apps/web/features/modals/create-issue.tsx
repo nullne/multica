@@ -153,7 +153,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [dueDateOpen, setDueDateOpen] = useState(false);
 
   // File upload
-  const { uploadWithToast } = useFileUpload();
+  const { uploadWithToast, uploading } = useFileUpload();
   const handleUpload = (file: File) => uploadWithToast(file);
 
   const user = useAuthStore((s) => s.user);
@@ -655,6 +655,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
             </Popover>
 
             <FileUploadButton
+              busy={uploading}
               onSelect={(file) => descEditorRef.current?.uploadFile(file)}
             />
           </div>
