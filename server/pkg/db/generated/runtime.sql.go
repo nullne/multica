@@ -11,6 +11,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteRuntimesByDaemonAndWorkspace = `-- name: DeleteRuntimesByDaemonAndWorkspace :exec
+DELETE FROM agent_runtime
+WHERE daemon_ref = $1 AND workspace_id = $2
+`
+
+type DeleteRuntimesByDaemonAndWorkspaceParams struct {
+	DaemonRef   pgtype.UUID `json:"daemon_ref"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteRuntimesByDaemonAndWorkspace(ctx context.Context, arg DeleteRuntimesByDaemonAndWorkspaceParams) error {
+	_, err := q.db.Exec(ctx, deleteRuntimesByDaemonAndWorkspace, arg.DaemonRef, arg.WorkspaceID)
+	return err
+}
+
 const failTasksForOfflineRuntimes = `-- name: FailTasksForOfflineRuntimes :many
 UPDATE agent_task_queue
 SET status = 'failed', completed_at = now(), error = 'runtime went offline'
@@ -51,13 +66,23 @@ func (q *Queries) FailTasksForOfflineRuntimes(ctx context.Context) ([]FailTasksF
 
 const findAvailableRuntimeConstrained = `-- name: FindAvailableRuntimeConstrained :one
 SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref, ar.auth_status FROM agent_runtime ar
-LEFT JOIN daemon d ON ar.daemon_ref = d.id
+LEFT JOIN daemon d ON d.id = ar.daemon_ref
 WHERE ar.workspace_id = $1
   AND ar.status = 'online'
   AND ($2::text IS NULL OR ar.provider = $2)
   AND ($3::text[] IS NULL OR ar.provider = ANY($3::text[]))
   AND ($4::uuid IS NULL OR ar.daemon_ref = $4)
   AND ($5::text IS NULL OR $5 = ANY(d.labels))
+  AND (
+    ar.daemon_ref IS NULL
+    OR EXISTS (
+      SELECT 1 FROM daemon_workspace dw
+      JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+      WHERE dw.daemon_id = ar.daemon_ref
+        AND dw.workspace_id = ar.workspace_id
+        AND dw.enabled = TRUE
+    )
+  )
 ORDER BY (
   SELECT COUNT(*) FROM agent_task_queue atq
   WHERE atq.runtime_id = ar.id AND atq.status IN ('queued', 'dispatched', 'running')
@@ -75,6 +100,9 @@ type FindAvailableRuntimeConstrainedParams struct {
 
 // Finds the best online runtime matching optional constraints (provider, daemon, label).
 // All constraints are optional — pass NULL to skip.
+// Local runtimes (daemon_ref IS NOT NULL) must have an enabled
+// daemon_workspace assignment AND the owner must still be a workspace
+// member. Cloud runtimes (no daemon_ref) bypass both checks.
 func (q *Queries) FindAvailableRuntimeConstrained(ctx context.Context, arg FindAvailableRuntimeConstrainedParams) (AgentRuntime, error) {
 	row := q.db.QueryRow(ctx, findAvailableRuntimeConstrained,
 		arg.WorkspaceID,
@@ -105,9 +133,20 @@ func (q *Queries) FindAvailableRuntimeConstrained(ctx context.Context, arg FindA
 
 const findAvailableRuntimeForProvider = `-- name: FindAvailableRuntimeForProvider :one
 SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref, ar.auth_status FROM agent_runtime ar
+LEFT JOIN daemon d ON d.id = ar.daemon_ref
 WHERE ar.workspace_id = $1
   AND ar.provider = $2
   AND ar.status = 'online'
+  AND (
+    ar.daemon_ref IS NULL
+    OR EXISTS (
+      SELECT 1 FROM daemon_workspace dw
+      JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+      WHERE dw.daemon_id = ar.daemon_ref
+        AND dw.workspace_id = ar.workspace_id
+        AND dw.enabled = TRUE
+    )
+  )
 ORDER BY (
   SELECT COUNT(*) FROM agent_task_queue atq
   WHERE atq.runtime_id = ar.id AND atq.status IN ('queued', 'dispatched', 'running')
@@ -122,6 +161,9 @@ type FindAvailableRuntimeForProviderParams struct {
 
 // Finds the best online runtime for a given workspace + provider,
 // preferring runtimes with the fewest active tasks (simple load balancing).
+// For local runtimes (daemon_ref IS NOT NULL), the daemon must be enabled
+// for the workspace AND the daemon's owner must still be a member.
+// Cloud runtimes (no daemon_ref) bypass both checks.
 func (q *Queries) FindAvailableRuntimeForProvider(ctx context.Context, arg FindAvailableRuntimeForProviderParams) (AgentRuntime, error) {
 	row := q.db.QueryRow(ctx, findAvailableRuntimeForProvider, arg.WorkspaceID, arg.Provider)
 	var i AgentRuntime
@@ -146,9 +188,20 @@ func (q *Queries) FindAvailableRuntimeForProvider(ctx context.Context, arg FindA
 
 const findAvailableRuntimeForProviders = `-- name: FindAvailableRuntimeForProviders :one
 SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref, ar.auth_status FROM agent_runtime ar
+LEFT JOIN daemon d ON d.id = ar.daemon_ref
 WHERE ar.workspace_id = $1
   AND ar.provider = ANY($2::text[])
   AND ar.status = 'online'
+  AND (
+    ar.daemon_ref IS NULL
+    OR EXISTS (
+      SELECT 1 FROM daemon_workspace dw
+      JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+      WHERE dw.daemon_id = ar.daemon_ref
+        AND dw.workspace_id = ar.workspace_id
+        AND dw.enabled = TRUE
+    )
+  )
 ORDER BY (
   SELECT COUNT(*) FROM agent_task_queue atq
   WHERE atq.runtime_id = ar.id AND atq.status IN ('queued', 'dispatched', 'running')
@@ -377,6 +430,22 @@ WHERE daemon_ref = $1
 
 func (q *Queries) SetRuntimesOfflineByDaemon(ctx context.Context, daemonRef pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, setRuntimesOfflineByDaemon, daemonRef)
+	return err
+}
+
+const setRuntimesOfflineByDaemonAndWorkspace = `-- name: SetRuntimesOfflineByDaemonAndWorkspace :exec
+UPDATE agent_runtime
+SET status = 'offline', updated_at = now()
+WHERE daemon_ref = $1 AND workspace_id = $2
+`
+
+type SetRuntimesOfflineByDaemonAndWorkspaceParams struct {
+	DaemonRef   pgtype.UUID `json:"daemon_ref"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SetRuntimesOfflineByDaemonAndWorkspace(ctx context.Context, arg SetRuntimesOfflineByDaemonAndWorkspaceParams) error {
+	_, err := q.db.Exec(ctx, setRuntimesOfflineByDaemonAndWorkspace, arg.DaemonRef, arg.WorkspaceID)
 	return err
 }
 

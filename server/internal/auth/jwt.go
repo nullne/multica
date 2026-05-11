@@ -37,15 +37,6 @@ func GeneratePATToken() (string, error) {
 	return "mul_" + hex.EncodeToString(b), nil
 }
 
-// GenerateDaemonToken creates a new daemon auth token: "mdt_" + 40 random hex chars.
-func GenerateDaemonToken() (string, error) {
-	b := make([]byte, 20) // 20 bytes = 40 hex chars
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate daemon token: %w", err)
-	}
-	return "mdt_" + hex.EncodeToString(b), nil
-}
-
 // HashToken returns the hex-encoded SHA-256 hash of a token string.
 func HashToken(token string) string {
 	h := sha256.Sum256([]byte(token))

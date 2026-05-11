@@ -14,7 +14,7 @@ import (
 const archiveDaemon = `-- name: ArchiveDaemon :one
 UPDATE daemon SET archived_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+RETURNING id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id
 `
 
 func (q *Queries) ArchiveDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error) {
@@ -22,7 +22,6 @@ func (q *Queries) ArchiveDaemon(ctx context.Context, id pgtype.UUID) (Daemon, er
 	var i Daemon
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
 		&i.DaemonID,
 		&i.Status,
 		&i.CliVersion,
@@ -34,12 +33,13 @@ func (q *Queries) ArchiveDaemon(ctx context.Context, id pgtype.UUID) (Daemon, er
 		&i.UpdatedAt,
 		&i.Labels,
 		&i.ArchivedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const getDaemon = `-- name: GetDaemon :one
-SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at FROM daemon WHERE id = $1
+SELECT id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id FROM daemon WHERE id = $1
 `
 
 func (q *Queries) GetDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error) {
@@ -47,7 +47,6 @@ func (q *Queries) GetDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error)
 	var i Daemon
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
 		&i.DaemonID,
 		&i.Status,
 		&i.CliVersion,
@@ -59,18 +58,79 @@ func (q *Queries) GetDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error)
 		&i.UpdatedAt,
 		&i.Labels,
 		&i.ArchivedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
-const listDaemons = `-- name: ListDaemons :many
-SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at FROM daemon
-WHERE workspace_id = $1
+const getDaemonByUserAndDaemonID = `-- name: GetDaemonByUserAndDaemonID :one
+SELECT id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id FROM daemon WHERE user_id = $1 AND daemon_id = $2
+`
+
+type GetDaemonByUserAndDaemonIDParams struct {
+	UserID   pgtype.UUID `json:"user_id"`
+	DaemonID string      `json:"daemon_id"`
+}
+
+func (q *Queries) GetDaemonByUserAndDaemonID(ctx context.Context, arg GetDaemonByUserAndDaemonIDParams) (Daemon, error) {
+	row := q.db.QueryRow(ctx, getDaemonByUserAndDaemonID, arg.UserID, arg.DaemonID)
+	var i Daemon
+	err := row.Scan(
+		&i.ID,
+		&i.DaemonID,
+		&i.Status,
+		&i.CliVersion,
+		&i.DeviceName,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Labels,
+		&i.ArchivedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const getDaemonForUser = `-- name: GetDaemonForUser :one
+SELECT id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id FROM daemon WHERE id = $1 AND user_id = $2
+`
+
+type GetDaemonForUserParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetDaemonForUser(ctx context.Context, arg GetDaemonForUserParams) (Daemon, error) {
+	row := q.db.QueryRow(ctx, getDaemonForUser, arg.ID, arg.UserID)
+	var i Daemon
+	err := row.Scan(
+		&i.ID,
+		&i.DaemonID,
+		&i.Status,
+		&i.CliVersion,
+		&i.DeviceName,
+		&i.DeviceInfo,
+		&i.Metadata,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Labels,
+		&i.ArchivedAt,
+		&i.UserID,
+	)
+	return i, err
+}
+
+const listDaemonsForUser = `-- name: ListDaemonsForUser :many
+SELECT id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id FROM daemon
+WHERE user_id = $1
 ORDER BY archived_at NULLS FIRST, created_at ASC
 `
 
-func (q *Queries) ListDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]Daemon, error) {
-	rows, err := q.db.Query(ctx, listDaemons, workspaceID)
+func (q *Queries) ListDaemonsForUser(ctx context.Context, userID pgtype.UUID) ([]Daemon, error) {
+	rows, err := q.db.Query(ctx, listDaemonsForUser, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +140,6 @@ func (q *Queries) ListDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]D
 		var i Daemon
 		if err := rows.Scan(
 			&i.ID,
-			&i.WorkspaceID,
 			&i.DaemonID,
 			&i.Status,
 			&i.CliVersion,
@@ -92,6 +151,7 @@ func (q *Queries) ListDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]D
 			&i.UpdatedAt,
 			&i.Labels,
 			&i.ArchivedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -103,14 +163,16 @@ func (q *Queries) ListDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]D
 	return items, nil
 }
 
-const listOnlineDaemons = `-- name: ListOnlineDaemons :many
-SELECT id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at FROM daemon
-WHERE workspace_id = $1 AND status = 'online'
-ORDER BY created_at ASC
+const listDaemonsForWorkspace = `-- name: ListDaemonsForWorkspace :many
+SELECT d.id, d.daemon_id, d.status, d.cli_version, d.device_name, d.device_info, d.metadata, d.last_seen_at, d.created_at, d.updated_at, d.labels, d.archived_at, d.user_id FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id
+WHERE dw.workspace_id = $1 AND dw.enabled = TRUE
+ORDER BY d.archived_at NULLS FIRST, d.created_at ASC
 `
 
-func (q *Queries) ListOnlineDaemons(ctx context.Context, workspaceID pgtype.UUID) ([]Daemon, error) {
-	rows, err := q.db.Query(ctx, listOnlineDaemons, workspaceID)
+// All daemons that are currently enabled for a workspace.
+func (q *Queries) ListDaemonsForWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]Daemon, error) {
+	rows, err := q.db.Query(ctx, listDaemonsForWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +182,6 @@ func (q *Queries) ListOnlineDaemons(ctx context.Context, workspaceID pgtype.UUID
 		var i Daemon
 		if err := rows.Scan(
 			&i.ID,
-			&i.WorkspaceID,
 			&i.DaemonID,
 			&i.Status,
 			&i.CliVersion,
@@ -132,6 +193,48 @@ func (q *Queries) ListOnlineDaemons(ctx context.Context, workspaceID pgtype.UUID
 			&i.UpdatedAt,
 			&i.Labels,
 			&i.ArchivedAt,
+			&i.UserID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOnlineDaemonsForWorkspace = `-- name: ListOnlineDaemonsForWorkspace :many
+SELECT d.id, d.daemon_id, d.status, d.cli_version, d.device_name, d.device_info, d.metadata, d.last_seen_at, d.created_at, d.updated_at, d.labels, d.archived_at, d.user_id FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id
+WHERE dw.workspace_id = $1 AND dw.enabled = TRUE AND d.status = 'online'
+ORDER BY d.created_at ASC
+`
+
+func (q *Queries) ListOnlineDaemonsForWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]Daemon, error) {
+	rows, err := q.db.Query(ctx, listOnlineDaemonsForWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Daemon{}
+	for rows.Next() {
+		var i Daemon
+		if err := rows.Scan(
+			&i.ID,
+			&i.DaemonID,
+			&i.Status,
+			&i.CliVersion,
+			&i.DeviceName,
+			&i.DeviceInfo,
+			&i.Metadata,
+			&i.LastSeenAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Labels,
+			&i.ArchivedAt,
+			&i.UserID,
 		); err != nil {
 			return nil, err
 		}
@@ -148,12 +251,12 @@ UPDATE daemon
 SET status = 'offline', updated_at = now()
 WHERE status IN ('online', 'updating')
   AND last_seen_at < now() - make_interval(secs => $1::double precision)
-RETURNING id, workspace_id
+RETURNING id, user_id
 `
 
 type MarkStaleDaemonsOfflineRow struct {
-	ID          pgtype.UUID `json:"id"`
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
 }
 
 func (q *Queries) MarkStaleDaemonsOffline(ctx context.Context, staleSeconds float64) ([]MarkStaleDaemonsOfflineRow, error) {
@@ -165,7 +268,7 @@ func (q *Queries) MarkStaleDaemonsOffline(ctx context.Context, staleSeconds floa
 	items := []MarkStaleDaemonsOfflineRow{}
 	for rows.Next() {
 		var i MarkStaleDaemonsOfflineRow
-		if err := rows.Scan(&i.ID, &i.WorkspaceID); err != nil {
+		if err := rows.Scan(&i.ID, &i.UserID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -179,7 +282,7 @@ func (q *Queries) MarkStaleDaemonsOffline(ctx context.Context, staleSeconds floa
 const restoreDaemon = `-- name: RestoreDaemon :one
 UPDATE daemon SET archived_at = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+RETURNING id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id
 `
 
 func (q *Queries) RestoreDaemon(ctx context.Context, id pgtype.UUID) (Daemon, error) {
@@ -187,7 +290,6 @@ func (q *Queries) RestoreDaemon(ctx context.Context, id pgtype.UUID) (Daemon, er
 	var i Daemon
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
 		&i.DaemonID,
 		&i.Status,
 		&i.CliVersion,
@@ -199,6 +301,7 @@ func (q *Queries) RestoreDaemon(ctx context.Context, id pgtype.UUID) (Daemon, er
 		&i.UpdatedAt,
 		&i.Labels,
 		&i.ArchivedAt,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -276,7 +379,7 @@ UPDATE daemon SET
     labels = COALESCE($3, labels),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+RETURNING id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id
 `
 
 type UpdateDaemonFieldsParams struct {
@@ -290,7 +393,6 @@ func (q *Queries) UpdateDaemonFields(ctx context.Context, arg UpdateDaemonFields
 	var i Daemon
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
 		&i.DaemonID,
 		&i.Status,
 		&i.CliVersion,
@@ -302,6 +404,7 @@ func (q *Queries) UpdateDaemonFields(ctx context.Context, arg UpdateDaemonFields
 		&i.UpdatedAt,
 		&i.Labels,
 		&i.ArchivedAt,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -310,7 +413,7 @@ const updateDaemonHeartbeat = `-- name: UpdateDaemonHeartbeat :one
 UPDATE daemon
 SET status = 'online', last_seen_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+RETURNING id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id
 `
 
 func (q *Queries) UpdateDaemonHeartbeat(ctx context.Context, id pgtype.UUID) (Daemon, error) {
@@ -318,7 +421,6 @@ func (q *Queries) UpdateDaemonHeartbeat(ctx context.Context, id pgtype.UUID) (Da
 	var i Daemon
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
 		&i.DaemonID,
 		&i.Status,
 		&i.CliVersion,
@@ -330,6 +432,7 @@ func (q *Queries) UpdateDaemonHeartbeat(ctx context.Context, id pgtype.UUID) (Da
 		&i.UpdatedAt,
 		&i.Labels,
 		&i.ArchivedAt,
+		&i.UserID,
 	)
 	return i, err
 }
@@ -337,7 +440,7 @@ func (q *Queries) UpdateDaemonHeartbeat(ctx context.Context, id pgtype.UUID) (Da
 const updateDaemonLabels = `-- name: UpdateDaemonLabels :one
 UPDATE daemon SET labels = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+RETURNING id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id
 `
 
 type UpdateDaemonLabelsParams struct {
@@ -350,7 +453,6 @@ func (q *Queries) UpdateDaemonLabels(ctx context.Context, arg UpdateDaemonLabels
 	var i Daemon
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
 		&i.DaemonID,
 		&i.Status,
 		&i.CliVersion,
@@ -362,15 +464,16 @@ func (q *Queries) UpdateDaemonLabels(ctx context.Context, arg UpdateDaemonLabels
 		&i.UpdatedAt,
 		&i.Labels,
 		&i.ArchivedAt,
+		&i.UserID,
 	)
 	return i, err
 }
 
 const upsertDaemon = `-- name: UpsertDaemon :one
 INSERT INTO daemon (
-    workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at
+    user_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-ON CONFLICT (workspace_id, daemon_id)
+ON CONFLICT (user_id, daemon_id)
 DO UPDATE SET
     status = EXCLUDED.status,
     cli_version = EXCLUDED.cli_version,
@@ -381,22 +484,22 @@ DO UPDATE SET
     metadata = EXCLUDED.metadata,
     last_seen_at = now(),
     updated_at = now()
-RETURNING id, workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at
+RETURNING id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at, created_at, updated_at, labels, archived_at, user_id
 `
 
 type UpsertDaemonParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	DaemonID    string      `json:"daemon_id"`
-	Status      string      `json:"status"`
-	CliVersion  string      `json:"cli_version"`
-	DeviceName  string      `json:"device_name"`
-	DeviceInfo  string      `json:"device_info"`
-	Metadata    []byte      `json:"metadata"`
+	UserID     pgtype.UUID `json:"user_id"`
+	DaemonID   string      `json:"daemon_id"`
+	Status     string      `json:"status"`
+	CliVersion string      `json:"cli_version"`
+	DeviceName string      `json:"device_name"`
+	DeviceInfo string      `json:"device_info"`
+	Metadata   []byte      `json:"metadata"`
 }
 
 func (q *Queries) UpsertDaemon(ctx context.Context, arg UpsertDaemonParams) (Daemon, error) {
 	row := q.db.QueryRow(ctx, upsertDaemon,
-		arg.WorkspaceID,
+		arg.UserID,
 		arg.DaemonID,
 		arg.Status,
 		arg.CliVersion,
@@ -407,7 +510,6 @@ func (q *Queries) UpsertDaemon(ctx context.Context, arg UpsertDaemonParams) (Dae
 	var i Daemon
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
 		&i.DaemonID,
 		&i.Status,
 		&i.CliVersion,
@@ -419,6 +521,7 @@ func (q *Queries) UpsertDaemon(ctx context.Context, arg UpsertDaemonParams) (Dae
 		&i.UpdatedAt,
 		&i.Labels,
 		&i.ArchivedAt,
+		&i.UserID,
 	)
 	return i, err
 }

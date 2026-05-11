@@ -121,19 +121,19 @@ type CommentReaction struct {
 }
 
 type Daemon struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	DaemonID    string             `json:"daemon_id"`
-	Status      string             `json:"status"`
-	CliVersion  string             `json:"cli_version"`
-	DeviceName  string             `json:"device_name"`
-	DeviceInfo  string             `json:"device_info"`
-	Metadata    []byte             `json:"metadata"`
-	LastSeenAt  pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	Labels      []string           `json:"labels"`
-	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+	ID         pgtype.UUID        `json:"id"`
+	DaemonID   string             `json:"daemon_id"`
+	Status     string             `json:"status"`
+	CliVersion string             `json:"cli_version"`
+	DeviceName string             `json:"device_name"`
+	DeviceInfo string             `json:"device_info"`
+	Metadata   []byte             `json:"metadata"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	Labels     []string           `json:"labels"`
+	ArchivedAt pgtype.Timestamptz `json:"archived_at"`
+	UserID     pgtype.UUID        `json:"user_id"`
 }
 
 type DaemonConnection struct {
@@ -147,13 +147,12 @@ type DaemonConnection struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
-type DaemonToken struct {
-	ID          pgtype.UUID        `json:"id"`
-	TokenHash   string             `json:"token_hash"`
+type DaemonWorkspace struct {
+	DaemonID    pgtype.UUID        `json:"daemon_id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	DaemonID    string             `json:"daemon_id"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	Enabled     bool               `json:"enabled"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type InboxItem struct {

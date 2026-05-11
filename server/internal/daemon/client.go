@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,18 +21,6 @@ type requestError struct {
 
 func (e *requestError) Error() string {
 	return fmt.Sprintf("%s %s returned %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
-}
-
-// isWorkspaceNotFoundError returns true if the error is a 404 with "workspace not found" body.
-func isWorkspaceNotFoundError(err error) bool {
-	var reqErr *requestError
-	if !errors.As(err, &reqErr) {
-		return false
-	}
-	if reqErr.StatusCode != http.StatusNotFound {
-		return false
-	}
-	return strings.Contains(strings.ToLower(reqErr.Body), "workspace not found")
 }
 
 // Client handles HTTP communication with the Multica server daemon API.
@@ -142,11 +129,10 @@ func (c *Client) ReportUsage(ctx context.Context, runtimeID string, entries []ma
 
 // HeartbeatResponse contains the server's response to a heartbeat, including any pending actions.
 type HeartbeatResponse struct {
-	Status         string                       `json:"status"`
-	PendingPing    *PendingPing                 `json:"pending_ping,omitempty"`
-	PendingUpdate  *PendingUpdate               `json:"pending_update,omitempty"`    // legacy single update
-	PendingUpdates []PendingUpdate              `json:"pending_updates,omitempty"`   // daemon-level batch
-	ProviderConfig map[string]ProviderConfig    `json:"provider_config,omitempty"`
+	Status         string                    `json:"status"`
+	PendingPing    *PendingPing              `json:"pending_ping,omitempty"`
+	PendingUpdates []PendingUpdate           `json:"pending_updates,omitempty"`
+	ProviderConfig map[string]ProviderConfig `json:"provider_config,omitempty"`
 }
 
 // PendingPing represents a ping test request from the server.
@@ -169,17 +155,6 @@ func (c *Client) SendDaemonHeartbeat(ctx context.Context, daemonUUID string, aut
 		body["auth_statuses"] = authStatuses
 	}
 	if err := c.postJSON(ctx, "/api/daemon/heartbeat", body, &resp); err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-// SendHeartbeat sends a per-runtime heartbeat (legacy).
-func (c *Client) SendHeartbeat(ctx context.Context, runtimeID string) (*HeartbeatResponse, error) {
-	var resp HeartbeatResponse
-	if err := c.postJSON(ctx, "/api/daemon/heartbeat", map[string]string{
-		"runtime_id": runtimeID,
-	}, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -209,17 +184,34 @@ func (c *Client) ListWorkspaces(ctx context.Context) ([]WorkspaceInfo, error) {
 	return workspaces, nil
 }
 
+// DaemonAssignment describes one workspace assignment for a user's daemon.
+type DaemonAssignment struct {
+	WorkspaceID   string `json:"workspace_id"`
+	WorkspaceName string `json:"workspace_name"`
+	Enabled       bool   `json:"enabled"`
+}
+
+// ListMyDaemonWorkspaces returns the workspace assignments for the daemon
+// owned by the authenticated user.
+func (c *Client) ListMyDaemonWorkspaces(ctx context.Context, daemonUUID string) ([]DaemonAssignment, error) {
+	var out []DaemonAssignment
+	if err := c.getJSON(ctx, fmt.Sprintf("/api/me/daemons/%s/workspaces", daemonUUID), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SetMyDaemonWorkspaceEnabled enables or disables a daemon for a workspace.
+func (c *Client) SetMyDaemonWorkspaceEnabled(ctx context.Context, daemonUUID, workspaceID string, enabled bool) error {
+	return c.putJSON(ctx, fmt.Sprintf("/api/me/daemons/%s/workspaces/%s", daemonUUID, workspaceID), map[string]any{
+		"enabled": enabled,
+	}, nil)
+}
+
 // DeregisterDaemon marks a daemon and all its runtimes as offline.
 func (c *Client) DeregisterDaemon(ctx context.Context, daemonUUID string) error {
 	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
 		"daemon_id": daemonUUID,
-	}, nil)
-}
-
-// Deregister marks runtimes as offline (legacy per-runtime path).
-func (c *Client) Deregister(ctx context.Context, runtimeIDs []string) error {
-	return c.postJSON(ctx, "/api/daemon/deregister", map[string]any{
-		"runtime_ids": runtimeIDs,
 	}, nil)
 }
 
@@ -233,18 +225,30 @@ type ProviderConfig struct {
 // DaemonInfo holds the server-assigned daemon entity returned on registration.
 type DaemonInfo struct {
 	ID         string `json:"id"`
+	UserID     string `json:"user_id"`
 	DaemonID   string `json:"daemon_id"`
 	Status     string `json:"status"`
 	CLIVersion string `json:"cli_version"`
 }
 
+// WorkspaceRegistration describes one workspace this daemon serves after
+// registration: the runtimes the server created and any per-workspace
+// configuration the daemon needs.
+type WorkspaceRegistration struct {
+	WorkspaceID    string                    `json:"workspace_id"`
+	WorkspaceName  string                    `json:"workspace_name"`
+	Enabled        bool                      `json:"enabled"`
+	Runtimes       []Runtime                 `json:"runtimes"`
+	Repos          []RepoData                `json:"repos"`
+	ProviderConfig map[string]ProviderConfig `json:"provider_config,omitempty"`
+}
+
 // RegisterResponse holds the server's response to a daemon registration.
 type RegisterResponse struct {
-	Daemon               *DaemonInfo                `json:"daemon,omitempty"`
-	Runtimes             []Runtime                  `json:"runtimes"`
-	Repos                []RepoData                 `json:"repos"`
-	ProviderConfig       map[string]ProviderConfig  `json:"provider_config,omitempty"`
-	MulticaTargetVersion string                     `json:"multica_target_version,omitempty"`
+	Daemon               *DaemonInfo               `json:"daemon,omitempty"`
+	Workspaces           []WorkspaceRegistration   `json:"workspaces"`
+	ProviderConfig       map[string]ProviderConfig `json:"provider_config,omitempty"`
+	MulticaTargetVersion string                    `json:"multica_target_version,omitempty"`
 }
 
 func (c *Client) Register(ctx context.Context, req map[string]any) (*RegisterResponse, error) {
@@ -283,6 +287,39 @@ func (c *Client) postJSON(ctx context.Context, path string, reqBody any, respBod
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return &requestError{Method: http.MethodPost, Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	if respBody == nil {
+		io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(respBody)
+}
+
+func (c *Client) putJSON(ctx context.Context, path string, reqBody any, respBody any) error {
+	var body io.Reader
+	if reqBody != nil {
+		data, err := json.Marshal(reqBody)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+path, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return &requestError{Method: http.MethodPut, Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
 	if respBody == nil {
 		io.Copy(io.Discard, resp.Body)

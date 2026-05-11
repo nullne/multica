@@ -164,7 +164,10 @@ func newRequest(method, path string, body any) *http.Request {
 }
 
 func withURLParam(req *http.Request, key, value string) *http.Request {
-	rctx := chi.NewRouteContext()
+	rctx, ok := req.Context().Value(chi.RouteCtxKey).(*chi.Context)
+	if !ok || rctx == nil {
+		rctx = chi.NewRouteContext()
+	}
 	rctx.URLParams.Add(key, value)
 	return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 }
@@ -964,23 +967,32 @@ func TestResolveActor(t *testing.T) {
 	}
 }
 
-func TestDaemonRegisterMissingWorkspaceReturns404(t *testing.T) {
+func TestDaemonRegisterRequiresAuthenticatedUser(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/daemon/register", bytes.NewBufferString(`{
-		"workspace_id":"00000000-0000-0000-0000-000000000001",
 		"daemon_id":"local-daemon",
 		"device_name":"test-machine",
 		"runtimes":[{"name":"Local Codex","type":"codex","version":"1.0.0","status":"online"}]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-User-ID", testUserID)
+	// Intentionally omit X-User-ID — daemon registration is user-scoped now.
 
 	testHandler.DaemonRegister(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("DaemonRegister: expected 404, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("DaemonRegister: expected 401, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "workspace not found") {
-		t.Fatalf("DaemonRegister: expected workspace not found error, got %s", w.Body.String())
+}
+
+func TestDaemonRegisterRequiresDaemonID(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/register", map[string]any{
+		"device_name": "test-machine",
+		"runtimes":    []map[string]any{},
+	})
+
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("DaemonRegister: expected 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -989,9 +1001,22 @@ func TestDaemonRegisterMissingWorkspaceReturns404(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // daemonRegisterResponse is the shape returned by DaemonRegister.
+// The daemon is user-scoped and projected into one workspace registration
+// entry per enabled workspace.
 type daemonRegisterResponse struct {
-	Daemon   DaemonResponse         `json:"daemon"`
-	Runtimes []AgentRuntimeResponse `json:"runtimes"`
+	Daemon     DaemonResponse              `json:"daemon"`
+	Workspaces []WorkspaceRegistration     `json:"workspaces"`
+}
+
+// runtimesInTestWorkspace flattens the per-workspace runtime list and returns
+// just the runtimes projected into the default test workspace.
+func (r daemonRegisterResponse) runtimesInTestWorkspace() []AgentRuntimeResponse {
+	for _, ws := range r.Workspaces {
+		if ws.WorkspaceID == testWorkspaceID {
+			return ws.Runtimes
+		}
+	}
+	return nil
 }
 
 // registerDaemon is a test helper that registers a daemon and returns the
@@ -999,11 +1024,10 @@ type daemonRegisterResponse struct {
 func registerDaemon(t *testing.T, daemonID, deviceName string, runtimes []map[string]any) daemonRegisterResponse {
 	t.Helper()
 	body := map[string]any{
-		"workspace_id": testWorkspaceID,
-		"daemon_id":    daemonID,
-		"device_name":  deviceName,
-		"cli_version":  "0.1.0",
-		"runtimes":     runtimes,
+		"daemon_id":   daemonID,
+		"device_name": deviceName,
+		"cli_version": "0.1.0",
+		"runtimes":    runtimes,
 	}
 	w := httptest.NewRecorder()
 	req := newRequest("POST", "/api/daemon/register", body)
@@ -1016,16 +1040,18 @@ func registerDaemon(t *testing.T, daemonID, deviceName string, runtimes []map[st
 	return resp
 }
 
-// cleanupDaemon removes daemon and its runtimes created during tests.
+// cleanupDaemon removes daemon, its runtimes, and workspace assignments.
 func cleanupDaemon(t *testing.T, daemonUUID string) {
 	t.Helper()
 	ctx := context.Background()
 	testPool.Exec(ctx, `DELETE FROM agent_runtime WHERE daemon_ref = $1`, daemonUUID)
+	testPool.Exec(ctx, `DELETE FROM daemon_workspace WHERE daemon_id = $1`, daemonUUID)
 	testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonUUID)
 }
 
 // TestDaemonRegisterSetsOnlineStatus verifies that registering a daemon
-// sets both the daemon and its runtimes to "online".
+// sets both the daemon and its runtimes to "online", and that runtime rows
+// are projected into the user's existing workspace.
 func TestDaemonRegisterSetsOnlineStatus(t *testing.T) {
 	resp := registerDaemon(t, "status-test-daemon", "test-machine", []map[string]any{
 		{"name": "Test Claude", "type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
@@ -1033,19 +1059,23 @@ func TestDaemonRegisterSetsOnlineStatus(t *testing.T) {
 	})
 	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
 
-	// Daemon should be online.
+	// Daemon should be online and owned by the authenticated user.
 	if resp.Daemon.Status != "online" {
 		t.Fatalf("expected daemon status 'online', got '%s'", resp.Daemon.Status)
 	}
 	if resp.Daemon.DaemonID != "status-test-daemon" {
 		t.Fatalf("expected daemon_id 'status-test-daemon', got '%s'", resp.Daemon.DaemonID)
 	}
-
-	// All runtimes should be online.
-	if len(resp.Runtimes) != 2 {
-		t.Fatalf("expected 2 runtimes, got %d", len(resp.Runtimes))
+	if resp.Daemon.UserID != testUserID {
+		t.Fatalf("expected daemon owner %s, got %s", testUserID, resp.Daemon.UserID)
 	}
-	for _, rt := range resp.Runtimes {
+
+	// The test workspace should have been auto-enabled on first register.
+	runtimes := resp.runtimesInTestWorkspace()
+	if len(runtimes) != 2 {
+		t.Fatalf("expected 2 runtimes in test workspace, got %d (workspaces: %d)", len(runtimes), len(resp.Workspaces))
+	}
+	for _, rt := range runtimes {
 		if rt.Status != "online" {
 			t.Fatalf("expected runtime status 'online', got '%s' for provider %s", rt.Status, rt.Provider)
 		}
@@ -1064,7 +1094,7 @@ func TestDaemonRegisterAuthStatusValues(t *testing.T) {
 	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
 
 	authByProvider := map[string]string{}
-	for _, rt := range resp.Runtimes {
+	for _, rt := range resp.runtimesInTestWorkspace() {
 		authByProvider[rt.Provider] = rt.AuthStatus
 	}
 
@@ -1097,11 +1127,12 @@ func TestDaemonRegisterOfflineRuntime(t *testing.T) {
 		t.Fatalf("expected daemon status 'online', got '%s'", resp.Daemon.Status)
 	}
 	// But the runtime it reported is offline.
-	if len(resp.Runtimes) != 1 {
-		t.Fatalf("expected 1 runtime, got %d", len(resp.Runtimes))
+	runtimes := resp.runtimesInTestWorkspace()
+	if len(runtimes) != 1 {
+		t.Fatalf("expected 1 runtime, got %d", len(runtimes))
 	}
-	if resp.Runtimes[0].Status != "offline" {
-		t.Fatalf("expected runtime status 'offline', got '%s'", resp.Runtimes[0].Status)
+	if runtimes[0].Status != "offline" {
+		t.Fatalf("expected runtime status 'offline', got '%s'", runtimes[0].Status)
 	}
 }
 
@@ -1250,15 +1281,16 @@ func TestDaemonReRegisterAfterDeregister(t *testing.T) {
 		{"type": "claude", "version": "1.1.0", "status": "online", "auth_status": "ready"},
 	})
 
-	// Should reuse the same daemon row (upsert by workspace+daemon_id).
+	// Should reuse the same daemon row (upsert by user+daemon_id).
 	if resp2.Daemon.ID != resp.Daemon.ID {
 		t.Fatalf("expected same daemon UUID after re-register, got different: %s vs %s", resp.Daemon.ID, resp2.Daemon.ID)
 	}
 	if resp2.Daemon.Status != "online" {
 		t.Fatalf("expected daemon status 'online' after re-register, got '%s'", resp2.Daemon.Status)
 	}
-	if len(resp2.Runtimes) != 1 || resp2.Runtimes[0].Status != "online" {
-		t.Fatalf("expected runtime online after re-register")
+	runtimes2 := resp2.runtimesInTestWorkspace()
+	if len(runtimes2) != 1 || runtimes2[0].Status != "online" {
+		t.Fatalf("expected runtime online after re-register, got %d runtimes", len(runtimes2))
 	}
 }
 
@@ -1335,7 +1367,11 @@ func TestListRuntimesReturnsCorrectStatus(t *testing.T) {
 	})
 	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
 
-	rtID := resp.Runtimes[0].ID
+	wsRuntimes := resp.runtimesInTestWorkspace()
+	if len(wsRuntimes) == 0 {
+		t.Fatal("expected at least one runtime projected into test workspace")
+	}
+	rtID := wsRuntimes[0].ID
 
 	// List runtimes — should show online.
 	w := httptest.NewRecorder()
@@ -1426,10 +1462,14 @@ func TestStaleDaemonInUpdatingStatusGetsSwept(t *testing.T) {
 		t.Fatalf("MarkStaleRuntimesOffline failed: %v", err)
 	}
 
+	wsRuntimes := resp.runtimesInTestWorkspace()
+	if len(wsRuntimes) == 0 {
+		t.Fatal("expected at least one runtime projected into test workspace")
+	}
 	runtimeSwept := false
 	for _, sr := range staleRuntimes {
 		rtID := fmt.Sprintf("%x-%x-%x-%x-%x", sr.ID.Bytes[0:4], sr.ID.Bytes[4:6], sr.ID.Bytes[6:8], sr.ID.Bytes[8:10], sr.ID.Bytes[10:16])
-		if rtID == resp.Runtimes[0].ID {
+		if rtID == wsRuntimes[0].ID {
 			runtimeSwept = true
 		}
 	}
@@ -1651,9 +1691,13 @@ func TestEffectiveAuthStatusWithWorkspaceAPIKey(t *testing.T) {
 	})
 	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
 
+	wsRuntimes := resp.runtimesInTestWorkspace()
+	if len(wsRuntimes) == 0 {
+		t.Fatal("expected at least one runtime projected into test workspace")
+	}
 	// The registration response should already compute effective auth.
-	if resp.Runtimes[0].AuthStatus != "ready" {
-		t.Fatalf("expected effective auth_status 'ready' (workspace has API key), got '%s'", resp.Runtimes[0].AuthStatus)
+	if wsRuntimes[0].AuthStatus != "ready" {
+		t.Fatalf("expected effective auth_status 'ready' (workspace has API key), got '%s'", wsRuntimes[0].AuthStatus)
 	}
 
 	// ListAgentRuntimes should also return effective auth.
@@ -1664,11 +1708,179 @@ func TestEffectiveAuthStatusWithWorkspaceAPIKey(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&runtimes)
 
 	for _, rt := range runtimes {
-		if rt.ID == resp.Runtimes[0].ID {
+		if rt.ID == wsRuntimes[0].ID {
 			if rt.AuthStatus != "ready" {
 				t.Fatalf("ListRuntimes: expected effective auth_status 'ready', got '%s'", rt.AuthStatus)
 			}
 		}
+	}
+}
+
+// TestDaemonAutoEnabledForMemberWorkspaces verifies that a first-time
+// daemon registration auto-enables the daemon for every workspace the
+// authenticated user is currently a member of.
+func TestDaemonAutoEnabledForMemberWorkspaces(t *testing.T) {
+	resp := registerDaemon(t, "auto-enable-daemon", "auto-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	// Should include the user's test workspace.
+	var found bool
+	for _, ws := range resp.Workspaces {
+		if ws.WorkspaceID == testWorkspaceID && ws.Enabled {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected daemon to be auto-enabled for test workspace; got workspaces: %+v", resp.Workspaces)
+	}
+
+	// daemon_workspace row must exist and be enabled.
+	ctx := context.Background()
+	var enabled bool
+	if err := testPool.QueryRow(ctx,
+		`SELECT enabled FROM daemon_workspace WHERE daemon_id = $1 AND workspace_id = $2`,
+		resp.Daemon.ID, testWorkspaceID,
+	).Scan(&enabled); err != nil {
+		t.Fatalf("expected daemon_workspace row, got error: %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected daemon to be enabled for workspace")
+	}
+}
+
+// TestDisableDaemonForWorkspacePreventsDispatch verifies that disabling a
+// daemon for a workspace excludes its runtimes from FindAvailableRuntime
+// lookups even though the runtime row still exists. Uses a provider not
+// served by the workspace's pre-existing cloud runtime so dispatch goes
+// through the daemon-side path.
+func TestDisableDaemonForWorkspacePreventsDispatch(t *testing.T) {
+	const provider = "claude" // test fixture uses 'codex' for the cloud runtime
+	resp := registerDaemon(t, "dispatch-disable-daemon", "dispatch-machine", []map[string]any{
+		{"type": provider, "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	wsRuntimes := resp.runtimesInTestWorkspace()
+	if len(wsRuntimes) == 0 {
+		t.Fatal("expected at least one runtime projected into test workspace")
+	}
+
+	ctx := context.Background()
+	queries := db.New(testPool)
+
+	// Sanity: the runtime is dispatchable while enabled.
+	rt, err := queries.FindAvailableRuntimeForProvider(ctx, db.FindAvailableRuntimeForProviderParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Provider:    provider,
+	})
+	if err != nil {
+		t.Fatalf("expected to find runtime while enabled, got error: %v", err)
+	}
+	if uuidToString(rt.ID) != wsRuntimes[0].ID {
+		t.Fatalf("found unexpected runtime: %s vs %s", uuidToString(rt.ID), wsRuntimes[0].ID)
+	}
+
+	// Disable via API.
+	req := newRequest("PUT", "/api/me/daemons/"+resp.Daemon.ID+"/workspaces/"+testWorkspaceID, map[string]any{
+		"enabled": false,
+	})
+	req = withURLParam(req, "daemonId", resp.Daemon.ID)
+	req = withURLParam(req, "workspaceId", testWorkspaceID)
+	w := httptest.NewRecorder()
+	testHandler.SetMyDaemonWorkspaceEnabled(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("SetMyDaemonWorkspaceEnabled: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// FindAvailableRuntime must now skip this runtime.
+	if _, err := queries.FindAvailableRuntimeForProvider(ctx, db.FindAvailableRuntimeForProviderParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Provider:    provider,
+	}); err == nil {
+		t.Fatal("expected no runtime after disable, but one was returned")
+	}
+}
+
+// TestRemovingMemberBlocksDispatch verifies that removing a daemon owner from
+// a workspace prevents their daemon from being selected for tasks even when
+// the assignment row says enabled — the dispatch query joins through member.
+func TestRemovingMemberBlocksDispatch(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a secondary user and workspace; make user a member, register a
+	// daemon owned by that user, then remove the membership.
+	var secondaryUserID, secondaryWorkspaceID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('Secondary', 'daemon-membership-test@multica.ai') RETURNING id`,
+	).Scan(&secondaryUserID); err != nil {
+		t.Fatalf("create secondary user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, secondaryUserID)
+	})
+
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO workspace (name, slug, description, issue_prefix) VALUES ('Sec WS', 'daemon-memb-test', '', 'SEC') RETURNING id`,
+	).Scan(&secondaryWorkspaceID); err != nil {
+		t.Fatalf("create secondary workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, secondaryWorkspaceID)
+	})
+
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		secondaryWorkspaceID, secondaryUserID,
+	); err != nil {
+		t.Fatalf("create membership: %v", err)
+	}
+
+	// Register a daemon owned by secondaryUser via direct headers.
+	body := map[string]any{
+		"daemon_id":   "membership-test-daemon",
+		"device_name": "membership-machine",
+		"runtimes": []map[string]any{
+			{"type": "codex", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		},
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest("POST", "/api/daemon/register", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", secondaryUserID)
+	w := httptest.NewRecorder()
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp daemonRegisterResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	queries := db.New(testPool)
+
+	// Sanity: dispatch finds the runtime while the owner is still a member.
+	if _, err := queries.FindAvailableRuntimeForProvider(ctx, db.FindAvailableRuntimeForProviderParams{
+		WorkspaceID: parseUUID(secondaryWorkspaceID),
+		Provider:    "codex",
+	}); err != nil {
+		t.Fatalf("expected runtime while owner is member, got error: %v", err)
+	}
+
+	// Remove the daemon owner from the workspace.
+	testPool.Exec(ctx,
+		`DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`,
+		secondaryWorkspaceID, secondaryUserID,
+	)
+
+	// Dispatch must now reject the daemon even though daemon_workspace.enabled is TRUE.
+	if _, err := queries.FindAvailableRuntimeForProvider(ctx, db.FindAvailableRuntimeForProviderParams{
+		WorkspaceID: parseUUID(secondaryWorkspaceID),
+		Provider:    "codex",
+	}); err == nil {
+		t.Fatal("expected no runtime after owner was removed from workspace, but one was returned")
 	}
 }
 

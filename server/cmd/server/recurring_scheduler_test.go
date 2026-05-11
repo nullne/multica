@@ -37,10 +37,10 @@ func TestTemplateSubscriberPropagation(t *testing.T) {
 	// Insert a daemon so we can assert the dispatch settings round-trip.
 	var daemonID string
 	if err := testPool.QueryRow(ctx, `
-		INSERT INTO daemon (workspace_id, daemon_id, device_name, status)
+		INSERT INTO daemon (user_id, daemon_id, device_name, status)
 		VALUES ($1, $2, 'Test Device', 'online')
 		RETURNING id
-	`, testWorkspaceID, "daemon-"+t.Name()).Scan(&daemonID); err != nil {
+	`, testUserID, "daemon-"+t.Name()).Scan(&daemonID); err != nil {
 		t.Fatalf("insert daemon: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonID) })

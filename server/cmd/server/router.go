@@ -129,6 +129,12 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		r.Put("/api/me/notification-channels/telegram", h.UpsertTelegramChannel)
 		r.Delete("/api/me/notification-channels/telegram", h.DeleteTelegramChannel)
 
+		// Daemons owned by the authenticated user, plus the workspace
+		// assignments they control.
+		r.Get("/api/me/daemons", h.ListMyDaemons)
+		r.Get("/api/me/daemons/{daemonId}/workspaces", h.ListMyDaemonWorkspaces)
+		r.Put("/api/me/daemons/{daemonId}/workspaces/{workspaceId}", h.SetMyDaemonWorkspaceEnabled)
+
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
 			r.Post("/", h.CreateWorkspace)

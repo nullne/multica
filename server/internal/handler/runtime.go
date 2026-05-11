@@ -12,19 +12,19 @@ import (
 )
 
 type DaemonResponse struct {
-	ID          string   `json:"id"`
-	WorkspaceID string   `json:"workspace_id"`
-	DaemonID    string   `json:"daemon_id"`
-	Status      string   `json:"status"`
-	CLIVersion  string   `json:"cli_version"`
-	DeviceName  string   `json:"device_name"`
-	DeviceInfo  string   `json:"device_info"`
-	Labels      []string `json:"labels"`
-	Metadata    any      `json:"metadata"`
-	LastSeenAt  *string  `json:"last_seen_at"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
-	ArchivedAt  *string  `json:"archived_at"`
+	ID         string   `json:"id"`
+	UserID     string   `json:"user_id"`
+	DaemonID   string   `json:"daemon_id"`
+	Status     string   `json:"status"`
+	CLIVersion string   `json:"cli_version"`
+	DeviceName string   `json:"device_name"`
+	DeviceInfo string   `json:"device_info"`
+	Labels     []string `json:"labels"`
+	Metadata   any      `json:"metadata"`
+	LastSeenAt *string  `json:"last_seen_at"`
+	CreatedAt  string   `json:"created_at"`
+	UpdatedAt  string   `json:"updated_at"`
+	ArchivedAt *string  `json:"archived_at"`
 }
 
 func daemonToResponse(d db.Daemon) DaemonResponse {
@@ -40,32 +40,64 @@ func daemonToResponse(d db.Daemon) DaemonResponse {
 		labels = []string{}
 	}
 	return DaemonResponse{
-		ID:          uuidToString(d.ID),
-		WorkspaceID: uuidToString(d.WorkspaceID),
-		DaemonID:    d.DaemonID,
-		Status:      d.Status,
-		CLIVersion:  d.CliVersion,
-		DeviceName:  d.DeviceName,
-		DeviceInfo:  d.DeviceInfo,
-		Labels:      labels,
-		Metadata:    metadata,
-		LastSeenAt:  timestampToPtr(d.LastSeenAt),
-		CreatedAt:   timestampToString(d.CreatedAt),
-		UpdatedAt:   timestampToString(d.UpdatedAt),
-		ArchivedAt:  timestampToPtr(d.ArchivedAt),
+		ID:         uuidToString(d.ID),
+		UserID:     uuidToString(d.UserID),
+		DaemonID:   d.DaemonID,
+		Status:     d.Status,
+		CLIVersion: d.CliVersion,
+		DeviceName: d.DeviceName,
+		DeviceInfo: d.DeviceInfo,
+		Labels:     labels,
+		Metadata:   metadata,
+		LastSeenAt: timestampToPtr(d.LastSeenAt),
+		CreatedAt:  timestampToString(d.CreatedAt),
+		UpdatedAt:  timestampToString(d.UpdatedAt),
+		ArchivedAt: timestampToPtr(d.ArchivedAt),
 	}
+}
+
+// requireDaemonAccess returns the daemon if either:
+//   - the requester owns it (caller can manage it directly), or
+//   - the daemon is enabled for the given workspace and the requester is a member.
+//
+// workspaceID may be empty when the route doesn't have a workspace context, in
+// which case ownership is required.
+func (h *Handler) requireDaemonAccess(w http.ResponseWriter, r *http.Request, daemonID, workspaceID string) (db.Daemon, bool) {
+	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "daemon not found")
+		return db.Daemon{}, false
+	}
+
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return db.Daemon{}, false
+	}
+
+	if uuidToString(d.UserID) == userID {
+		return d, true
+	}
+
+	if workspaceID != "" {
+		if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "daemon not found"); ok {
+			if _, err := h.Queries.GetDaemonWorkspace(r.Context(), db.GetDaemonWorkspaceParams{
+				DaemonID:    d.ID,
+				WorkspaceID: parseUUID(workspaceID),
+			}); err == nil {
+				return d, true
+			}
+		}
+	}
+
+	writeError(w, http.StatusNotFound, "daemon not found")
+	return db.Daemon{}, false
 }
 
 func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	if !ok {
 		return
 	}
 
@@ -78,7 +110,7 @@ func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := db.UpdateDaemonFieldsParams{ID: parseUUID(daemonID)}
+	params := db.UpdateDaemonFieldsParams{ID: d.ID}
 	if req.DeviceName != nil {
 		params.DeviceName = pgtype.Text{String: *req.DeviceName, Valid: true}
 	}
@@ -297,13 +329,8 @@ func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request)
 func (h *Handler) GetDaemonEnv(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	if !ok {
 		return
 	}
 
@@ -331,7 +358,7 @@ func (h *Handler) GetDaemonEnv(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)
 
-	daemons, err := h.Queries.ListDaemons(r.Context(), parseUUID(workspaceID))
+	daemons, err := h.Queries.ListDaemonsForWorkspace(r.Context(), parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list daemons")
 		return
@@ -348,13 +375,8 @@ func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetDaemonByID(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	if !ok {
 		return
 	}
 
@@ -364,17 +386,12 @@ func (h *Handler) GetDaemonByID(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
+	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	if !ok {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
-		return
-	}
-
-	updated, err := h.Queries.ArchiveDaemon(r.Context(), parseUUID(daemonID))
+	updated, err := h.Queries.ArchiveDaemon(r.Context(), d.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to archive daemon")
 		return
@@ -386,17 +403,12 @@ func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RestoreDaemon(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
+	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	if !ok {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
-		return
-	}
-
-	updated, err := h.Queries.RestoreDaemon(r.Context(), parseUUID(daemonID))
+	updated, err := h.Queries.RestoreDaemon(r.Context(), d.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to restore daemon")
 		return

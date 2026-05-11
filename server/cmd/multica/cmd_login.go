@@ -14,7 +14,7 @@ import (
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate and set up workspaces",
-	Long:  "Log in to Multica, then automatically discover and watch all your workspaces.",
+	Long:  "Log in to Multica. Workspace assignments for your local daemon are managed server-side and applied automatically on 'multica daemon start'.",
 	RunE:  runLogin,
 }
 
@@ -28,18 +28,20 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Auto-discover and watch all workspaces.
-	if err := autoWatchWorkspaces(cmd); err != nil {
-		fmt.Fprintf(os.Stderr, "\nCould not auto-configure workspaces: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Run 'multica workspace list' and 'multica workspace watch <id>' to set up manually.\n")
+	if err := setDefaultWorkspace(cmd); err != nil {
+		fmt.Fprintf(os.Stderr, "\nCould not set default workspace: %v\n", err)
 		return nil
 	}
 
 	fmt.Fprintf(os.Stderr, "\n→ Run 'multica daemon start' to start your local agent runtime.\n")
+	fmt.Fprintf(os.Stderr, "   On first start it will be auto-enabled for all your workspaces.\n")
 	return nil
 }
 
-func autoWatchWorkspaces(cmd *cobra.Command) error {
+// setDefaultWorkspace picks the first workspace as the CLI's default if none
+// is configured. Daemon-to-workspace assignments live on the server now and
+// happen at daemon registration time.
+func setDefaultWorkspace(cmd *cobra.Command) error {
 	serverURL := resolveServerURL(cmd)
 	token := resolveToken(cmd)
 	if token == "" {
@@ -69,14 +71,6 @@ func autoWatchWorkspaces(cmd *cobra.Command) error {
 		return err
 	}
 
-	var added int
-	for _, ws := range workspaces {
-		if cfg.AddWatchedWorkspace(ws.ID, ws.Name) {
-			added++
-		}
-	}
-
-	// Set default workspace if not set.
 	if cfg.WorkspaceID == "" {
 		cfg.WorkspaceID = workspaces[0].ID
 	}
@@ -85,14 +79,9 @@ func autoWatchWorkspaces(cmd *cobra.Command) error {
 		return err
 	}
 
-	if added > 0 {
-		fmt.Fprintf(os.Stderr, "\nWatching %d workspace(s):\n", len(workspaces))
-		for _, ws := range workspaces {
-			fmt.Fprintf(os.Stderr, "  • %s (%s)\n", ws.Name, ws.ID)
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "\nAll %d workspace(s) already watched.\n", len(workspaces))
+	fmt.Fprintf(os.Stderr, "\n%d workspace(s) available:\n", len(workspaces))
+	for _, ws := range workspaces {
+		fmt.Fprintf(os.Stderr, "  • %s (%s)\n", ws.Name, ws.ID)
 	}
-
 	return nil
 }
