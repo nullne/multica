@@ -178,6 +178,13 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		// Cross-workspace issue resolution (auth only, no workspace header needed)
 		r.Get("/api/issues/{id}/resolve", h.ResolveIssueWorkspace)
 
+		// Attachment download (auth only — the handler resolves the
+		// workspace from the attachment row and verifies membership).
+		// Lives outside the workspace-scoped group so CLIs/agents can
+		// fetch the URL exposed in AttachmentResponse.download_url
+		// without having to know the workspace ID up front.
+		r.Get("/api/attachments/{id}/download", h.DownloadAttachment)
+
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
@@ -227,7 +234,6 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 			})
 
 			// Attachments
-			r.Get("/api/attachments/{id}/download", h.DownloadAttachment)
 			r.Delete("/api/attachments/{id}", h.DeleteAttachment)
 
 			// Comments
