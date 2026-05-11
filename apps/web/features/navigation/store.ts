@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-const EXCLUDED_PREFIXES = ["/login", "/pair/"];
+const EXCLUDED_PREFIXES = ["/login", "/pair/", "/account"];
 
 interface NavigationState {
   lastPath: string;
