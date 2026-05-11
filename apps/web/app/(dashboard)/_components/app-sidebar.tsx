@@ -254,9 +254,9 @@ export function AppSidebar() {
                   side="top"
                   sideOffset={4}
                 >
-                  <DropdownMenuLabel className="text-xs text-muted-foreground">
+                  <div className="px-1.5 py-1 text-xs text-muted-foreground">
                     {user?.email}
-                  </DropdownMenuLabel>
+                  </div>
                   <DropdownMenuSeparator />
                   <DropdownMenuGroup>
                     <DropdownMenuItem
