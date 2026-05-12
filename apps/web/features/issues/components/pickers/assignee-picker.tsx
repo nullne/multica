@@ -58,17 +58,25 @@ function classifyDaemons(
   runtimes: AgentRuntime[],
   provider: string | null | undefined,
 ) {
-  if (!provider) return { compatible: daemons, incompatible: [] as Daemon[] };
+  const workspaceDaemons = daemons.filter((d) => d.workspace_visible);
+  const personalDaemons = daemons.filter((d) => !d.workspace_visible);
+  if (!provider) {
+    return {
+      compatible: workspaceDaemons,
+      incompatible: [] as Daemon[],
+      personal: personalDaemons,
+    };
+  }
   const compatible: Daemon[] = [];
   const incompatible: Daemon[] = [];
-  for (const d of daemons) {
+  for (const d of workspaceDaemons) {
     const hasRuntime = runtimes.some(
       (r) => r.daemon_ref === d.id && r.provider === provider,
     );
     if (hasRuntime) compatible.push(d);
     else incompatible.push(d);
   }
-  return { compatible, incompatible };
+  return { compatible, incompatible, personal: personalDaemons };
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +115,7 @@ export function AgentDispatchConfirm({
   }, [fetchAllRuntimes]);
 
   const providers = agent.providers ?? [];
-  const { compatible, incompatible } = useMemo(
+  const { compatible, incompatible, personal } = useMemo(
     () => classifyDaemons(daemons, runtimes, provider),
     [daemons, runtimes, provider],
   );
@@ -210,6 +218,27 @@ export function AgentDispatchConfirm({
                       }}
                     >
                       <span className="truncate text-muted-foreground">
+                        {d.device_name || d.daemon_id}
+                      </span>
+                      <span
+                        className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                      />
+                    </PickerItem>
+                  ))}
+                </PickerSection>
+              )}
+              {personal.length > 0 && (
+                <PickerSection label="Your Daemons">
+                  {personal.map((d) => (
+                    <PickerItem
+                      key={d.id}
+                      selected={daemonId === d.id}
+                      onClick={() => {
+                        setDaemonId(d.id);
+                        setDaemonOpen(false);
+                      }}
+                    >
+                      <span className="truncate">
                         {d.device_name || d.daemon_id}
                       </span>
                       <span
