@@ -410,6 +410,9 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	effectiveProviders := agent.Providers
 	if len(req.Providers) > 0 {
 		effectiveProviders = req.Providers
+		if params.DefaultProvider.Valid && !containsString(effectiveProviders, params.DefaultProvider.String) {
+			params.DefaultProvider = pgtype.Text{Valid: false}
+		}
 	}
 	if req.Visibility != nil {
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
