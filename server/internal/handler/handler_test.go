@@ -1884,6 +1884,204 @@ func TestRemovingMemberBlocksDispatch(t *testing.T) {
 	}
 }
 
+// TestDaemonMutationsRequireOwnership verifies that workspace members who
+// don't own a daemon cannot modify it through the workspace-scoped routes
+// (PATCH / archive / restore). Only the daemon's owner may manage it.
+func TestDaemonMutationsRequireOwnership(t *testing.T) {
+	ctx := context.Background()
+
+	// Register a daemon owned by a secondary user.
+	var ownerID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('Daemon Owner', 'daemon-owner-test@multica.ai') RETURNING id`,
+	).Scan(&ownerID); err != nil {
+		t.Fatalf("create owner user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+
+	// Make the owner a member of the test workspace so the daemon assignment
+	// auto-enables there — gives the non-owner test user a shared workspace
+	// to attack from.
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin')`,
+		testWorkspaceID, ownerID,
+	); err != nil {
+		t.Fatalf("create owner membership: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, ownerID)
+	})
+
+	body := map[string]any{
+		"daemon_id":   "ownership-test-daemon",
+		"device_name": "ownership-machine",
+		"env_vars":    map[string]string{"SECRET": "owner-only"},
+		"runtimes": []map[string]any{
+			{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		},
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest("POST", "/api/daemon/register", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", ownerID)
+	w := httptest.NewRecorder()
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp daemonRegisterResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	daemonUUID := resp.Daemon.ID
+	t.Cleanup(func() { cleanupDaemon(t, daemonUUID) })
+
+	// PATCH as a workspace member who is not the owner must fail.
+	w = httptest.NewRecorder()
+	req = newRequest("PATCH", "/api/daemons/"+daemonUUID, map[string]any{"device_name": "hijacked"})
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.UpdateDaemon(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("UpdateDaemon by non-owner: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Archive must fail too.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/daemons/"+daemonUUID+"/archive", nil)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.ArchiveDaemon(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("ArchiveDaemon by non-owner: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Restore must fail too.
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/daemons/"+daemonUUID+"/restore", nil)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.RestoreDaemon(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("RestoreDaemon by non-owner: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Confirm the daemon was not mutated.
+	var deviceName string
+	var archivedAt *string
+	if err := testPool.QueryRow(ctx,
+		`SELECT device_name, archived_at::text FROM daemon WHERE id = $1`, daemonUUID,
+	).Scan(&deviceName, &archivedAt); err != nil {
+		t.Fatalf("verify daemon row: %v", err)
+	}
+	if deviceName != "ownership-machine" {
+		t.Fatalf("device_name was mutated by non-owner: %q", deviceName)
+	}
+	if archivedAt != nil {
+		t.Fatalf("daemon was archived by non-owner: %v", *archivedAt)
+	}
+
+	// As the owner the same request must succeed.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("PATCH", "/api/daemons/"+daemonUUID, bytes.NewBufferString(`{"device_name":"renamed-by-owner"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", ownerID)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.UpdateDaemon(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateDaemon by owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestDaemonEnvHiddenWhenDisabled verifies that env vars are not readable by
+// workspace members once the owner disables the daemon for that workspace,
+// even though the daemon_workspace row is retained.
+func TestDaemonEnvHiddenWhenDisabled(t *testing.T) {
+	ctx := context.Background()
+
+	var ownerID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('Env Owner', 'daemon-env-test@multica.ai') RETURNING id`,
+	).Scan(&ownerID); err != nil {
+		t.Fatalf("create owner user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin')`,
+		testWorkspaceID, ownerID,
+	); err != nil {
+		t.Fatalf("create owner membership: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, ownerID)
+	})
+
+	body := map[string]any{
+		"daemon_id":   "env-test-daemon",
+		"device_name": "env-machine",
+		"env_vars":    map[string]string{"SECRET": "do-not-leak"},
+		"runtimes": []map[string]any{
+			{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		},
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest("POST", "/api/daemon/register", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", ownerID)
+	w := httptest.NewRecorder()
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp daemonRegisterResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	daemonUUID := resp.Daemon.ID
+	t.Cleanup(func() { cleanupDaemon(t, daemonUUID) })
+
+	// While enabled, the workspace member can see env vars.
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/daemons/"+daemonUUID+"/env", nil)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.GetDaemonEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetDaemonEnv while enabled: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var env map[string]string
+	json.NewDecoder(w.Body).Decode(&env)
+	if env["SECRET"] != "do-not-leak" {
+		t.Fatalf("expected SECRET=do-not-leak while enabled, got %v", env)
+	}
+
+	// Owner disables the daemon for the workspace.
+	if _, err := testPool.Exec(ctx,
+		`UPDATE daemon_workspace SET enabled = FALSE WHERE daemon_id = $1 AND workspace_id = $2`,
+		daemonUUID, testWorkspaceID,
+	); err != nil {
+		t.Fatalf("disable assignment: %v", err)
+	}
+
+	// Workspace member must now be locked out of env vars.
+	w = httptest.NewRecorder()
+	req = newRequest("GET", "/api/daemons/"+daemonUUID+"/env", nil)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.GetDaemonEnv(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetDaemonEnv after disable: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Owner still has access.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/daemons/"+daemonUUID+"/env", nil)
+	req.Header.Set("X-User-ID", ownerID)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.GetDaemonEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetDaemonEnv by owner after disable: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestWebhookCreateIssueSubscribers(t *testing.T) {
 	ctx := context.Background()
 

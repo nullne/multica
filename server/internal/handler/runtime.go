@@ -56,13 +56,18 @@ func daemonToResponse(d db.Daemon) DaemonResponse {
 	}
 }
 
-// requireDaemonAccess returns the daemon if either:
-//   - the requester owns it (caller can manage it directly), or
-//   - the daemon is enabled for the given workspace and the requester is a member.
+// requireDaemonReadAccess grants read access to a daemon for either:
+//   - its owner, or
+//   - a member of a workspace where the daemon is currently enabled.
 //
-// workspaceID may be empty when the route doesn't have a workspace context, in
-// which case ownership is required.
-func (h *Handler) requireDaemonAccess(w http.ResponseWriter, r *http.Request, daemonID, workspaceID string) (db.Daemon, bool) {
+// This is intended for read-only routes that surface daemon state to workspace
+// members (e.g. the daemon list). Disabled assignments do not grant access —
+// a daemon disabled for a workspace must look gone to non-owner members.
+//
+// For routes that modify a daemon (PATCH, archive, restore) use
+// requireOwnedDaemon instead so workspace members can't manage someone else's
+// machine.
+func (h *Handler) requireDaemonReadAccess(w http.ResponseWriter, r *http.Request, daemonID, workspaceID string) (db.Daemon, bool) {
 	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "daemon not found")
@@ -80,10 +85,10 @@ func (h *Handler) requireDaemonAccess(w http.ResponseWriter, r *http.Request, da
 
 	if workspaceID != "" {
 		if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "daemon not found"); ok {
-			if _, err := h.Queries.GetDaemonWorkspace(r.Context(), db.GetDaemonWorkspaceParams{
+			if assignment, err := h.Queries.GetDaemonWorkspace(r.Context(), db.GetDaemonWorkspaceParams{
 				DaemonID:    d.ID,
 				WorkspaceID: parseUUID(workspaceID),
-			}); err == nil {
+			}); err == nil && assignment.Enabled {
 				return d, true
 			}
 		}
@@ -94,9 +99,7 @@ func (h *Handler) requireDaemonAccess(w http.ResponseWriter, r *http.Request, da
 }
 
 func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
-	daemonID := chi.URLParam(r, "daemonId")
-
-	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	d, ok := h.requireOwnedDaemon(w, r)
 	if !ok {
 		return
 	}
@@ -329,7 +332,7 @@ func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request)
 func (h *Handler) GetDaemonEnv(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	d, ok := h.requireDaemonReadAccess(w, r, daemonID, resolveWorkspaceID(r))
 	if !ok {
 		return
 	}
@@ -375,7 +378,7 @@ func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetDaemonByID(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	d, ok := h.requireDaemonReadAccess(w, r, daemonID, resolveWorkspaceID(r))
 	if !ok {
 		return
 	}
@@ -384,9 +387,7 @@ func (h *Handler) GetDaemonByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
-	daemonID := chi.URLParam(r, "daemonId")
-
-	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	d, ok := h.requireOwnedDaemon(w, r)
 	if !ok {
 		return
 	}
@@ -401,9 +402,7 @@ func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RestoreDaemon(w http.ResponseWriter, r *http.Request) {
-	daemonID := chi.URLParam(r, "daemonId")
-
-	d, ok := h.requireDaemonAccess(w, r, daemonID, resolveWorkspaceID(r))
+	d, ok := h.requireOwnedDaemon(w, r)
 	if !ok {
 		return
 	}

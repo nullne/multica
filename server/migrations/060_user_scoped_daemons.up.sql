@@ -9,35 +9,20 @@
 -- only auth story.
 DROP TABLE IF EXISTS daemon_token;
 
--- Add owner column on daemon.
-ALTER TABLE daemon ADD COLUMN user_id UUID REFERENCES "user"(id) ON DELETE CASCADE;
+-- Existing daemon rows cannot be reliably mapped onto the new user-scoped
+-- ownership model: the old schema never recorded which user registered the
+-- daemon, so any backfill from workspace membership would be a guess and
+-- could attribute someone else's machine to the workspace owner. Wipe the
+-- old rows and let local daemons re-register under their owning user on
+-- next start. Local runtime rows (daemon_ref IS NOT NULL) go with them;
+-- cloud runtime rows are untouched.
+DELETE FROM agent_runtime WHERE daemon_ref IS NOT NULL;
+DELETE FROM daemon;
 
--- Backfill user_id from existing workspace membership. Pick the workspace's
--- owner; fall back to admin, then the earliest member.
-UPDATE daemon d
-SET user_id = (
-    SELECT m.user_id
-    FROM member m
-    WHERE m.workspace_id = d.workspace_id
-    ORDER BY CASE m.role
-        WHEN 'owner' THEN 0
-        WHEN 'admin' THEN 1
-        ELSE 2
-    END, m.created_at ASC
-    LIMIT 1
-);
-
--- If a daemon's workspace has no members left, drop it (and its runtimes)
--- rather than leaving orphan rows.
-DELETE FROM agent_runtime
-WHERE daemon_ref IN (SELECT id FROM daemon WHERE user_id IS NULL);
-DELETE FROM daemon WHERE user_id IS NULL;
-
-ALTER TABLE daemon ALTER COLUMN user_id SET NOT NULL;
-
--- Replace the workspace-scoped uniqueness with a user-scoped one.
+-- Replace the workspace-scoped key with a user-scoped one.
 ALTER TABLE daemon DROP CONSTRAINT daemon_workspace_id_daemon_id_key;
 ALTER TABLE daemon DROP COLUMN workspace_id;
+ALTER TABLE daemon ADD COLUMN user_id UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE;
 ALTER TABLE daemon ADD CONSTRAINT daemon_user_id_daemon_id_key UNIQUE (user_id, daemon_id);
 
 CREATE INDEX idx_daemon_user ON daemon(user_id);
@@ -56,11 +41,3 @@ CREATE TABLE daemon_workspace (
 
 CREATE INDEX idx_daemon_workspace_workspace ON daemon_workspace(workspace_id);
 CREATE INDEX idx_daemon_workspace_enabled ON daemon_workspace(workspace_id, enabled);
-
--- Backfill assignments from the existing runtime rows: every workspace where
--- this daemon already had runtime entries is treated as enabled.
-INSERT INTO daemon_workspace (daemon_id, workspace_id, enabled)
-SELECT DISTINCT ar.daemon_ref, ar.workspace_id, TRUE
-FROM agent_runtime ar
-WHERE ar.daemon_ref IS NOT NULL
-ON CONFLICT DO NOTHING;
