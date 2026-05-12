@@ -139,3 +139,49 @@ func TestTaskBranchTracking(t *testing.T) {
 		t.Fatalf("expected cleared branch, got %q", got)
 	}
 }
+
+func TestApplyRegisterResponseKeepsHiddenRuntimesOutOfActiveAssignments(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	d.applyRegisterResponse(&RegisterResponse{
+		Workspaces: []WorkspaceRegistration{
+			{
+				WorkspaceID: "ws-enabled",
+				Enabled:     true,
+				Runtimes: []Runtime{
+					{ID: "rt-enabled", Provider: "claude"},
+				},
+			},
+			{
+				WorkspaceID: "ws-hidden",
+				Enabled:     false,
+				Runtimes: []Runtime{
+					{ID: "rt-hidden", Provider: "codex"},
+				},
+			},
+		},
+	})
+
+	if got := d.allRuntimeIDs(); len(got) != 2 {
+		t.Fatalf("expected both projected runtimes to be tracked, got %v", got)
+	}
+	if rt := d.findRuntime("rt-hidden"); rt == nil || rt.Provider != "codex" {
+		t.Fatalf("expected hidden runtime to stay claimable, got %+v", rt)
+	}
+
+	d.mu.Lock()
+	enabled := d.workspaces["ws-enabled"]
+	hidden := d.workspaces["ws-hidden"]
+	d.mu.Unlock()
+
+	if enabled == nil || !enabled.enabled {
+		t.Fatalf("expected enabled workspace to remain active, got %+v", enabled)
+	}
+	if hidden == nil {
+		t.Fatal("expected hidden workspace projection to be retained")
+	}
+	if hidden.enabled {
+		t.Fatalf("expected hidden workspace to stay out of active assignment set, got %+v", hidden)
+	}
+}

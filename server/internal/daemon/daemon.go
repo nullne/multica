@@ -23,6 +23,7 @@ import (
 // (per-(workspace, provider) rows the scheduler dispatches to).
 type workspaceState struct {
 	workspaceID string
+	enabled     bool
 	runtimeIDs  []string
 }
 
@@ -34,7 +35,7 @@ type Daemon struct {
 	logger    *slog.Logger
 
 	mu              sync.Mutex
-	daemonUUID      string                    // server-assigned daemon row UUID (user-scoped)
+	daemonUUID      string // server-assigned daemon row UUID (user-scoped)
 	workspaces      map[string]*workspaceState
 	runtimeIndex    map[string]Runtime        // runtimeID -> Runtime for provider lookups
 	taskBranches    map[string]string         // taskID -> latest checked out branch
@@ -220,11 +221,15 @@ func (d *Daemon) registerWithServer(ctx context.Context) error {
 
 	d.applyRegisterResponse(resp)
 
+	activeCount := countEnabledWorkspaces(resp.Workspaces)
 	switch {
-	case len(resp.Workspaces) == 0:
+	case activeCount == 0:
 		d.logger.Warn("daemon registered but has no workspace assignments — use 'multica daemon enable <workspace-id>' to enable one")
 	default:
 		for _, ws := range resp.Workspaces {
+			if !ws.Enabled {
+				continue
+			}
 			d.logger.Info("workspace assignment active",
 				"workspace_id", ws.WorkspaceID,
 				"name", ws.WorkspaceName,
@@ -250,12 +255,24 @@ func (d *Daemon) applyRegisterResponse(resp *RegisterResponse) {
 		}
 		d.workspaces[ws.WorkspaceID] = &workspaceState{
 			workspaceID: ws.WorkspaceID,
+			enabled:     ws.Enabled,
 			runtimeIDs:  runtimeIDs,
 		}
 	}
 }
 
-// allRuntimeIDs returns all runtime IDs across all watched workspaces.
+func countEnabledWorkspaces(workspaces []WorkspaceRegistration) int {
+	count := 0
+	for _, ws := range workspaces {
+		if ws.Enabled {
+			count++
+		}
+	}
+	return count
+}
+
+// allRuntimeIDs returns all runtime IDs across all projected workspaces,
+// including hidden ones kept alive for explicit daemon-targeted dispatch.
 func (d *Daemon) allRuntimeIDs() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -384,7 +401,7 @@ func (d *Daemon) reconcileProviders(ctx context.Context, config map[string]Provi
 		return
 	}
 	d.applyRegisterResponse(resp)
-	d.logger.Info("re-registered daemon with new providers", "workspaces", len(resp.Workspaces))
+	d.logger.Info("re-registered daemon with new providers", "active_workspaces", countEnabledWorkspaces(resp.Workspaces), "projected_workspaces", len(resp.Workspaces))
 }
 
 // autoInstallProviders installs code agent CLIs that are enabled in the workspace
@@ -500,8 +517,10 @@ func (d *Daemon) syncAssignments(ctx context.Context) {
 	d.mu.Lock()
 	daemonUUID := d.daemonUUID
 	currentIDs := make(map[string]bool, len(d.workspaces))
-	for id := range d.workspaces {
-		currentIDs[id] = true
+	for id, ws := range d.workspaces {
+		if ws.enabled {
+			currentIDs[id] = true
+		}
 	}
 	d.mu.Unlock()
 
