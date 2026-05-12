@@ -64,7 +64,7 @@ import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEnt
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
 import { AgentDispatchConfirm } from "@/features/issues/components/pickers/assignee-picker";
-import { pickBestProvider, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
+import { getAgentDispatchDefaults, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import {
@@ -820,13 +820,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const initialActionAssigneeDispatch = useMemo(() => {
     if (!actionPendingAssigneeAgent) return { daemonId: null as string | null, provider: null as string | null };
     const saved = useIssueDefaultsStore.getState().getAgentDispatch(actionPendingAssigneeAgent.id);
-    const daemonId =
-      actionPendingAssigneeAgent.default_daemon_id ?? saved?.daemonId ?? null;
-    const provider =
-      saved?.provider ??
-      pickBestProvider(actionPendingAssigneeAgent.providers ?? [], runtimes, daemonId ?? undefined) ??
-      null;
-    return { daemonId, provider };
+    return getAgentDispatchDefaults(actionPendingAssigneeAgent, runtimes, saved);
   }, [actionPendingAssigneeAgent, runtimes]);
   const handleConfirmActionAgentAssignment = useCallback((daemonId: string | null, provider: string | null) => {
     if (!issue || !actionPendingAssigneeAgent) return;

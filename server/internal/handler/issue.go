@@ -149,6 +149,31 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 	}
 }
 
+func agentDispatchDefaults(agent db.Agent) (pgtype.Text, pgtype.UUID) {
+	return agent.DefaultProvider, agent.DefaultDaemonID
+}
+
+func (h *Handler) applyAgentDispatchDefaults(ctx context.Context, workspaceID string, assigneeType *string, assigneeID *string, dispatchProviderPresent bool, dispatchDaemonIDPresent bool, dispatchProvider *pgtype.Text, dispatchDaemonID *pgtype.UUID) error {
+	if assigneeType == nil || assigneeID == nil || *assigneeType != "agent" || *assigneeID == "" {
+		return nil
+	}
+	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+		ID:          parseUUID(*assigneeID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		return err
+	}
+	defaultProvider, defaultDaemonID := agentDispatchDefaults(agent)
+	if !dispatchProviderPresent {
+		*dispatchProvider = defaultProvider
+	}
+	if !dispatchDaemonIDPresent {
+		*dispatchDaemonID = defaultDaemonID
+	}
+	return nil
+}
+
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -404,6 +429,12 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		dueDate = pgtype.Timestamptz{Time: t, Valid: true}
 	}
+	dispatchProvider := ptrToText(req.DispatchProvider)
+	dispatchDaemonID := parseOptionalUUID(req.DispatchDaemonID)
+	if err := h.applyAgentDispatchDefaults(r.Context(), workspaceID, req.AssigneeType, req.AssigneeID, req.DispatchProvider != nil, req.DispatchDaemonID != nil, &dispatchProvider, &dispatchDaemonID); err != nil {
+		writeError(w, http.StatusBadRequest, "agent not found in workspace")
+		return
+	}
 
 	// Use a transaction to atomically increment the workspace issue counter
 	// and create the issue with the assigned number.
@@ -453,8 +484,8 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DueDate:               dueDate,
 		Number:                issueNumber,
 		MaxVerificationRounds: maxVerificationRounds,
-		DispatchProvider:      ptrToText(req.DispatchProvider),
-		DispatchDaemonID:      parseOptionalUUID(req.DispatchDaemonID),
+		DispatchProvider:      dispatchProvider,
+		DispatchDaemonID:      dispatchDaemonID,
 		DispatchDaemonLabel:   ptrToText(req.DispatchDaemonLabel),
 	})
 	if err != nil {
@@ -670,11 +701,13 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 				params.MaxVerificationRounds = pgtype.Int4{Valid: false}
 			}
 		} else if prevIsAgent && assigneeIdentityChanged {
-			if !dispatchProviderPresent {
-				params.DispatchProvider = pgtype.Text{Valid: false}
-			}
-			if !dispatchDaemonIDPresent {
-				params.DispatchDaemonID = pgtype.UUID{Valid: false}
+			if !dispatchProviderPresent || !dispatchDaemonIDPresent {
+				assigneeType := params.AssigneeType.String
+				assigneeID := uuidToString(params.AssigneeID)
+				if err := h.applyAgentDispatchDefaults(r.Context(), workspaceID, &assigneeType, &assigneeID, dispatchProviderPresent, dispatchDaemonIDPresent, &params.DispatchProvider, &params.DispatchDaemonID); err != nil {
+					writeError(w, http.StatusBadRequest, "agent not found in workspace")
+					return
+				}
 			}
 			if !dispatchDaemonLabelPresent {
 				params.DispatchDaemonLabel = pgtype.Text{Valid: false}

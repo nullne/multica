@@ -171,12 +171,15 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no providers configured")
 	}
 
-	// Use issue-level dispatch hints to constrain runtime selection. Hints that
-	// are incompatible with the current agent (e.g. a provider this agent does
-	// not support, left over from a previous assignment) are dropped rather
-	// than treated as hard constraints — otherwise a stale hint would fail
-	// every task even though a viable runtime exists.
+	// Use issue-level dispatch hints to constrain runtime selection. When an
+	// issue does not pin a provider, fall back to the agent's explicit default
+	// provider. Hints that are incompatible with the current agent (e.g. a
+	// provider left over from a previous assignment) are dropped rather than
+	// treated as hard constraints.
 	providerHint := issue.DispatchProvider
+	if !providerHint.Valid && agent.DefaultProvider.Valid {
+		providerHint = agent.DefaultProvider
+	}
 	if providerHint.Valid && !containsString(agent.Providers, providerHint.String) {
 		slog.Info("ignoring stale dispatch_provider hint not supported by agent",
 			"issue_id", util.UUIDToString(issue.ID),

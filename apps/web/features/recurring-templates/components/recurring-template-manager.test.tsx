@@ -29,6 +29,7 @@ const workspaceState = {
       id: "agent-1",
       name: "Test Agent",
       providers: ["claude"],
+      default_provider: null as string | null,
       default_daemon_id: null as string | null,
     },
   ],
@@ -212,6 +213,7 @@ beforeEach(() => {
     id: "agent-1",
     name: "Test Agent",
     providers: ["claude"],
+    default_provider: null,
     default_daemon_id: null,
   };
   mocks.api.listRecurringTemplates.mockResolvedValue([mockTemplate]);

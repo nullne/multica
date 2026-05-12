@@ -12,9 +12,11 @@ import { ReactRenderer } from "@tiptap/react";
 import { computePosition, offset, flip, shift } from "@floating-ui/dom";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useIssueStore } from "@/features/issues";
+import { useRuntimeStore } from "@/features/runtimes";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { StatusIcon } from "@/features/issues/components/status-icon";
 import { Badge } from "@/components/ui/badge";
+import { hasCompleteAgentDispatchDefaults } from "@/features/issues/utils/dispatch";
 import type { IssueStatus } from "@/shared/types";
 import type { SuggestionOptions, SuggestionProps } from "@tiptap/suggestion";
 
@@ -217,6 +219,7 @@ export function createMentionSuggestion(): Omit<
   return {
     items: ({ query }) => {
       const { members, agents } = useWorkspaceStore.getState();
+      const { runtimes } = useRuntimeStore.getState();
       const { issues } = useIssueStore.getState();
       const q = query.toLowerCase();
 
@@ -235,7 +238,16 @@ export function createMentionSuggestion(): Omit<
         }));
 
       const agentItems: MentionItem[] = agents
-        .filter((a) => !a.archived_at && a.name.toLowerCase().includes(q))
+        .filter((a) => {
+          if (a.archived_at || !a.name.toLowerCase().includes(q)) return false;
+          if (!hasCompleteAgentDispatchDefaults(a)) return false;
+          return runtimes.some(
+            (rt) =>
+              rt.daemon_ref === a.default_daemon_id &&
+              rt.provider === a.default_provider &&
+              rt.status === "online",
+          );
+        })
         .map((a) => ({ id: a.id, label: a.name, type: "agent" as const }));
 
       const issueItems: MentionItem[] = issues
