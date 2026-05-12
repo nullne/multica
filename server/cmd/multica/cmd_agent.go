@@ -37,6 +37,7 @@ func init() {
 	agentCmd.AddCommand(agentListCmd)
 	agentCmd.AddCommand(agentUpdateCmd)
 
+	agentUpdateCmd.Flags().String("default-provider", "", "Default provider (use empty string to clear)")
 	agentListCmd.Flags().String("output", "table", "Output format: table or json")
 
 	agentUpdateCmd.Flags().String("default-daemon", "", "Default daemon name or ID (use empty string to clear)")
@@ -196,6 +197,15 @@ func runAgentUpdate(cmd *cobra.Command, args []string) error {
 
 	body := map[string]any{}
 
+	if cmd.Flags().Changed("default-provider") {
+		provider, _ := cmd.Flags().GetString("default-provider")
+		if provider == "" {
+			body["default_provider"] = nil
+		} else {
+			body["default_provider"] = provider
+		}
+	}
+
 	if cmd.Flags().Changed("default-daemon") {
 		daemonName, _ := cmd.Flags().GetString("default-daemon")
 		if daemonName == "" {
@@ -211,7 +221,7 @@ func runAgentUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(body) == 0 {
-		return fmt.Errorf("no fields to update; use flags like --default-daemon")
+		return fmt.Errorf("no fields to update; use flags like --default-provider or --default-daemon")
 	}
 
 	path := "/api/agents/" + agentID

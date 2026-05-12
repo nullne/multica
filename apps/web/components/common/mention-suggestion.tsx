@@ -32,6 +32,8 @@ export interface MentionItem {
   description?: string;
   /** Issue status for StatusIcon rendering */
   status?: IssueStatus;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 interface MentionListProps {
@@ -50,6 +52,25 @@ export interface MentionListRef {
 interface MentionGroup {
   label: string;
   items: MentionItem[];
+}
+
+function getFirstEnabledIndex(items: MentionItem[]): number {
+  return items.findIndex((item) => !item.disabled);
+}
+
+function getNextEnabledIndex(
+  items: MentionItem[],
+  currentIndex: number,
+  direction: 1 | -1,
+): number {
+  if (items.length === 0) return -1;
+  for (let offset = 1; offset <= items.length; offset += 1) {
+    const nextIndex = (currentIndex + direction * offset + items.length) % items.length;
+    if (!items[nextIndex]?.disabled) {
+      return nextIndex;
+    }
+  }
+  return -1;
 }
 
 function groupItems(items: MentionItem[]): MentionGroup[] {
@@ -76,11 +97,11 @@ function groupItems(items: MentionItem[]): MentionGroup[] {
 
 const MentionList = forwardRef<MentionListRef, MentionListProps>(
   function MentionList({ items, command }, ref) {
-    const [selectedIndex, setSelectedIndex] = useState(0);
+    const [selectedIndex, setSelectedIndex] = useState(() => getFirstEnabledIndex(items));
     const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
     useEffect(() => {
-      setSelectedIndex(0);
+      setSelectedIndex(getFirstEnabledIndex(items));
     }, [items]);
 
     useEffect(() => {
@@ -90,7 +111,7 @@ const MentionList = forwardRef<MentionListRef, MentionListProps>(
     const selectItem = useCallback(
       (index: number) => {
         const item = items[index];
-        if (item) command(item);
+        if (item && !item.disabled) command(item);
       },
       [items, command],
     );
@@ -98,15 +119,17 @@ const MentionList = forwardRef<MentionListRef, MentionListProps>(
     useImperativeHandle(ref, () => ({
       onKeyDown: ({ event }) => {
         if (event.key === "ArrowUp") {
-          setSelectedIndex((i) => (i + items.length - 1) % items.length);
+          setSelectedIndex((i) => getNextEnabledIndex(items, i, -1));
           return true;
         }
         if (event.key === "ArrowDown") {
-          setSelectedIndex((i) => (i + 1) % items.length);
+          setSelectedIndex((i) => getNextEnabledIndex(items, i, 1));
           return true;
         }
         if (event.key === "Enter") {
-          selectItem(selectedIndex);
+          if (selectedIndex >= 0) {
+            selectItem(selectedIndex);
+          }
           return true;
         }
         return false;
@@ -190,8 +213,14 @@ function MentionRow({
   return (
     <button
       ref={buttonRef}
+      disabled={item.disabled}
+      aria-disabled={item.disabled}
       className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors ${
-        selected ? "bg-accent" : "hover:bg-accent/50"
+        item.disabled
+          ? "cursor-not-allowed opacity-60"
+          : selected
+            ? "bg-accent"
+            : "hover:bg-accent/50"
       }`}
       onClick={onSelect}
     >
@@ -200,10 +229,19 @@ function MentionRow({
         actorId={item.id}
         size={20}
       />
-      <span className="truncate font-medium">{item.label}</span>
-      {item.type === "agent" && (
-        <Badge variant="outline" className="ml-auto text-[10px] h-4 px-1.5">Agent</Badge>
-      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate font-medium">{item.label}</span>
+          {item.type === "agent" && (
+            <Badge variant="outline" className="ml-auto text-[10px] h-4 px-1.5">Agent</Badge>
+          )}
+        </div>
+        {item.disabledReason && (
+          <div className="truncate text-[11px] text-muted-foreground">
+            {item.disabledReason}
+          </div>
+        )}
+      </div>
     </button>
   );
 }
@@ -240,15 +278,30 @@ export function createMentionSuggestion(): Omit<
       const agentItems: MentionItem[] = agents
         .filter((a) => {
           if (a.archived_at || !a.name.toLowerCase().includes(q)) return false;
-          if (!hasCompleteAgentDispatchDefaults(a)) return false;
-          return runtimes.some(
+          return true;
+        })
+        .map((a) => {
+          let disabledReason: string | undefined;
+          if (!hasCompleteAgentDispatchDefaults(a)) {
+            disabledReason = "Configure default provider and environment first";
+          } else if (!runtimes.some(
             (rt) =>
               rt.daemon_ref === a.default_daemon_id &&
               rt.provider === a.default_provider &&
               rt.status === "online",
-          );
+          )) {
+            disabledReason = "Default provider/environment is offline";
+          }
+
+          return {
+            id: a.id,
+            label: a.name,
+            type: "agent" as const,
+            disabled: !!disabledReason,
+            disabledReason,
+          };
         })
-        .map((a) => ({ id: a.id, label: a.name, type: "agent" as const }));
+        .sort((a, b) => Number(a.disabled) - Number(b.disabled));
 
       const issueItems: MentionItem[] = issues
         .filter(
