@@ -1199,6 +1199,7 @@ function SettingsTab({
   agent: Agent;
   onSave: (updates: Partial<Agent>) => Promise<void>;
 }) {
+  const workspace = useWorkspaceStore((s) => s.workspace);
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
@@ -1212,7 +1213,9 @@ function SettingsTab({
 
   const daemons = useRuntimeStore((s) => s.daemons);
   const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
-  useEffect(() => { fetchAllRuntimes(); }, [fetchAllRuntimes]);
+  useEffect(() => {
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1677,8 +1680,8 @@ export default function AgentsPage() {
   const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
-    fetchAllRuntimes();
-  }, [fetchAllRuntimes]);
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   const activeAgents = allAgents.filter((a) => !a.archived_at);
   const archivedAgents = allAgents.filter((a) => !!a.archived_at);
