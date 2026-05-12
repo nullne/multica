@@ -522,12 +522,11 @@ const updateRuntimesAuthStatusByDaemon = `-- name: UpdateRuntimesAuthStatusByDae
 UPDATE agent_runtime ar
 SET auth_status = $2, updated_at = now()
 FROM daemon d
-JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
-JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+JOIN member m ON m.user_id = d.user_id
 WHERE ar.daemon_ref = $1
   AND ar.provider = $3
   AND d.id = ar.daemon_ref
-  AND dw.workspace_id = ar.workspace_id
+  AND m.workspace_id = ar.workspace_id
 `
 
 type UpdateRuntimesAuthStatusByDaemonParams struct {
@@ -536,9 +535,10 @@ type UpdateRuntimesAuthStatusByDaemonParams struct {
 	Provider   string      `json:"provider"`
 }
 
-// Only touch runtimes for workspaces where the daemon is still enabled and
-// the owner is still a member. Stale runtime rows in disabled / left
-// workspaces stay frozen.
+// Keep auth state fresh for every workspace the daemon owner still belongs
+// to, even when the daemon is not workspace-visible there. Explicit issue
+// dispatches can target those hidden runtimes by daemon ID. Runtimes in
+// workspaces where the owner is no longer a member are left frozen.
 func (q *Queries) UpdateRuntimesAuthStatusByDaemon(ctx context.Context, arg UpdateRuntimesAuthStatusByDaemonParams) error {
 	_, err := q.db.Exec(ctx, updateRuntimesAuthStatusByDaemon, arg.DaemonRef, arg.AuthStatus, arg.Provider)
 	return err
@@ -546,18 +546,29 @@ func (q *Queries) UpdateRuntimesAuthStatusByDaemon(ctx context.Context, arg Upda
 
 const updateRuntimesHeartbeatByDaemon = `-- name: UpdateRuntimesHeartbeatByDaemon :exec
 UPDATE agent_runtime ar
-SET status = 'online', last_seen_at = now(), updated_at = now()
-FROM daemon d
-JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
-JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
-WHERE ar.daemon_ref = $1
-  AND d.id = ar.daemon_ref
-  AND dw.workspace_id = ar.workspace_id
+SET status = CASE WHEN owner_in_workspace THEN 'online' ELSE 'offline' END,
+    last_seen_at = CASE WHEN owner_in_workspace THEN now() ELSE ar.last_seen_at END,
+    updated_at = now()
+FROM (
+  SELECT EXISTS (
+    SELECT 1 FROM member m
+    JOIN daemon d ON d.user_id = m.user_id
+    WHERE d.id = ar2.daemon_ref AND m.workspace_id = ar2.workspace_id
+  ) AS owner_in_workspace,
+  ar2.id AS runtime_id
+  FROM agent_runtime ar2
+  WHERE ar2.daemon_ref = $1
+) sub
+WHERE ar.id = sub.runtime_id
 `
 
-// A heartbeat only brings runtimes online in workspaces where the daemon is
-// still enabled and the owner is still a member; stale assignments stay
-// offline so they cannot serve traffic.
+// A heartbeat reconciles every runtime owned by this daemon against the
+// owner's current workspace memberships:
+//   - online for workspaces where the owner is still a member (hidden
+//     assignments included, so explicit daemon-targeted dispatch keeps
+//     working).
+//   - offline for workspaces the owner has left, so general workspace
+//     dispatch and visibility stop returning them.
 func (q *Queries) UpdateRuntimesHeartbeatByDaemon(ctx context.Context, daemonRef pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, updateRuntimesHeartbeatByDaemon, daemonRef)
 	return err
