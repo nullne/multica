@@ -13,6 +13,7 @@ export type DaemonStatus = "online" | "offline" | "updating";
 export interface Daemon {
   id: string;
   user_id: string;
+  workspace_visible: boolean;
   daemon_id: string;
   status: DaemonStatus;
   cli_version: string;

@@ -64,18 +64,17 @@ SET auth_status = $2, updated_at = now()
 WHERE id = $1;
 
 -- name: UpdateRuntimesAuthStatusByDaemon :exec
--- Only touch runtimes for workspaces where the daemon is still enabled and
--- the owner is still a member. Stale runtime rows in disabled / left
--- workspaces stay frozen.
+-- Keep auth state fresh for every workspace the daemon owner still belongs
+-- to, even when the daemon is not workspace-visible there. Explicit issue
+-- dispatches can target those hidden runtimes by daemon ID.
 UPDATE agent_runtime ar
 SET auth_status = $2, updated_at = now()
 FROM daemon d
-JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
-JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+JOIN member m ON m.user_id = d.user_id
 WHERE ar.daemon_ref = $1
   AND ar.provider = $3
   AND d.id = ar.daemon_ref
-  AND dw.workspace_id = ar.workspace_id;
+  AND m.workspace_id = ar.workspace_id;
 
 -- name: SetAgentRuntimeOffline :exec
 UPDATE agent_runtime
@@ -83,17 +82,16 @@ SET status = 'offline', updated_at = now()
 WHERE id = $1;
 
 -- name: UpdateRuntimesHeartbeatByDaemon :exec
--- A heartbeat only brings runtimes online in workspaces where the daemon is
--- still enabled and the owner is still a member; stale assignments stay
--- offline so they cannot serve traffic.
+-- A heartbeat refreshes runtimes in every workspace the daemon owner still
+-- belongs to. General workspace dispatch still filters hidden runtimes out;
+-- explicit daemon-targeted dispatches can opt into them.
 UPDATE agent_runtime ar
 SET status = 'online', last_seen_at = now(), updated_at = now()
 FROM daemon d
-JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
-JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+JOIN member m ON m.user_id = d.user_id
 WHERE ar.daemon_ref = $1
   AND d.id = ar.daemon_ref
-  AND dw.workspace_id = ar.workspace_id;
+  AND m.workspace_id = ar.workspace_id;
 
 -- name: SetRuntimesOfflineByDaemon :exec
 UPDATE agent_runtime
@@ -167,9 +165,10 @@ LIMIT 1;
 -- name: FindAvailableRuntimeConstrained :one
 -- Finds the best online runtime matching optional constraints (provider, daemon, label).
 -- All constraints are optional — pass NULL to skip.
--- Local runtimes (daemon_ref IS NOT NULL) must have an enabled
--- daemon_workspace assignment AND the owner must still be a workspace
--- member. Cloud runtimes (no daemon_ref) bypass both checks.
+-- Local runtimes (daemon_ref IS NOT NULL) normally require an enabled
+-- daemon_workspace assignment and workspace membership. When daemon_id is
+-- explicitly constrained, the enabled-row requirement is waived as long as
+-- the daemon owner is still a workspace member.
 SELECT ar.* FROM agent_runtime ar
 LEFT JOIN daemon d ON d.id = ar.daemon_ref
 WHERE ar.workspace_id = $1
@@ -180,6 +179,15 @@ WHERE ar.workspace_id = $1
   AND (sqlc.narg('daemon_label')::text IS NULL OR sqlc.narg('daemon_label') = ANY(d.labels))
   AND (
     ar.daemon_ref IS NULL
+    OR (
+      sqlc.narg('daemon_id')::uuid IS NOT NULL
+      AND ar.daemon_ref = sqlc.narg('daemon_id')
+      AND EXISTS (
+        SELECT 1 FROM member m
+        WHERE m.user_id = d.user_id
+          AND m.workspace_id = ar.workspace_id
+      )
+    )
     OR EXISTS (
       SELECT 1 FROM daemon_workspace dw
       JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id

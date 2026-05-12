@@ -174,6 +174,37 @@ func (h *Handler) applyAgentDispatchDefaults(ctx context.Context, workspaceID st
 	return nil
 }
 
+func (h *Handler) daemonVisibleInWorkspace(ctx context.Context, daemon db.Daemon, workspaceID string) bool {
+	if workspaceID == "" {
+		return false
+	}
+	if _, err := h.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
+		UserID:      daemon.UserID,
+		WorkspaceID: parseUUID(workspaceID),
+	}); err != nil {
+		return false
+	}
+	assignment, err := h.Queries.GetDaemonWorkspace(ctx, db.GetDaemonWorkspaceParams{
+		DaemonID:    daemon.ID,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	return err == nil && assignment.Enabled
+}
+
+func (h *Handler) canSelectDispatchDaemon(ctx context.Context, daemonID, workspaceID, userID string) bool {
+	if daemonID == "" {
+		return true
+	}
+	daemon, err := h.Queries.GetDaemon(ctx, parseUUID(daemonID))
+	if err != nil {
+		return false
+	}
+	if uuidToString(daemon.UserID) == userID {
+		return true
+	}
+	return h.daemonVisibleInWorkspace(ctx, daemon, workspaceID)
+}
+
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -405,6 +436,10 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		req.AssigneeType != nil && *req.AssigneeType == "agent" &&
 		req.AssigneeID != nil && *req.VerifierAgentID == *req.AssigneeID {
 		writeError(w, http.StatusBadRequest, "verifier_agent_id cannot be the same as assignee_id")
+		return
+	}
+	if req.DispatchDaemonID != nil && !h.canSelectDispatchDaemon(r.Context(), *req.DispatchDaemonID, workspaceID, creatorID) {
+		writeError(w, http.StatusBadRequest, "dispatch_daemon_id must be user-owned or visible in the workspace")
 		return
 	}
 
@@ -767,6 +802,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		params.AssigneeID.Valid &&
 		uuidToString(params.VerifierAgentID) == uuidToString(params.AssigneeID) {
 		writeError(w, http.StatusBadRequest, "verifier_agent_id cannot be the same as assignee_id")
+		return
+	}
+	if dispatchDaemonIDPresent && req.DispatchDaemonID != nil &&
+		!h.canSelectDispatchDaemon(r.Context(), *req.DispatchDaemonID, workspaceID, userID) {
+		writeError(w, http.StatusBadRequest, "dispatch_daemon_id must be user-owned or visible in the workspace")
 		return
 	}
 
@@ -1386,6 +1426,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			params.AssigneeType.Valid && params.AssigneeType.String == "agent" &&
 			params.AssigneeID.Valid &&
 			uuidToString(params.VerifierAgentID) == uuidToString(params.AssigneeID) {
+			continue
+		}
+		if batchDaemonIDPresent && req.Updates.DispatchDaemonID != nil &&
+			!h.canSelectDispatchDaemon(r.Context(), *req.Updates.DispatchDaemonID, workspaceID, userID) {
 			continue
 		}
 

@@ -371,6 +371,131 @@ func TestUpdateIssue_AssigneeChangeCopiesDispatchDefaults(t *testing.T) {
 	}
 }
 
+func TestCreateIssueAllowsOwnedHiddenDispatchDaemon(t *testing.T) {
+	resp := registerDaemon(t, "owned-hidden-dispatch", "owner-machine", []map[string]any{
+		{"type": "codex", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE daemon_workspace SET enabled = FALSE WHERE daemon_id = $1 AND workspace_id = $2`,
+		resp.Daemon.ID, testWorkspaceID,
+	); err != nil {
+		t.Fatalf("disable daemon assignment: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/daemons", nil)
+	testHandler.ListDaemons(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListDaemons: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var daemons []DaemonResponse
+	if err := json.NewDecoder(w.Body).Decode(&daemons); err != nil {
+		t.Fatalf("decode daemon list: %v", err)
+	}
+	var found *DaemonResponse
+	for i := range daemons {
+		if daemons[i].ID == resp.Daemon.ID {
+			found = &daemons[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected owned hidden daemon in /api/daemons response")
+	}
+	if found.WorkspaceVisible {
+		t.Fatal("expected owned hidden daemon to be marked workspace_visible=false")
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/issues", map[string]any{
+		"title":              "Owned hidden daemon",
+		"dispatch_daemon_id": resp.Daemon.ID,
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+	if created.DispatchDaemonID == nil || *created.DispatchDaemonID != resp.Daemon.ID {
+		t.Fatalf("expected dispatch_daemon_id %q, got %+v", resp.Daemon.ID, created.DispatchDaemonID)
+	}
+}
+
+func TestUpdateIssueRejectsForeignHiddenDispatchDaemon(t *testing.T) {
+	ctx := context.Background()
+
+	var ownerID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('Foreign Hidden Owner', 'foreign-hidden-owner@multica.ai') RETURNING id`,
+	).Scan(&ownerID); err != nil {
+		t.Fatalf("create foreign owner: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'admin')`,
+		testWorkspaceID, ownerID,
+	); err != nil {
+		t.Fatalf("create foreign owner membership: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, testWorkspaceID, ownerID)
+	})
+
+	body := map[string]any{
+		"daemon_id":   "foreign-hidden-daemon",
+		"device_name": "foreign-machine",
+		"runtimes": []map[string]any{
+			{"type": "codex", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		},
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest("POST", "/api/daemon/register", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", ownerID)
+	w := httptest.NewRecorder()
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var daemonResp daemonRegisterResponse
+	json.NewDecoder(w.Body).Decode(&daemonResp)
+	t.Cleanup(func() { cleanupDaemon(t, daemonResp.Daemon.ID) })
+
+	if _, err := testPool.Exec(ctx,
+		`UPDATE daemon_workspace SET enabled = FALSE WHERE daemon_id = $1 AND workspace_id = $2`,
+		daemonResp.Daemon.ID, testWorkspaceID,
+	); err != nil {
+		t.Fatalf("disable foreign daemon assignment: %v", err)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/issues", map[string]any{
+		"title": "Reject foreign hidden daemon",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/issues/"+created.ID, map[string]any{
+		"dispatch_daemon_id": daemonResp.Daemon.ID,
+	})
+	req = withURLParam(req, "id", created.ID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("UpdateIssue: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestUpdateIssuePreservesLinks(t *testing.T) {
 	ctx := context.Background()
 
@@ -2489,8 +2614,8 @@ func TestRuntimeVisibilityRespectsAssignmentAndMembership(t *testing.T) {
 		t.Fatalf("InitiateUpdate after disable: expected 404, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Heartbeat from the owner must NOT bring the offline runtime in the
-	// disabled workspace back online.
+	// Heartbeat refreshes the hidden runtime for explicit daemon-targeted
+	// dispatches, but workspace-scoped routes must still hide it.
 	hbBody := map[string]any{"daemon_id": daemonUUID}
 	var hbBuf bytes.Buffer
 	json.NewEncoder(&hbBuf).Encode(hbBody)
@@ -2508,8 +2633,8 @@ func TestRuntimeVisibilityRespectsAssignmentAndMembership(t *testing.T) {
 	).Scan(&status); err != nil {
 		t.Fatalf("read runtime status: %v", err)
 	}
-	if status != "offline" {
-		t.Fatalf("heartbeat must not revive runtime in disabled workspace, got status=%q", status)
+	if status != "online" {
+		t.Fatalf("heartbeat should refresh hidden runtime status, got status=%q", status)
 	}
 
 	// Re-enable the daemon and remove the owner from the workspace — the
@@ -2547,8 +2672,8 @@ func TestRuntimeVisibilityRespectsAssignmentAndMembership(t *testing.T) {
 		t.Fatalf("InitiatePing after owner left: expected 404, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Heartbeat must still leave the runtime in the workspace-owner-less
-	// workspace offline.
+	// Heartbeat must not refresh runtimes after the daemon owner leaves the
+	// workspace.
 	hbBuf.Reset()
 	json.NewEncoder(&hbBuf).Encode(hbBody)
 	hbReq = httptest.NewRequest("POST", "/api/daemon/heartbeat", &hbBuf)
@@ -2565,7 +2690,62 @@ func TestRuntimeVisibilityRespectsAssignmentAndMembership(t *testing.T) {
 		t.Fatalf("read runtime status: %v", err)
 	}
 	if status != "offline" {
-		t.Fatalf("heartbeat must not revive runtime after owner left, got status=%q", status)
+		t.Fatalf("heartbeat must not refresh runtime after owner left, got status=%q", status)
+	}
+}
+
+func TestFindAvailableRuntimeConstrainedAllowsExplicitHiddenOwnedDaemon(t *testing.T) {
+	resp := registerDaemon(t, "explicit-hidden-daemon", "hidden-machine", []map[string]any{
+		{"type": "claude", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+	})
+	t.Cleanup(func() { cleanupDaemon(t, resp.Daemon.ID) })
+
+	runtimes := resp.runtimesInTestWorkspace()
+	if len(runtimes) == 0 {
+		t.Fatal("expected runtime projected into test workspace")
+	}
+	runtimeID := runtimes[0].ID
+
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx,
+		`UPDATE daemon_workspace SET enabled = FALSE WHERE daemon_id = $1 AND workspace_id = $2`,
+		resp.Daemon.ID, testWorkspaceID,
+	); err != nil {
+		t.Fatalf("disable daemon assignment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`UPDATE agent_runtime SET status = 'offline' WHERE id = $1`,
+		runtimeID,
+	); err != nil {
+		t.Fatalf("force runtime offline: %v", err)
+	}
+
+	hbW := httptest.NewRecorder()
+	hbReq := newRequest("POST", "/api/daemon/heartbeat", map[string]any{"daemon_id": resp.Daemon.ID})
+	testHandler.DaemonHeartbeat(hbW, hbReq)
+	if hbW.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", hbW.Code, hbW.Body.String())
+	}
+
+	queries := db.New(testPool)
+	if _, err := queries.FindAvailableRuntimeForProvider(ctx, db.FindAvailableRuntimeForProviderParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Provider:    "claude",
+	}); err == nil {
+		t.Fatal("expected general provider dispatch to ignore hidden daemon runtime")
+	}
+
+	rt, err := queries.FindAvailableRuntimeConstrained(ctx, db.FindAvailableRuntimeConstrainedParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Provider:    strToText("claude"),
+		Providers:   []string{"claude"},
+		DaemonID:    parseUUID(resp.Daemon.ID),
+	})
+	if err != nil {
+		t.Fatalf("expected explicit hidden daemon dispatch to succeed, got error: %v", err)
+	}
+	if uuidToString(rt.ID) != runtimeID {
+		t.Fatalf("expected runtime %q, got %q", runtimeID, uuidToString(rt.ID))
 	}
 }
 

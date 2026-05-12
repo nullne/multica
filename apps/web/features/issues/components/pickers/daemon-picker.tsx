@@ -32,18 +32,26 @@ function classifyDaemons(
   runtimes: AgentRuntime[],
   provider: string | null,
 ) {
-  if (!provider) return { compatible: daemons, incompatible: [] as Daemon[] };
+  const workspaceDaemons = daemons.filter((d) => d.workspace_visible);
+  const personalDaemons = daemons.filter((d) => !d.workspace_visible);
+  if (!provider) {
+    return {
+      compatible: workspaceDaemons,
+      incompatible: [] as Daemon[],
+      personal: personalDaemons,
+    };
+  }
 
   const compatible: Daemon[] = [];
   const incompatible: Daemon[] = [];
-  for (const d of daemons) {
+  for (const d of workspaceDaemons) {
     const hasRuntime = runtimes.some(
       (r) => r.daemon_ref === d.id && r.provider === provider,
     );
     if (hasRuntime) compatible.push(d);
     else incompatible.push(d);
   }
-  return { compatible, incompatible };
+  return { compatible, incompatible, personal: personalDaemons };
 }
 
 function getRuntimeAuth(
@@ -82,7 +90,7 @@ export function DaemonPicker({
   const daemons = useRuntimeStore((s) => s.daemons);
   const runtimes = useRuntimeStore((s) => s.runtimes);
 
-  const { compatible, incompatible } = useMemo(
+  const { compatible, incompatible, personal } = useMemo(
     () => classifyDaemons(daemons, runtimes, provider),
     [daemons, runtimes, provider],
   );
@@ -158,6 +166,12 @@ export function DaemonPicker({
       {provider && showAll && incompatible.length > 0 && (
         <PickerSection label="Incompatible">
           {incompatible.map((d) => renderDaemonItem(d, true))}
+        </PickerSection>
+      )}
+
+      {personal.length > 0 && (
+        <PickerSection label="Your Daemons">
+          {personal.map((d) => renderDaemonItem(d))}
         </PickerSection>
       )}
     </PropertyPicker>

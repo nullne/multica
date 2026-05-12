@@ -38,12 +38,12 @@ type DaemonRegisterRequest struct {
 
 // WorkspaceRegistration describes a daemon's projection into one workspace.
 type WorkspaceRegistration struct {
-	WorkspaceID    string                          `json:"workspace_id"`
-	WorkspaceName  string                          `json:"workspace_name"`
-	Enabled        bool                            `json:"enabled"`
-	Runtimes       []AgentRuntimeResponse          `json:"runtimes"`
-	Repos          []RepoData                      `json:"repos"`
-	ProviderConfig map[string]map[string]any       `json:"provider_config,omitempty"`
+	WorkspaceID    string                    `json:"workspace_id"`
+	WorkspaceName  string                    `json:"workspace_name"`
+	Enabled        bool                      `json:"enabled"`
+	Runtimes       []AgentRuntimeResponse    `json:"runtimes"`
+	Repos          []RepoData                `json:"repos"`
+	ProviderConfig map[string]map[string]any `json:"provider_config,omitempty"`
 }
 
 func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
@@ -104,10 +104,19 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	memberWorkspaces, err := h.Queries.ListWorkspaces(r.Context(), parseUUID(userID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load workspaces")
+		return
+	}
 	enabledWorkspaceIDs, err := h.Queries.ListEnabledWorkspacesForDaemon(r.Context(), daemon.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load workspace assignments")
 		return
+	}
+	enabledByWorkspace := make(map[string]struct{}, len(enabledWorkspaceIDs))
+	for _, wsID := range enabledWorkspaceIDs {
+		enabledByWorkspace[uuidToString(wsID)] = struct{}{}
 	}
 
 	mergedProviderConfig := make(map[string]map[string]any)
@@ -139,15 +148,12 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	workspaceRegs := make([]WorkspaceRegistration, 0, len(enabledWorkspaceIDs))
+	workspaceRegs := make([]WorkspaceRegistration, 0, len(memberWorkspaces))
 	var multicaTargetVersion string
 
-	for _, wsID := range enabledWorkspaceIDs {
-		ws, err := h.Queries.GetWorkspace(r.Context(), wsID)
-		if err != nil {
-			continue
-		}
-
+	for _, ws := range memberWorkspaces {
+		wsID := ws.ID
+		_, enabled := enabledByWorkspace[uuidToString(wsID)]
 		ps := parseProviderSettings(ws.Settings)
 		if multicaTargetVersion == "" && ps.MulticaTargetVersion != "" {
 			multicaTargetVersion = ps.MulticaTargetVersion
@@ -182,15 +188,17 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		workspaceRegs = append(workspaceRegs, WorkspaceRegistration{
 			WorkspaceID:    uuidToString(wsID),
 			WorkspaceName:  ws.Name,
-			Enabled:        true,
+			Enabled:        enabled,
 			Runtimes:       runtimeResp,
 			Repos:          repos,
 			ProviderConfig: wsProviderConfig,
 		})
 
-		h.publish(protocol.EventDaemonRegister, uuidToString(wsID), "system", "", map[string]any{
-			"runtimes": runtimeResp,
-		})
+		if enabled {
+			h.publish(protocol.EventDaemonRegister, uuidToString(wsID), "system", "", map[string]any{
+				"runtimes": runtimeResp,
+			})
+		}
 	}
 
 	slog.Info("daemon registered",

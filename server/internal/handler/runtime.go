@@ -12,22 +12,27 @@ import (
 )
 
 type DaemonResponse struct {
-	ID         string   `json:"id"`
-	UserID     string   `json:"user_id"`
-	DaemonID   string   `json:"daemon_id"`
-	Status     string   `json:"status"`
-	CLIVersion string   `json:"cli_version"`
-	DeviceName string   `json:"device_name"`
-	DeviceInfo string   `json:"device_info"`
-	Labels     []string `json:"labels"`
-	Metadata   any      `json:"metadata"`
-	LastSeenAt *string  `json:"last_seen_at"`
-	CreatedAt  string   `json:"created_at"`
-	UpdatedAt  string   `json:"updated_at"`
-	ArchivedAt *string  `json:"archived_at"`
+	ID               string   `json:"id"`
+	UserID           string   `json:"user_id"`
+	WorkspaceVisible bool     `json:"workspace_visible"`
+	DaemonID         string   `json:"daemon_id"`
+	Status           string   `json:"status"`
+	CLIVersion       string   `json:"cli_version"`
+	DeviceName       string   `json:"device_name"`
+	DeviceInfo       string   `json:"device_info"`
+	Labels           []string `json:"labels"`
+	Metadata         any      `json:"metadata"`
+	LastSeenAt       *string  `json:"last_seen_at"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
+	ArchivedAt       *string  `json:"archived_at"`
 }
 
 func daemonToResponse(d db.Daemon) DaemonResponse {
+	return daemonToResponseWithVisibility(d, true)
+}
+
+func daemonToResponseWithVisibility(d db.Daemon, workspaceVisible bool) DaemonResponse {
 	var metadata any
 	if d.Metadata != nil {
 		json.Unmarshal(d.Metadata, &metadata)
@@ -40,19 +45,20 @@ func daemonToResponse(d db.Daemon) DaemonResponse {
 		labels = []string{}
 	}
 	return DaemonResponse{
-		ID:         uuidToString(d.ID),
-		UserID:     uuidToString(d.UserID),
-		DaemonID:   d.DaemonID,
-		Status:     d.Status,
-		CLIVersion: d.CliVersion,
-		DeviceName: d.DeviceName,
-		DeviceInfo: d.DeviceInfo,
-		Labels:     labels,
-		Metadata:   metadata,
-		LastSeenAt: timestampToPtr(d.LastSeenAt),
-		CreatedAt:  timestampToString(d.CreatedAt),
-		UpdatedAt:  timestampToString(d.UpdatedAt),
-		ArchivedAt: timestampToPtr(d.ArchivedAt),
+		ID:               uuidToString(d.ID),
+		UserID:           uuidToString(d.UserID),
+		WorkspaceVisible: workspaceVisible,
+		DaemonID:         d.DaemonID,
+		Status:           d.Status,
+		CLIVersion:       d.CliVersion,
+		DeviceName:       d.DeviceName,
+		DeviceInfo:       d.DeviceInfo,
+		Labels:           labels,
+		Metadata:         metadata,
+		LastSeenAt:       timestampToPtr(d.LastSeenAt),
+		CreatedAt:        timestampToString(d.CreatedAt),
+		UpdatedAt:        timestampToString(d.UpdatedAt),
+		ArchivedAt:       timestampToPtr(d.ArchivedAt),
 	}
 }
 
@@ -400,16 +406,35 @@ func (h *Handler) GetDaemonEnv(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
 
-	daemons, err := h.Queries.ListDaemonsForWorkspace(r.Context(), parseUUID(workspaceID))
+	workspaceDaemons, err := h.Queries.ListDaemonsForWorkspace(r.Context(), parseUUID(workspaceID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list daemons")
+		return
+	}
+	ownedDaemons, err := h.Queries.ListDaemonsForUser(r.Context(), parseUUID(userID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list daemons")
 		return
 	}
 
-	resp := make([]DaemonResponse, len(daemons))
-	for i, d := range daemons {
-		resp[i] = daemonToResponse(d)
+	resp := make([]DaemonResponse, 0, len(workspaceDaemons)+len(ownedDaemons))
+	seen := make(map[string]struct{}, len(workspaceDaemons)+len(ownedDaemons))
+	for _, d := range workspaceDaemons {
+		id := uuidToString(d.ID)
+		seen[id] = struct{}{}
+		resp = append(resp, daemonToResponseWithVisibility(d, true))
+	}
+	for _, d := range ownedDaemons {
+		id := uuidToString(d.ID)
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		resp = append(resp, daemonToResponseWithVisibility(d, false))
 	}
 
 	writeJSON(w, http.StatusOK, resp)

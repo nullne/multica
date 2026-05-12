@@ -75,6 +75,15 @@ WHERE ar.workspace_id = $1
   AND ($5::text IS NULL OR $5 = ANY(d.labels))
   AND (
     ar.daemon_ref IS NULL
+    OR (
+      $4::uuid IS NOT NULL
+      AND ar.daemon_ref = $4
+      AND EXISTS (
+        SELECT 1 FROM member m
+        WHERE m.user_id = d.user_id
+          AND m.workspace_id = ar.workspace_id
+      )
+    )
     OR EXISTS (
       SELECT 1 FROM daemon_workspace dw
       JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
@@ -100,9 +109,10 @@ type FindAvailableRuntimeConstrainedParams struct {
 
 // Finds the best online runtime matching optional constraints (provider, daemon, label).
 // All constraints are optional — pass NULL to skip.
-// Local runtimes (daemon_ref IS NOT NULL) must have an enabled
-// daemon_workspace assignment AND the owner must still be a workspace
-// member. Cloud runtimes (no daemon_ref) bypass both checks.
+// Local runtimes (daemon_ref IS NOT NULL) normally require an enabled
+// daemon_workspace assignment and workspace membership. When daemon_id is
+// explicitly constrained, the enabled-row requirement is waived as long as
+// the daemon owner is still a workspace member.
 func (q *Queries) FindAvailableRuntimeConstrained(ctx context.Context, arg FindAvailableRuntimeConstrainedParams) (AgentRuntime, error) {
 	row := q.db.QueryRow(ctx, findAvailableRuntimeConstrained,
 		arg.WorkspaceID,
@@ -512,12 +522,11 @@ const updateRuntimesAuthStatusByDaemon = `-- name: UpdateRuntimesAuthStatusByDae
 UPDATE agent_runtime ar
 SET auth_status = $2, updated_at = now()
 FROM daemon d
-JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
-JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+JOIN member m ON m.user_id = d.user_id
 WHERE ar.daemon_ref = $1
   AND ar.provider = $3
   AND d.id = ar.daemon_ref
-  AND dw.workspace_id = ar.workspace_id
+  AND m.workspace_id = ar.workspace_id
 `
 
 type UpdateRuntimesAuthStatusByDaemonParams struct {
@@ -526,9 +535,9 @@ type UpdateRuntimesAuthStatusByDaemonParams struct {
 	Provider   string      `json:"provider"`
 }
 
-// Only touch runtimes for workspaces where the daemon is still enabled and
-// the owner is still a member. Stale runtime rows in disabled / left
-// workspaces stay frozen.
+// Keep auth state fresh for every workspace the daemon owner still belongs
+// to, even when the daemon is not workspace-visible there. Explicit issue
+// dispatches can target those hidden runtimes by daemon ID.
 func (q *Queries) UpdateRuntimesAuthStatusByDaemon(ctx context.Context, arg UpdateRuntimesAuthStatusByDaemonParams) error {
 	_, err := q.db.Exec(ctx, updateRuntimesAuthStatusByDaemon, arg.DaemonRef, arg.AuthStatus, arg.Provider)
 	return err
@@ -538,16 +547,15 @@ const updateRuntimesHeartbeatByDaemon = `-- name: UpdateRuntimesHeartbeatByDaemo
 UPDATE agent_runtime ar
 SET status = 'online', last_seen_at = now(), updated_at = now()
 FROM daemon d
-JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
-JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+JOIN member m ON m.user_id = d.user_id
 WHERE ar.daemon_ref = $1
   AND d.id = ar.daemon_ref
-  AND dw.workspace_id = ar.workspace_id
+  AND m.workspace_id = ar.workspace_id
 `
 
-// A heartbeat only brings runtimes online in workspaces where the daemon is
-// still enabled and the owner is still a member; stale assignments stay
-// offline so they cannot serve traffic.
+// A heartbeat refreshes runtimes in every workspace the daemon owner still
+// belongs to. General workspace dispatch still filters hidden runtimes out;
+// explicit daemon-targeted dispatches can opt into them.
 func (q *Queries) UpdateRuntimesHeartbeatByDaemon(ctx context.Context, daemonRef pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, updateRuntimesHeartbeatByDaemon, daemonRef)
 	return err
