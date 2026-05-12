@@ -118,7 +118,7 @@ func TestDefaultConstants(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_DefaultsCodexModelToGPT55(t *testing.T) {
+func TestLoadConfig_CodexModelEmptyByDefault(t *testing.T) {
 	t.Setenv("MULTICA_CODEX_PATH", "sh")
 	t.Setenv("MULTICA_CODEX_MODEL", "")
 
@@ -134,8 +134,29 @@ func TestLoadConfig_DefaultsCodexModelToGPT55(t *testing.T) {
 	if !ok {
 		t.Fatal("expected codex agent to be configured")
 	}
-	if codex.Model != "gpt-5.5-medium" {
-		t.Errorf("codex model = %q, want %q", codex.Model, "gpt-5.5-medium")
+	if codex.Model != "" {
+		t.Errorf("codex model = %q, want empty (let codex CLI pick its own default)", codex.Model)
+	}
+}
+
+func TestLoadConfig_CodexModelEnvOverride(t *testing.T) {
+	t.Setenv("MULTICA_CODEX_PATH", "sh")
+	t.Setenv("MULTICA_CODEX_MODEL", "gpt-5")
+
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig error: %v", err)
+	}
+
+	codex, ok := cfg.Agents["codex"]
+	if !ok {
+		t.Fatal("expected codex agent to be configured")
+	}
+	if codex.Model != "gpt-5" {
+		t.Errorf("codex model = %q, want %q", codex.Model, "gpt-5")
 	}
 }
 
