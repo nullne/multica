@@ -2214,6 +2214,258 @@ func TestDaemonReadAccessRevokedWhenOwnerLeavesWorkspace(t *testing.T) {
 	}
 }
 
+// TestRuntimeVisibilityRespectsAssignmentAndMembership verifies that local
+// agent_runtime rows disappear from list / read / ping / update endpoints
+// once the daemon is disabled for the workspace or its owner leaves, and
+// that heartbeat does not silently bring them back online.
+func TestRuntimeVisibilityRespectsAssignmentAndMembership(t *testing.T) {
+	ctx := context.Background()
+
+	var ownerID, workspaceID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('Runtime Owner', 'runtime-owner-test@multica.ai') RETURNING id`,
+	).Scan(&ownerID); err != nil {
+		t.Fatalf("create owner user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO workspace (name, slug, description, issue_prefix) VALUES ('RT Vis WS', 'runtime-vis-test', '', 'RTV') RETURNING id`,
+	).Scan(&workspaceID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
+	})
+
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'admin')`,
+		workspaceID, ownerID, testUserID,
+	); err != nil {
+		t.Fatalf("create memberships: %v", err)
+	}
+
+	// Register a daemon owned by ownerID; auto-enables in the new workspace.
+	body := map[string]any{
+		"daemon_id":   "rt-vis-daemon",
+		"device_name": "rt-vis-machine",
+		"runtimes": []map[string]any{
+			{"type": "codex", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		},
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest("POST", "/api/daemon/register", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", ownerID)
+	w := httptest.NewRecorder()
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp daemonRegisterResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	daemonUUID := resp.Daemon.ID
+	t.Cleanup(func() { cleanupDaemon(t, daemonUUID) })
+
+	// Find the runtime projected into the new workspace.
+	var runtimeID string
+	for _, ws := range resp.Workspaces {
+		if ws.WorkspaceID == workspaceID && len(ws.Runtimes) > 0 {
+			runtimeID = ws.Runtimes[0].ID
+		}
+	}
+	if runtimeID == "" {
+		t.Fatalf("expected runtime projected into workspace; got %+v", resp.Workspaces)
+	}
+
+	wsMemberRequest := func(method, path string, body any) *http.Request {
+		var b bytes.Buffer
+		if body != nil {
+			json.NewEncoder(&b).Encode(body)
+		}
+		req := httptest.NewRequest(method, path, &b)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-User-ID", testUserID)
+		req.Header.Set("X-Workspace-ID", workspaceID)
+		return req
+	}
+
+	listRuntimes := func() []AgentRuntimeResponse {
+		w := httptest.NewRecorder()
+		req := wsMemberRequest("GET", "/api/runtimes", nil)
+		testHandler.ListAgentRuntimes(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("ListAgentRuntimes: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var out []AgentRuntimeResponse
+		json.NewDecoder(w.Body).Decode(&out)
+		return out
+	}
+
+	containsRuntime := func(list []AgentRuntimeResponse, id string) bool {
+		for _, rt := range list {
+			if rt.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Baseline: workspace member can list the runtime, fetch usage/activity,
+	// and queue a ping/update.
+	if !containsRuntime(listRuntimes(), runtimeID) {
+		t.Fatal("baseline: runtime should be listed while daemon is enabled and owner is member")
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("GET", "/api/runtimes/"+runtimeID+"/usage", nil)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.GetRuntimeUsage(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetRuntimeUsage baseline: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("POST", "/api/runtimes/"+runtimeID+"/ping", nil)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.InitiatePing(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("InitiatePing baseline: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("POST", "/api/runtimes/"+runtimeID+"/update", map[string]any{"target_version": "1.2.3"})
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.InitiateUpdate(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("InitiateUpdate baseline: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Disable the daemon for this workspace and force the runtime offline as
+	// the disable handler would have done.
+	if _, err := testPool.Exec(ctx,
+		`UPDATE daemon_workspace SET enabled = FALSE WHERE daemon_id = $1 AND workspace_id = $2`,
+		daemonUUID, workspaceID,
+	); err != nil {
+		t.Fatalf("disable assignment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`UPDATE agent_runtime SET status = 'offline' WHERE id = $1`, runtimeID,
+	); err != nil {
+		t.Fatalf("force runtime offline: %v", err)
+	}
+
+	if containsRuntime(listRuntimes(), runtimeID) {
+		t.Fatal("expected runtime to be hidden after daemon disabled for workspace")
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("GET", "/api/runtimes/"+runtimeID+"/usage", nil)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.GetRuntimeUsage(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetRuntimeUsage after disable: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("POST", "/api/runtimes/"+runtimeID+"/ping", nil)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.InitiatePing(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("InitiatePing after disable: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("POST", "/api/runtimes/"+runtimeID+"/update", map[string]any{"target_version": "1.2.4"})
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.InitiateUpdate(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("InitiateUpdate after disable: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Heartbeat from the owner must NOT bring the offline runtime in the
+	// disabled workspace back online.
+	hbBody := map[string]any{"daemon_id": daemonUUID}
+	var hbBuf bytes.Buffer
+	json.NewEncoder(&hbBuf).Encode(hbBody)
+	hbReq := httptest.NewRequest("POST", "/api/daemon/heartbeat", &hbBuf)
+	hbReq.Header.Set("Content-Type", "application/json")
+	hbReq.Header.Set("X-User-ID", ownerID)
+	hbW := httptest.NewRecorder()
+	testHandler.DaemonHeartbeat(hbW, hbReq)
+	if hbW.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat: expected 200, got %d: %s", hbW.Code, hbW.Body.String())
+	}
+	var status string
+	if err := testPool.QueryRow(ctx,
+		`SELECT status FROM agent_runtime WHERE id = $1`, runtimeID,
+	).Scan(&status); err != nil {
+		t.Fatalf("read runtime status: %v", err)
+	}
+	if status != "offline" {
+		t.Fatalf("heartbeat must not revive runtime in disabled workspace, got status=%q", status)
+	}
+
+	// Re-enable the daemon and remove the owner from the workspace — the
+	// runtime should still be hidden / inoperable because the owner is gone.
+	if _, err := testPool.Exec(ctx,
+		`UPDATE daemon_workspace SET enabled = TRUE WHERE daemon_id = $1 AND workspace_id = $2`,
+		daemonUUID, workspaceID,
+	); err != nil {
+		t.Fatalf("re-enable assignment: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`,
+		workspaceID, ownerID,
+	); err != nil {
+		t.Fatalf("remove owner membership: %v", err)
+	}
+
+	if containsRuntime(listRuntimes(), runtimeID) {
+		t.Fatal("expected runtime to be hidden after owner leaves workspace")
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("GET", "/api/runtimes/"+runtimeID+"/usage", nil)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.GetRuntimeUsage(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetRuntimeUsage after owner left: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = wsMemberRequest("POST", "/api/runtimes/"+runtimeID+"/ping", nil)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.InitiatePing(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("InitiatePing after owner left: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Heartbeat must still leave the runtime in the workspace-owner-less
+	// workspace offline.
+	hbBuf.Reset()
+	json.NewEncoder(&hbBuf).Encode(hbBody)
+	hbReq = httptest.NewRequest("POST", "/api/daemon/heartbeat", &hbBuf)
+	hbReq.Header.Set("Content-Type", "application/json")
+	hbReq.Header.Set("X-User-ID", ownerID)
+	hbW = httptest.NewRecorder()
+	testHandler.DaemonHeartbeat(hbW, hbReq)
+	if hbW.Code != http.StatusOK {
+		t.Fatalf("DaemonHeartbeat after owner left: expected 200, got %d: %s", hbW.Code, hbW.Body.String())
+	}
+	if err := testPool.QueryRow(ctx,
+		`SELECT status FROM agent_runtime WHERE id = $1`, runtimeID,
+	).Scan(&status); err != nil {
+		t.Fatalf("read runtime status: %v", err)
+	}
+	if status != "offline" {
+		t.Fatalf("heartbeat must not revive runtime after owner left, got status=%q", status)
+	}
+}
+
 func TestWebhookCreateIssueSubscribers(t *testing.T) {
 	ctx := context.Background()
 

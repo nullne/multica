@@ -297,11 +297,25 @@ func (q *Queries) GetAgentRuntimeForWorkspace(ctx context.Context, arg GetAgentR
 }
 
 const listAgentRuntimes = `-- name: ListAgentRuntimes :many
-SELECT id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, daemon_ref, auth_status FROM agent_runtime
-WHERE workspace_id = $1
-ORDER BY created_at ASC
+SELECT ar.id, ar.workspace_id, ar.daemon_id, ar.name, ar.runtime_mode, ar.provider, ar.status, ar.device_info, ar.metadata, ar.last_seen_at, ar.created_at, ar.updated_at, ar.daemon_ref, ar.auth_status FROM agent_runtime ar
+LEFT JOIN daemon d ON d.id = ar.daemon_ref
+WHERE ar.workspace_id = $1
+  AND (
+    ar.daemon_ref IS NULL
+    OR EXISTS (
+      SELECT 1 FROM daemon_workspace dw
+      JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+      WHERE dw.daemon_id = ar.daemon_ref
+        AND dw.workspace_id = ar.workspace_id
+        AND dw.enabled = TRUE
+    )
+  )
+ORDER BY ar.created_at ASC
 `
 
+// Cloud runtimes (daemon_ref IS NULL) always show. Local runtimes only show
+// while their daemon is enabled for this workspace AND the owner is still a
+// workspace member — the same constraint dispatch and the daemon list use.
 func (q *Queries) ListAgentRuntimes(ctx context.Context, workspaceID pgtype.UUID) ([]AgentRuntime, error) {
 	rows, err := q.db.Query(ctx, listAgentRuntimes, workspaceID)
 	if err != nil {
@@ -495,9 +509,15 @@ func (q *Queries) UpdateAgentRuntimeHeartbeat(ctx context.Context, id pgtype.UUI
 }
 
 const updateRuntimesAuthStatusByDaemon = `-- name: UpdateRuntimesAuthStatusByDaemon :exec
-UPDATE agent_runtime
+UPDATE agent_runtime ar
 SET auth_status = $2, updated_at = now()
-WHERE daemon_ref = $1 AND provider = $3
+FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+WHERE ar.daemon_ref = $1
+  AND ar.provider = $3
+  AND d.id = ar.daemon_ref
+  AND dw.workspace_id = ar.workspace_id
 `
 
 type UpdateRuntimesAuthStatusByDaemonParams struct {
@@ -506,17 +526,28 @@ type UpdateRuntimesAuthStatusByDaemonParams struct {
 	Provider   string      `json:"provider"`
 }
 
+// Only touch runtimes for workspaces where the daemon is still enabled and
+// the owner is still a member. Stale runtime rows in disabled / left
+// workspaces stay frozen.
 func (q *Queries) UpdateRuntimesAuthStatusByDaemon(ctx context.Context, arg UpdateRuntimesAuthStatusByDaemonParams) error {
 	_, err := q.db.Exec(ctx, updateRuntimesAuthStatusByDaemon, arg.DaemonRef, arg.AuthStatus, arg.Provider)
 	return err
 }
 
 const updateRuntimesHeartbeatByDaemon = `-- name: UpdateRuntimesHeartbeatByDaemon :exec
-UPDATE agent_runtime
+UPDATE agent_runtime ar
 SET status = 'online', last_seen_at = now(), updated_at = now()
-WHERE daemon_ref = $1
+FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+WHERE ar.daemon_ref = $1
+  AND d.id = ar.daemon_ref
+  AND dw.workspace_id = ar.workspace_id
 `
 
+// A heartbeat only brings runtimes online in workspaces where the daemon is
+// still enabled and the owner is still a member; stale assignments stay
+// offline so they cannot serve traffic.
 func (q *Queries) UpdateRuntimesHeartbeatByDaemon(ctx context.Context, daemonRef pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, updateRuntimesHeartbeatByDaemon, daemonRef)
 	return err

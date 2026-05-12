@@ -1,7 +1,21 @@
 -- name: ListAgentRuntimes :many
-SELECT * FROM agent_runtime
-WHERE workspace_id = $1
-ORDER BY created_at ASC;
+-- Cloud runtimes (daemon_ref IS NULL) always show. Local runtimes only show
+-- while their daemon is enabled for this workspace AND the owner is still a
+-- workspace member — the same constraint dispatch and the daemon list use.
+SELECT ar.* FROM agent_runtime ar
+LEFT JOIN daemon d ON d.id = ar.daemon_ref
+WHERE ar.workspace_id = $1
+  AND (
+    ar.daemon_ref IS NULL
+    OR EXISTS (
+      SELECT 1 FROM daemon_workspace dw
+      JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+      WHERE dw.daemon_id = ar.daemon_ref
+        AND dw.workspace_id = ar.workspace_id
+        AND dw.enabled = TRUE
+    )
+  )
+ORDER BY ar.created_at ASC;
 
 -- name: GetAgentRuntime :one
 SELECT * FROM agent_runtime
@@ -50,9 +64,18 @@ SET auth_status = $2, updated_at = now()
 WHERE id = $1;
 
 -- name: UpdateRuntimesAuthStatusByDaemon :exec
-UPDATE agent_runtime
+-- Only touch runtimes for workspaces where the daemon is still enabled and
+-- the owner is still a member. Stale runtime rows in disabled / left
+-- workspaces stay frozen.
+UPDATE agent_runtime ar
 SET auth_status = $2, updated_at = now()
-WHERE daemon_ref = $1 AND provider = $3;
+FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+WHERE ar.daemon_ref = $1
+  AND ar.provider = $3
+  AND d.id = ar.daemon_ref
+  AND dw.workspace_id = ar.workspace_id;
 
 -- name: SetAgentRuntimeOffline :exec
 UPDATE agent_runtime
@@ -60,9 +83,17 @@ SET status = 'offline', updated_at = now()
 WHERE id = $1;
 
 -- name: UpdateRuntimesHeartbeatByDaemon :exec
-UPDATE agent_runtime
+-- A heartbeat only brings runtimes online in workspaces where the daemon is
+-- still enabled and the owner is still a member; stale assignments stay
+-- offline so they cannot serve traffic.
+UPDATE agent_runtime ar
 SET status = 'online', last_seen_at = now(), updated_at = now()
-WHERE daemon_ref = $1;
+FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+WHERE ar.daemon_ref = $1
+  AND d.id = ar.daemon_ref
+  AND dw.workspace_id = ar.workspace_id;
 
 -- name: SetRuntimesOfflineByDaemon :exec
 UPDATE agent_runtime
