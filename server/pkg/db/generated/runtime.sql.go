@@ -522,11 +522,12 @@ const updateRuntimesAuthStatusByDaemon = `-- name: UpdateRuntimesAuthStatusByDae
 UPDATE agent_runtime ar
 SET auth_status = $2, updated_at = now()
 FROM daemon d
-JOIN member m ON m.user_id = d.user_id
+JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
 WHERE ar.daemon_ref = $1
   AND ar.provider = $3
   AND d.id = ar.daemon_ref
-  AND m.workspace_id = ar.workspace_id
+  AND dw.workspace_id = ar.workspace_id
 `
 
 type UpdateRuntimesAuthStatusByDaemonParams struct {
@@ -535,9 +536,9 @@ type UpdateRuntimesAuthStatusByDaemonParams struct {
 	Provider   string      `json:"provider"`
 }
 
-// Keep auth state fresh for every workspace the daemon owner still belongs
-// to, even when the daemon is not workspace-visible there. Explicit issue
-// dispatches can target those hidden runtimes by daemon ID.
+// Only touch runtimes for workspaces where the daemon is still enabled and
+// the owner is still a member. Stale runtime rows in disabled / left
+// workspaces stay frozen.
 func (q *Queries) UpdateRuntimesAuthStatusByDaemon(ctx context.Context, arg UpdateRuntimesAuthStatusByDaemonParams) error {
 	_, err := q.db.Exec(ctx, updateRuntimesAuthStatusByDaemon, arg.DaemonRef, arg.AuthStatus, arg.Provider)
 	return err
@@ -547,15 +548,16 @@ const updateRuntimesHeartbeatByDaemon = `-- name: UpdateRuntimesHeartbeatByDaemo
 UPDATE agent_runtime ar
 SET status = 'online', last_seen_at = now(), updated_at = now()
 FROM daemon d
-JOIN member m ON m.user_id = d.user_id
+JOIN daemon_workspace dw ON dw.daemon_id = d.id AND dw.enabled = TRUE
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
 WHERE ar.daemon_ref = $1
   AND d.id = ar.daemon_ref
-  AND m.workspace_id = ar.workspace_id
+  AND dw.workspace_id = ar.workspace_id
 `
 
-// A heartbeat refreshes runtimes in every workspace the daemon owner still
-// belongs to. General workspace dispatch still filters hidden runtimes out;
-// explicit daemon-targeted dispatches can opt into them.
+// A heartbeat only brings runtimes online in workspaces where the daemon is
+// still enabled and the owner is still a member; stale assignments stay
+// offline so they cannot serve traffic.
 func (q *Queries) UpdateRuntimesHeartbeatByDaemon(ctx context.Context, daemonRef pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, updateRuntimesHeartbeatByDaemon, daemonRef)
 	return err
