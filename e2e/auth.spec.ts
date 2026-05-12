@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { loginAsDefault, openWorkspaceMenu } from "./helpers";
+import { loginAsDefault } from "./helpers";
 
 test.describe("Authentication", () => {
   test("login page renders correctly", async ({ page }) => {
@@ -37,10 +37,10 @@ test.describe("Authentication", () => {
   test("logout clears auth and exits dashboard", async ({ page }) => {
     await loginAsDefault(page);
 
-    // Open the workspace dropdown menu
-    await openWorkspaceMenu(page);
+    // Open the user menu in the sidebar footer.
+    await page.getByRole("button", { name: /e2e@multica\.ai/i }).click();
 
-    // Click "Log out" in the workspace dropdown.
+    // Click "Log out" in the user menu.
     await page.locator("text=Log out").click();
 
     // After logout the dashboard layout pushes us to / (landing).

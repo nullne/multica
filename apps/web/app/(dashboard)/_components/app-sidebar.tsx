@@ -265,6 +265,12 @@ export function AppSidebar() {
                       <UserCog className="h-3.5 w-3.5" />
                       Account settings
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => router.push("/account?tab=daemons")}
+                    >
+                      <Monitor className="h-3.5 w-3.5" />
+                      My daemons
+                    </DropdownMenuItem>
                   </DropdownMenuGroup>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem variant="destructive" onClick={logout}>

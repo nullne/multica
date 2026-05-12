@@ -124,4 +124,14 @@ describe("AppSidebar user menu", () => {
 
     expect(pushMock).toHaveBeenCalledWith("/account");
   });
+
+  it("navigates to personal daemon management from the user menu", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(screen.getByRole("button", { name: /Test User/i }));
+    await user.click(await screen.findByText("My daemons"));
+
+    expect(pushMock).toHaveBeenCalledWith("/account?tab=daemons");
+  });
 });
