@@ -290,41 +290,93 @@ function AgentListItem({
   const st = statusConfig[agent.status];
   const isArchived = !!agent.archived_at;
   const hasCompleteDispatchDefaults = !!agent.default_provider && !!agent.default_daemon_id;
+  const daemons = useRuntimeStore((s) => s.daemons);
+  const VisibilityIcon = agent.visibility === "workspace" ? Globe : Lock;
+  const codeAccess = agent.github_code_access ?? "read";
+  const defaultDaemon = agent.default_daemon_id
+    ? daemons.find((d) => d.id === agent.default_daemon_id)
+    : null;
+  const environmentLabel = defaultDaemon
+    ? defaultDaemon.device_name || defaultDaemon.daemon_id || "Default environment"
+    : "Any environment";
+  const providersLabel =
+    agent.providers?.length > 0 ? agent.providers.join(", ") : "No providers";
+  const maxTasks = agent.max_concurrent_tasks ?? 6;
 
   return (
     <button
       onClick={onClick}
-      className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
+      className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors ${
         isSelected ? "bg-accent" : "hover:bg-accent/50"
       }`}
     >
-      <ActorAvatar actorType="agent" actorId={agent.id} size={32} className={`rounded-lg ${isArchived ? "opacity-50 grayscale" : ""}`} />
+      <ActorAvatar
+        actorType="agent"
+        actorId={agent.id}
+        size={32}
+        className={`mt-0.5 shrink-0 rounded-lg ${isArchived ? "opacity-50 grayscale" : ""}`}
+      />
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className={`truncate text-sm font-medium ${isArchived ? "text-muted-foreground" : ""}`}>{agent.name}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={`truncate text-sm font-medium ${isArchived ? "text-muted-foreground" : ""}`}>
+            {agent.name}
+          </span>
         </div>
-        <div className="flex items-center gap-1.5 mt-0.5">
+
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
           {isArchived ? (
-            <span className="text-xs text-muted-foreground">Archived</span>
+            <span className="shrink-0 text-xs text-muted-foreground">Archived</span>
           ) : (
             <>
-              <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
-              <span className={`text-xs ${st.color}`}>{st.label}</span>
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot}`} />
+              <span className={`shrink-0 text-xs ${st.color}`}>{st.label}</span>
               {!hasCompleteDispatchDefaults && (
                 <>
-                  <span className="text-xs text-muted-foreground/40">&middot;</span>
-                  <span className="text-xs text-amber-600">Dispatch defaults incomplete</span>
-                </>
-              )}
-              {agent.providers?.length > 0 && (
-                <>
-                  <span className="text-xs text-muted-foreground/40">&middot;</span>
-                  <span className="text-xs text-muted-foreground">{agent.providers.join(", ")}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground/40">&middot;</span>
+                  <span className="shrink-0 text-xs text-amber-600">Dispatch defaults incomplete</span>
                 </>
               )}
             </>
           )}
+          <span className="shrink-0 text-xs text-muted-foreground/40">&middot;</span>
+          <span
+            className="truncate text-xs text-muted-foreground"
+            title={providersLabel}
+          >
+            {providersLabel}
+          </span>
+        </div>
+
+        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+          <span
+            className="flex items-center gap-1"
+            title={`Visibility: ${agent.visibility}`}
+          >
+            <VisibilityIcon className="h-3 w-3" />
+            <span className="capitalize">{agent.visibility}</span>
+          </span>
+          <span className="text-muted-foreground/40">&middot;</span>
+          <span
+            className="capitalize"
+            title={`GitHub code access: ${codeAccess}`}
+          >
+            {codeAccess}
+          </span>
+          <span className="text-muted-foreground/40">&middot;</span>
+          <span
+            className="flex min-w-0 max-w-full items-center gap-1"
+            title={defaultDaemon ? `Environment: ${environmentLabel}` : "No default environment"}
+          >
+            <Monitor className="h-3 w-3 shrink-0" />
+            <span className={`truncate ${defaultDaemon ? "" : "italic"}`}>
+              {environmentLabel}
+            </span>
+          </span>
+          <span className="text-muted-foreground/40">&middot;</span>
+          <span title={`Max concurrent tasks: ${maxTasks}`}>
+            {maxTasks} task{maxTasks === 1 ? "" : "s"}
+          </span>
         </div>
       </div>
     </button>
@@ -1154,6 +1206,7 @@ function SettingsTab({
   agent: Agent;
   onSave: (updates: Partial<Agent>) => Promise<void>;
 }) {
+  const workspace = useWorkspaceStore((s) => s.workspace);
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
@@ -1168,7 +1221,9 @@ function SettingsTab({
 
   const daemons = useRuntimeStore((s) => s.daemons);
   const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
-  useEffect(() => { fetchAllRuntimes(); }, [fetchAllRuntimes]);
+  useEffect(() => {
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1668,9 +1723,14 @@ export default function AgentsPage() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const allAgents = useWorkspaceStore((s) => s.agents);
   const refreshAgents = useWorkspaceStore((s) => s.refreshAgents);
+  const fetchAllRuntimes = useRuntimeStore((s) => s.fetchAll);
   const [selectedId, setSelectedId] = useState<string>("");
   const [showCreate, setShowCreate] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+
+  useEffect(() => {
+    if (workspace) fetchAllRuntimes();
+  }, [workspace, fetchAllRuntimes]);
 
   const activeAgents = allAgents.filter((a) => !a.archived_at);
   const archivedAgents = allAgents.filter((a) => !!a.archived_at);
