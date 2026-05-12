@@ -314,10 +314,10 @@ func TestSweepUpdatingDaemonMarksOffline(t *testing.T) {
 	// Create a daemon in 'updating' status with stale last_seen_at.
 	var daemonID string
 	err := testPool.QueryRow(ctx, `
-		INSERT INTO daemon (workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
+		INSERT INTO daemon (user_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
 		VALUES ($1, 'sweep-updating-test', 'updating', '0.1.0', 'test-box', '', '{}'::jsonb, now() - interval '5 minutes')
 		RETURNING id
-	`, testWorkspaceID).Scan(&daemonID)
+	`, testUserID).Scan(&daemonID)
 	if err != nil {
 		t.Fatalf("failed to create test daemon: %v", err)
 	}
@@ -379,10 +379,10 @@ func TestSweepOnlineDaemonNotSweptWhenRecent(t *testing.T) {
 	// Create a daemon with recent last_seen_at.
 	var daemonID string
 	err := testPool.QueryRow(ctx, `
-		INSERT INTO daemon (workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
+		INSERT INTO daemon (user_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
 		VALUES ($1, 'sweep-recent-test', 'online', '0.1.0', 'test-box', '', '{}'::jsonb, now())
 		RETURNING id
-	`, testWorkspaceID).Scan(&daemonID)
+	`, testUserID).Scan(&daemonID)
 	if err != nil {
 		t.Fatalf("failed to create test daemon: %v", err)
 	}
@@ -437,10 +437,10 @@ func TestSweepFailsTasksForUpdatingRuntimes(t *testing.T) {
 	// Create a daemon + runtime in 'updating' with stale heartbeat.
 	var daemonID string
 	err = testPool.QueryRow(ctx, `
-		INSERT INTO daemon (workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
+		INSERT INTO daemon (user_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at)
 		VALUES ($1, 'sweep-task-test', 'updating', '0.1.0', 'test-box', '', '{}'::jsonb, now() - interval '5 minutes')
 		RETURNING id
-	`, testWorkspaceID).Scan(&daemonID)
+	`, testUserID).Scan(&daemonID)
 	if err != nil {
 		t.Fatalf("failed to create test daemon: %v", err)
 	}

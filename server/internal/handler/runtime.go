@@ -12,19 +12,19 @@ import (
 )
 
 type DaemonResponse struct {
-	ID          string   `json:"id"`
-	WorkspaceID string   `json:"workspace_id"`
-	DaemonID    string   `json:"daemon_id"`
-	Status      string   `json:"status"`
-	CLIVersion  string   `json:"cli_version"`
-	DeviceName  string   `json:"device_name"`
-	DeviceInfo  string   `json:"device_info"`
-	Labels      []string `json:"labels"`
-	Metadata    any      `json:"metadata"`
-	LastSeenAt  *string  `json:"last_seen_at"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
-	ArchivedAt  *string  `json:"archived_at"`
+	ID         string   `json:"id"`
+	UserID     string   `json:"user_id"`
+	DaemonID   string   `json:"daemon_id"`
+	Status     string   `json:"status"`
+	CLIVersion string   `json:"cli_version"`
+	DeviceName string   `json:"device_name"`
+	DeviceInfo string   `json:"device_info"`
+	Labels     []string `json:"labels"`
+	Metadata   any      `json:"metadata"`
+	LastSeenAt *string  `json:"last_seen_at"`
+	CreatedAt  string   `json:"created_at"`
+	UpdatedAt  string   `json:"updated_at"`
+	ArchivedAt *string  `json:"archived_at"`
 }
 
 func daemonToResponse(d db.Daemon) DaemonResponse {
@@ -40,32 +40,75 @@ func daemonToResponse(d db.Daemon) DaemonResponse {
 		labels = []string{}
 	}
 	return DaemonResponse{
-		ID:          uuidToString(d.ID),
-		WorkspaceID: uuidToString(d.WorkspaceID),
-		DaemonID:    d.DaemonID,
-		Status:      d.Status,
-		CLIVersion:  d.CliVersion,
-		DeviceName:  d.DeviceName,
-		DeviceInfo:  d.DeviceInfo,
-		Labels:      labels,
-		Metadata:    metadata,
-		LastSeenAt:  timestampToPtr(d.LastSeenAt),
-		CreatedAt:   timestampToString(d.CreatedAt),
-		UpdatedAt:   timestampToString(d.UpdatedAt),
-		ArchivedAt:  timestampToPtr(d.ArchivedAt),
+		ID:         uuidToString(d.ID),
+		UserID:     uuidToString(d.UserID),
+		DaemonID:   d.DaemonID,
+		Status:     d.Status,
+		CLIVersion: d.CliVersion,
+		DeviceName: d.DeviceName,
+		DeviceInfo: d.DeviceInfo,
+		Labels:     labels,
+		Metadata:   metadata,
+		LastSeenAt: timestampToPtr(d.LastSeenAt),
+		CreatedAt:  timestampToString(d.CreatedAt),
+		UpdatedAt:  timestampToString(d.UpdatedAt),
+		ArchivedAt: timestampToPtr(d.ArchivedAt),
 	}
 }
 
-func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
-	daemonID := chi.URLParam(r, "daemonId")
-
+// requireDaemonReadAccess grants read access to a daemon for either:
+//   - its owner, or
+//   - a member of a workspace where the daemon is currently enabled.
+//
+// This is intended for read-only routes that surface daemon state to workspace
+// members (e.g. the daemon list). Disabled assignments do not grant access —
+// a daemon disabled for a workspace must look gone to non-owner members.
+//
+// For routes that modify a daemon (PATCH, archive, restore) use
+// requireOwnedDaemon instead so workspace members can't manage someone else's
+// machine.
+func (h *Handler) requireDaemonReadAccess(w http.ResponseWriter, r *http.Request, daemonID, workspaceID string) (db.Daemon, bool) {
 	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "daemon not found")
-		return
+		return db.Daemon{}, false
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return db.Daemon{}, false
+	}
+
+	if uuidToString(d.UserID) == userID {
+		return d, true
+	}
+
+	if workspaceID != "" {
+		if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "daemon not found"); ok {
+			if _, err := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+				UserID:      d.UserID,
+				WorkspaceID: parseUUID(workspaceID),
+			}); err != nil {
+				writeError(w, http.StatusNotFound, "daemon not found")
+				return db.Daemon{}, false
+			}
+
+			if assignment, err := h.Queries.GetDaemonWorkspace(r.Context(), db.GetDaemonWorkspaceParams{
+				DaemonID:    d.ID,
+				WorkspaceID: parseUUID(workspaceID),
+			}); err == nil && assignment.Enabled {
+				return d, true
+			}
+		}
+	}
+
+	writeError(w, http.StatusNotFound, "daemon not found")
+	return db.Daemon{}, false
+}
+
+func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
+	d, ok := h.requireOwnedDaemon(w, r)
+	if !ok {
 		return
 	}
 
@@ -78,7 +121,7 @@ func (h *Handler) UpdateDaemon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params := db.UpdateDaemonFieldsParams{ID: parseUUID(daemonID)}
+	params := db.UpdateDaemonFieldsParams{ID: d.ID}
 	if req.DeviceName != nil {
 		params.DeviceName = pgtype.Text{String: *req.DeviceName, Valid: true}
 	}
@@ -110,6 +153,51 @@ type AgentRuntimeResponse struct {
 	LastSeenAt  *string `json:"last_seen_at"`
 	CreatedAt   string  `json:"created_at"`
 	UpdatedAt   string  `json:"updated_at"`
+}
+
+// requireRuntimeAccess loads a runtime and verifies the caller can see it
+// from a workspace context. Workspace membership is always required. For
+// local runtimes (daemon_ref set) the daemon must also be currently enabled
+// for the runtime's workspace AND its owner must still be a member — the
+// same constraint used by dispatch and the daemon list, so a disabled or
+// abandoned local runtime is uniformly hidden across all workspace-scoped
+// routes.
+func (h *Handler) requireRuntimeAccess(w http.ResponseWriter, r *http.Request) (db.AgentRuntime, bool) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), parseUUID(runtimeID))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return db.AgentRuntime{}, false
+	}
+
+	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
+		return db.AgentRuntime{}, false
+	}
+
+	if rt.DaemonRef.Valid {
+		d, err := h.Queries.GetDaemon(r.Context(), rt.DaemonRef)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "runtime not found")
+			return db.AgentRuntime{}, false
+		}
+		if _, err := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+			UserID:      d.UserID,
+			WorkspaceID: rt.WorkspaceID,
+		}); err != nil {
+			writeError(w, http.StatusNotFound, "runtime not found")
+			return db.AgentRuntime{}, false
+		}
+		assignment, err := h.Queries.GetDaemonWorkspace(r.Context(), db.GetDaemonWorkspaceParams{
+			DaemonID:    rt.DaemonRef,
+			WorkspaceID: rt.WorkspaceID,
+		})
+		if err != nil || !assignment.Enabled {
+			writeError(w, http.StatusNotFound, "runtime not found")
+			return db.AgentRuntime{}, false
+		}
+	}
+
+	return rt, true
 }
 
 // effectiveAuthStatus computes the auth status considering workspace-level
@@ -215,17 +303,11 @@ func (h *Handler) ReportRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 
 // GetRuntimeUsage returns usage data for a runtime (protected route).
 func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), parseUUID(runtimeID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
+	rt, ok := h.requireRuntimeAccess(w, r)
+	if !ok {
 		return
 	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
-		return
-	}
+	runtimeID := uuidToString(rt.ID)
 
 	limit := int32(90)
 	if l := r.URL.Query().Get("days"); l != "" {
@@ -235,7 +317,7 @@ func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.Queries.ListRuntimeUsage(r.Context(), db.ListRuntimeUsageParams{
-		RuntimeID: parseUUID(runtimeID),
+		RuntimeID: rt.ID,
 		Limit:     limit,
 	})
 	if err != nil {
@@ -262,19 +344,12 @@ func (h *Handler) GetRuntimeUsage(w http.ResponseWriter, r *http.Request) {
 
 // GetRuntimeTaskActivity returns hourly task activity distribution for a runtime.
 func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), parseUUID(runtimeID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
+	rt, ok := h.requireRuntimeAccess(w, r)
+	if !ok {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
-		return
-	}
-
-	rows, err := h.Queries.GetRuntimeTaskHourlyActivity(r.Context(), parseUUID(runtimeID))
+	rows, err := h.Queries.GetRuntimeTaskHourlyActivity(r.Context(), rt.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get task activity")
 		return
@@ -297,13 +372,8 @@ func (h *Handler) GetRuntimeTaskActivity(w http.ResponseWriter, r *http.Request)
 func (h *Handler) GetDaemonEnv(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+	d, ok := h.requireDaemonReadAccess(w, r, daemonID, resolveWorkspaceID(r))
+	if !ok {
 		return
 	}
 
@@ -331,7 +401,7 @@ func (h *Handler) GetDaemonEnv(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)
 
-	daemons, err := h.Queries.ListDaemons(r.Context(), parseUUID(workspaceID))
+	daemons, err := h.Queries.ListDaemonsForWorkspace(r.Context(), parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list daemons")
 		return
@@ -348,13 +418,8 @@ func (h *Handler) ListDaemons(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetDaemonByID(w http.ResponseWriter, r *http.Request) {
 	daemonID := chi.URLParam(r, "daemonId")
 
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
-		return
-	}
-
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
+	d, ok := h.requireDaemonReadAccess(w, r, daemonID, resolveWorkspaceID(r))
+	if !ok {
 		return
 	}
 
@@ -362,19 +427,12 @@ func (h *Handler) GetDaemonByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
-	daemonID := chi.URLParam(r, "daemonId")
-
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
+	d, ok := h.requireOwnedDaemon(w, r)
+	if !ok {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
-		return
-	}
-
-	updated, err := h.Queries.ArchiveDaemon(r.Context(), parseUUID(daemonID))
+	updated, err := h.Queries.ArchiveDaemon(r.Context(), d.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to archive daemon")
 		return
@@ -384,19 +442,12 @@ func (h *Handler) ArchiveDaemon(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RestoreDaemon(w http.ResponseWriter, r *http.Request) {
-	daemonID := chi.URLParam(r, "daemonId")
-
-	d, err := h.Queries.GetDaemon(r.Context(), parseUUID(daemonID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "daemon not found")
+	d, ok := h.requireOwnedDaemon(w, r)
+	if !ok {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(d.WorkspaceID), "daemon not found"); !ok {
-		return
-	}
-
-	updated, err := h.Queries.RestoreDaemon(r.Context(), parseUUID(daemonID))
+	updated, err := h.Queries.RestoreDaemon(r.Context(), d.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to restore daemon")
 		return

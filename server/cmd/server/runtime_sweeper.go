@@ -63,10 +63,18 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, bus *events.Bu
 		return
 	}
 
-	// Collect unique workspace IDs to notify (from both daemons and runtimes).
+	// Collect unique workspace IDs to notify. Stale daemons map to many
+	// workspaces via daemon_workspace, so look them up; stale runtime rows
+	// already carry workspace_id directly.
 	workspaces := make(map[string]bool)
 	for _, row := range staleDaemons {
-		workspaces[util.UUIDToString(row.WorkspaceID)] = true
+		assignments, err := queries.ListWorkspacesForDaemon(ctx, row.ID)
+		if err != nil {
+			continue
+		}
+		for _, a := range assignments {
+			workspaces[util.UUIDToString(a.WorkspaceID)] = true
+		}
 	}
 	for _, row := range staleRows {
 		workspaces[util.UUIDToString(row.WorkspaceID)] = true

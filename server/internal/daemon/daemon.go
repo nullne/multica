@@ -19,11 +19,11 @@ import (
 	"github.com/nullne/multica/server/pkg/agent"
 )
 
-// workspaceState tracks registered runtimes for a single workspace.
+// workspaceState tracks the runtimes the server projected for one workspace
+// (per-(workspace, provider) rows the scheduler dispatches to).
 type workspaceState struct {
 	workspaceID string
 	runtimeIDs  []string
-	daemonUUID  string // server-assigned daemon row UUID for this workspace
 }
 
 // Daemon is the local agent runtime that polls for and executes tasks.
@@ -34,12 +34,13 @@ type Daemon struct {
 	logger    *slog.Logger
 
 	mu              sync.Mutex
+	daemonUUID      string                    // server-assigned daemon row UUID (user-scoped)
 	workspaces      map[string]*workspaceState
-	runtimeIndex    map[string]Runtime            // runtimeID -> Runtime for provider lookups
-	taskBranches    map[string]string             // taskID -> latest checked out branch
-	taskTokens      map[string]string             // taskID -> GitHub installation token (cleared on task end)
-	providerConfigs map[string]ProviderConfig     // provider -> workspace-level config (API keys, etc.)
-	reloading       sync.Mutex                    // prevents concurrent reloadWorkspaces
+	runtimeIndex    map[string]Runtime        // runtimeID -> Runtime for provider lookups
+	taskBranches    map[string]string         // taskID -> latest checked out branch
+	taskTokens      map[string]string         // taskID -> GitHub installation token (cleared on task end)
+	providerConfigs map[string]ProviderConfig // provider -> workspace-level config (API keys, etc.)
+	reloading       sync.Mutex                // prevents concurrent reload
 
 	cancelFunc    context.CancelFunc // set by Run(); called by triggerRestart
 	restartBinary string             // non-empty after a successful update; path to the new binary
@@ -90,25 +91,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Load and register watched workspaces.
-	if err := d.loadWatchedWorkspaces(ctx); err != nil {
+	// Register once with the server (user-scoped) and load workspace
+	// assignments from the response.
+	if err := d.registerWithServer(ctx); err != nil {
 		return err
 	}
 
 	// Deregister runtimes on shutdown (uses a fresh context since ctx will be cancelled).
-	defer d.deregisterRuntimes()
+	defer d.deregisterDaemon()
 
 	if len(d.allRuntimeIDs()) == 0 {
 		d.logger.Warn("no runtimes registered — daemon will wait for providers to become available via heartbeat")
 	}
 
-	// Start config watcher for hot-reload.
-	go d.configWatchLoop(ctx)
-
-	// Start workspace sync loop to discover newly created workspaces.
-	go d.workspaceSyncLoop(ctx)
-
 	go d.heartbeatLoop(ctx)
+	go d.assignmentSyncLoop(ctx)
 	go d.usageScanLoop(ctx)
 	go d.serveHealth(ctx, healthLn, time.Now())
 	return d.pollLoop(ctx)
@@ -120,38 +117,23 @@ func (d *Daemon) RestartBinary() string {
 	return d.restartBinary
 }
 
-// deregisterRuntimes notifies the server that all runtimes are going offline.
-func (d *Daemon) deregisterRuntimes() {
+// deregisterDaemon notifies the server that the daemon is shutting down so
+// runtimes can be flipped to offline immediately rather than waiting for the
+// stale sweeper.
+func (d *Daemon) deregisterDaemon() {
+	d.mu.Lock()
+	uuid := d.daemonUUID
+	d.mu.Unlock()
+	if uuid == "" {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	var legacyRuntimeIDs []string
-	var deregistered int
-
-	for _, ws := range d.allWorkspaceStates() {
-		if ws.daemonUUID == "" {
-			legacyRuntimeIDs = append(legacyRuntimeIDs, ws.runtimeIDs...)
-			continue
-		}
-		if err := d.client.DeregisterDaemon(ctx, ws.daemonUUID); err != nil {
-			d.logger.Warn("failed to deregister daemon on shutdown", "workspace_id", ws.workspaceID, "error", err)
-		} else {
-			deregistered++
-		}
+	if err := d.client.DeregisterDaemon(ctx, uuid); err != nil {
+		d.logger.Warn("failed to deregister daemon on shutdown", "error", err)
+		return
 	}
-
-	if deregistered > 0 {
-		d.logger.Info("deregistered daemons", "count", deregistered)
-	}
-
-	// Legacy fallback for workspaces without a daemon UUID.
-	if len(legacyRuntimeIDs) > 0 {
-		if err := d.client.Deregister(ctx, legacyRuntimeIDs); err != nil {
-			d.logger.Warn("failed to deregister runtimes on shutdown", "error", err)
-		} else {
-			d.logger.Info("deregistered runtimes", "count", len(legacyRuntimeIDs))
-		}
-	}
+	d.logger.Info("deregistered daemon")
 }
 
 // resolveAuth loads the auth token from the CLI config for the active profile.
@@ -173,48 +155,104 @@ func (d *Daemon) resolveAuth() error {
 	return nil
 }
 
-// loadWatchedWorkspaces reads watched workspaces from CLI config and registers runtimes.
-func (d *Daemon) loadWatchedWorkspaces(ctx context.Context) error {
-	cfg, err := cli.LoadCLIConfigForProfile(d.cfg.Profile)
-	if err != nil {
-		return fmt.Errorf("load CLI config: %w", err)
-	}
+// registerWithServer registers this daemon (user-scoped) and projects the
+// returned workspace assignments into local state. The daemon now learns the
+// set of workspaces it serves from the server rather than from a local
+// watched-workspaces config — workspace assignments are managed via the API
+// (see `multica daemon enable <workspace-id>`).
+func (d *Daemon) registerWithServer(ctx context.Context) error {
+	runtimes := d.detectLocalRuntimes(ctx)
 
-	if len(cfg.WatchedWorkspaces) == 0 {
-		return fmt.Errorf("no watched workspaces configured: run 'multica workspace watch <id>' to add one")
-	}
-
-	for _, ws := range cfg.WatchedWorkspaces {
-		resp, err := d.registerRuntimesForWorkspace(ctx, ws.ID)
+	// Bootstrap path: nothing installed locally yet. Register with no
+	// runtimes so the server still returns provider_config; auto-install
+	// missing CLIs; re-detect and register again.
+	if len(runtimes) == 0 {
+		boot, err := d.doRegister(ctx, nil)
 		if err != nil {
-			d.logger.Warn("failed to register runtimes", "workspace_id", ws.ID, "name", ws.Name, "error", err)
-			// Still track the workspace so heartbeat/reconcile can register runtimes later.
+			return fmt.Errorf("bootstrap register: %w", err)
+		}
+		if resp := boot; resp.Daemon != nil {
 			d.mu.Lock()
-			if _, ok := d.workspaces[ws.ID]; !ok {
-				d.workspaces[ws.ID] = &workspaceState{workspaceID: ws.ID}
+			d.daemonUUID = resp.Daemon.ID
+			d.mu.Unlock()
+		}
+		if boot.ProviderConfig != nil {
+			d.mu.Lock()
+			for k, v := range boot.ProviderConfig {
+				d.providerConfigs[k] = v
 			}
 			d.mu.Unlock()
-			continue
+			d.autoInstallProviders(ctx, boot.ProviderConfig)
 		}
-		runtimeIDs := make([]string, len(resp.Runtimes))
-		for i, rt := range resp.Runtimes {
-			runtimeIDs[i] = rt.ID
-			d.logger.Info("registered runtime", "workspace_id", ws.ID, "runtime_id", rt.ID, "provider", rt.Provider)
-		}
-		var daemonUUID string
-		if resp.Daemon != nil {
-			daemonUUID = resp.Daemon.ID
-		}
+		runtimes = d.detectLocalRuntimes(ctx)
+	}
+
+	resp, err := d.doRegister(ctx, runtimes)
+	if err != nil {
+		return fmt.Errorf("register daemon: %w", err)
+	}
+
+	if resp.Daemon != nil {
 		d.mu.Lock()
-		d.workspaces[ws.ID] = &workspaceState{workspaceID: ws.ID, runtimeIDs: runtimeIDs, daemonUUID: daemonUUID}
-		for _, rt := range resp.Runtimes {
-			d.runtimeIndex[rt.ID] = rt
+		d.daemonUUID = resp.Daemon.ID
+		d.mu.Unlock()
+	}
+
+	if resp.ProviderConfig != nil {
+		d.mu.Lock()
+		for k, v := range resp.ProviderConfig {
+			d.providerConfigs[k] = v
 		}
 		d.mu.Unlock()
 
-		d.logger.Info("watching workspace", "workspace_id", ws.ID, "name", ws.Name, "runtimes", len(resp.Runtimes), "repos", len(resp.Repos))
+		agentsBefore := len(d.cfg.Agents)
+		d.autoInstallProviders(ctx, resp.ProviderConfig)
+		if len(d.cfg.Agents) > agentsBefore {
+			updated := d.detectLocalRuntimes(ctx)
+			if len(updated) > len(runtimes) {
+				d.logger.Info("re-registering with newly installed providers", "before", len(runtimes), "after", len(updated))
+				if reResp, err := d.doRegister(ctx, updated); err == nil {
+					resp = reResp
+				}
+			}
+		}
+	}
+
+	d.applyRegisterResponse(resp)
+
+	switch {
+	case len(resp.Workspaces) == 0:
+		d.logger.Warn("daemon registered but has no workspace assignments — use 'multica daemon enable <workspace-id>' to enable one")
+	default:
+		for _, ws := range resp.Workspaces {
+			d.logger.Info("workspace assignment active",
+				"workspace_id", ws.WorkspaceID,
+				"name", ws.WorkspaceName,
+				"runtimes", len(ws.Runtimes),
+			)
+		}
 	}
 	return nil
+}
+
+// applyRegisterResponse replaces the daemon's workspace+runtime state with the
+// projection returned by the server.
+func (d *Daemon) applyRegisterResponse(resp *RegisterResponse) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.workspaces = make(map[string]*workspaceState, len(resp.Workspaces))
+	d.runtimeIndex = make(map[string]Runtime)
+	for _, ws := range resp.Workspaces {
+		runtimeIDs := make([]string, len(ws.Runtimes))
+		for i, rt := range ws.Runtimes {
+			runtimeIDs[i] = rt.ID
+			d.runtimeIndex[rt.ID] = rt
+		}
+		d.workspaces[ws.WorkspaceID] = &workspaceState{
+			workspaceID: ws.WorkspaceID,
+			runtimeIDs:  runtimeIDs,
+		}
+	}
 }
 
 // allRuntimeIDs returns all runtime IDs across all watched workspaces.
@@ -226,18 +264,6 @@ func (d *Daemon) allRuntimeIDs() []string {
 		ids = append(ids, ws.runtimeIDs...)
 	}
 	return ids
-}
-
-// allWorkspaceStates returns a snapshot of all workspace states.
-// Safe to use outside the mutex for iteration during network calls.
-func (d *Daemon) allWorkspaceStates() []workspaceState {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	states := make([]workspaceState, 0, len(d.workspaces))
-	for _, ws := range d.workspaces {
-		states = append(states, *ws)
-	}
-	return states
 }
 
 // findRuntime looks up a Runtime by its ID.
@@ -259,64 +285,6 @@ func (d *Daemon) providerToRuntimeMap() map[string]string {
 		m[rt.Provider] = id
 	}
 	return m
-}
-
-func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
-	runtimes := d.detectLocalRuntimes(ctx)
-
-	// If no local agents, do a bootstrap registration to fetch workspace
-	// provider config, auto-install missing CLIs, then re-detect.
-	if len(runtimes) == 0 {
-		resp, err := d.doRegister(ctx, workspaceID, nil)
-		if err != nil {
-			return nil, fmt.Errorf("bootstrap register: %w", err)
-		}
-		if resp.ProviderConfig != nil {
-			d.mu.Lock()
-			for k, v := range resp.ProviderConfig {
-				d.providerConfigs[k] = v
-			}
-			d.mu.Unlock()
-			d.autoInstallProviders(ctx, resp.ProviderConfig)
-		}
-		runtimes = d.detectLocalRuntimes(ctx)
-		if len(runtimes) == 0 {
-			return nil, fmt.Errorf("no agent runtimes could be registered (even after auto-install)")
-		}
-	}
-
-	resp, err := d.doRegister(ctx, workspaceID, runtimes)
-	if err != nil {
-		return nil, fmt.Errorf("register runtimes: %w", err)
-	}
-	if len(resp.Runtimes) == 0 {
-		return nil, fmt.Errorf("register runtimes: empty response")
-	}
-
-	// Store provider configs and auto-install any remaining missing providers.
-	if resp.ProviderConfig != nil {
-		d.mu.Lock()
-		for k, v := range resp.ProviderConfig {
-			d.providerConfigs[k] = v
-		}
-		d.mu.Unlock()
-
-		agentsBefore := len(d.cfg.Agents)
-		d.autoInstallProviders(ctx, resp.ProviderConfig)
-
-		// If new agents were installed, re-register so they get runtime entries.
-		if len(d.cfg.Agents) > agentsBefore {
-			updated := d.detectLocalRuntimes(ctx)
-			if len(updated) > len(runtimes) {
-				d.logger.Info("re-registering with newly installed providers", "before", len(runtimes), "after", len(updated))
-				if reResp, err := d.doRegister(ctx, workspaceID, updated); err == nil {
-					resp = reResp
-				}
-			}
-		}
-	}
-
-	return resp, nil
 }
 
 // detectLocalRuntimes probes locally installed agent CLIs and returns their
@@ -348,17 +316,16 @@ func (d *Daemon) detectLocalRuntimes(ctx context.Context) []map[string]string {
 
 // doRegister sends a registration request to the server. runtimes may be nil
 // for a bootstrap registration (to fetch provider config before any CLIs are installed).
-func (d *Daemon) doRegister(ctx context.Context, workspaceID string, runtimes []map[string]string) (*RegisterResponse, error) {
+func (d *Daemon) doRegister(ctx context.Context, runtimes []map[string]string) (*RegisterResponse, error) {
 	if runtimes == nil {
 		runtimes = []map[string]string{}
 	}
 	req := map[string]any{
-		"workspace_id": workspaceID,
-		"daemon_id":    d.cfg.DaemonID,
-		"device_name":  d.cfg.DeviceName,
-		"cli_version":  d.cfg.CLIVersion,
-		"runtimes":     runtimes,
-		"env_vars":     collectSanitizedEnv(),
+		"daemon_id":   d.cfg.DaemonID,
+		"device_name": d.cfg.DeviceName,
+		"cli_version": d.cfg.CLIVersion,
+		"runtimes":    runtimes,
+		"env_vars":    collectSanitizedEnv(),
 	}
 	return d.client.Register(ctx, req)
 }
@@ -408,34 +375,16 @@ func (d *Daemon) reconcileProviders(ctx context.Context, config map[string]Provi
 		return
 	}
 
-	// New agents installed — re-register all workspaces so the new runtimes
-	// get entries on the server and can receive tasks.
-	d.mu.Lock()
-	wsIDs := make([]string, 0, len(d.workspaces))
-	for id := range d.workspaces {
-		wsIDs = append(wsIDs, id)
+	// New agents installed — re-register the daemon so the server projects
+	// the new runtime rows into every enabled workspace.
+	runtimes := d.detectLocalRuntimes(ctx)
+	resp, err := d.doRegister(ctx, runtimes)
+	if err != nil {
+		d.logger.Warn("re-register after auto-install failed", "error", err)
+		return
 	}
-	d.mu.Unlock()
-
-	for _, wsID := range wsIDs {
-		runtimes := d.detectLocalRuntimes(ctx)
-		resp, err := d.doRegister(ctx, wsID, runtimes)
-		if err != nil {
-			d.logger.Warn("re-register after auto-install failed", "workspace_id", wsID, "error", err)
-			continue
-		}
-		runtimeIDs := make([]string, len(resp.Runtimes))
-		for i, rt := range resp.Runtimes {
-			runtimeIDs[i] = rt.ID
-		}
-		d.mu.Lock()
-		d.workspaces[wsID] = &workspaceState{workspaceID: wsID, runtimeIDs: runtimeIDs}
-		for _, rt := range resp.Runtimes {
-			d.runtimeIndex[rt.ID] = rt
-		}
-		d.mu.Unlock()
-		d.logger.Info("re-registered with new providers", "workspace_id", wsID, "runtimes", len(resp.Runtimes))
-	}
+	d.applyRegisterResponse(resp)
+	d.logger.Info("re-registered daemon with new providers", "workspaces", len(resp.Workspaces))
 }
 
 // autoInstallProviders installs code agent CLIs that are enabled in the workspace
@@ -524,47 +473,11 @@ func providerBinaryName(provider string) string {
 	}
 }
 
-// configWatchLoop periodically checks for config file changes and reloads workspaces.
-func (d *Daemon) configWatchLoop(ctx context.Context) {
-	configPath, err := cli.CLIConfigPathForProfile(d.cfg.Profile)
-	if err != nil {
-		d.logger.Warn("cannot watch config file", "error", err)
-		return
-	}
-
-	var lastModTime time.Time
-	if info, err := os.Stat(configPath); err == nil {
-		lastModTime = info.ModTime()
-	}
-
-	ticker := time.NewTicker(DefaultConfigReloadInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			info, err := os.Stat(configPath)
-			if err != nil {
-				continue
-			}
-			if !info.ModTime().After(lastModTime) {
-				continue
-			}
-			lastModTime = info.ModTime()
-			d.reloadWorkspaces(ctx)
-		}
-	}
-}
-
-// workspaceSyncLoop periodically fetches the user's workspaces from the API
-// and adds any new ones to the CLI config. The configWatchLoop will then
-// detect the config change and register runtimes for the new workspaces.
-func (d *Daemon) workspaceSyncLoop(ctx context.Context) {
-	// Run immediately on startup before entering the periodic loop.
-	d.syncWorkspacesFromAPI(ctx)
-
+// assignmentSyncLoop periodically polls the server for the daemon's enabled
+// workspace assignments and re-registers when they change. Server-side
+// daemon_workspace is the source of truth, so the daemon picks up enable /
+// disable operations issued through the API or CLI without needing a restart.
+func (d *Daemon) assignmentSyncLoop(ctx context.Context) {
 	ticker := time.NewTicker(DefaultWorkspaceSyncInterval)
 	defer ticker.Stop()
 
@@ -573,116 +486,68 @@ func (d *Daemon) workspaceSyncLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			d.syncWorkspacesFromAPI(ctx)
+			d.syncAssignments(ctx)
 		}
 	}
 }
 
-// syncWorkspacesFromAPI fetches all workspaces the user belongs to and adds
-// any missing ones to the CLI config's watched list.
-func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) {
-	apiCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	workspaces, err := d.client.ListWorkspaces(apiCtx)
-	if err != nil {
-		d.logger.Debug("workspace sync: failed to list workspaces", "error", err)
-		return
-	}
-
-	cfg, err := cli.LoadCLIConfigForProfile(d.cfg.Profile)
-	if err != nil {
-		d.logger.Warn("workspace sync: failed to load config", "error", err)
-		return
-	}
-
-	var added int
-	for _, ws := range workspaces {
-		if cfg.AddWatchedWorkspace(ws.ID, ws.Name) {
-			added++
-			d.logger.Info("workspace sync: discovered new workspace", "workspace_id", ws.ID, "name", ws.Name)
-		}
-	}
-
-	if added == 0 {
-		return
-	}
-
-	if err := cli.SaveCLIConfigForProfile(cfg, d.cfg.Profile); err != nil {
-		d.logger.Warn("workspace sync: failed to save config", "error", err)
-		return
-	}
-	d.logger.Info("workspace sync: added new workspace(s) to config", "count", added)
-}
-
-// reloadWorkspaces reconciles the active workspace set with the config file.
-// NOTE: Token changes (e.g. re-login as a different user) are not picked up;
-// the daemon must be restarted for a new auth token to take effect.
-func (d *Daemon) reloadWorkspaces(ctx context.Context) {
+// syncAssignments compares the server's enabled-workspace set for this daemon
+// against local state and re-registers if they diverge.
+func (d *Daemon) syncAssignments(ctx context.Context) {
 	d.reloading.Lock()
 	defer d.reloading.Unlock()
 
-	cfg, err := cli.LoadCLIConfigForProfile(d.cfg.Profile)
-	if err != nil {
-		d.logger.Warn("reload config failed", "error", err)
-		return
-	}
-
-	newIDs := make(map[string]string) // id -> name
-	for _, ws := range cfg.WatchedWorkspaces {
-		newIDs[ws.ID] = ws.Name
-	}
-
 	d.mu.Lock()
-	currentIDs := make(map[string]bool)
+	daemonUUID := d.daemonUUID
+	currentIDs := make(map[string]bool, len(d.workspaces))
 	for id := range d.workspaces {
 		currentIDs[id] = true
 	}
 	d.mu.Unlock()
 
-	// Register runtimes for newly added workspaces.
-	for id, name := range newIDs {
-		if !currentIDs[id] {
-			resp, err := d.registerRuntimesForWorkspace(ctx, id)
-			if err != nil {
-				d.logger.Error("register runtimes for new workspace failed", "workspace_id", id, "error", err)
-				continue
-			}
-			runtimeIDs := make([]string, len(resp.Runtimes))
-			for i, rt := range resp.Runtimes {
-				runtimeIDs[i] = rt.ID
-			}
-			var daemonUUID string
-			if resp.Daemon != nil {
-				daemonUUID = resp.Daemon.ID
-			}
-			d.mu.Lock()
-			d.workspaces[id] = &workspaceState{workspaceID: id, runtimeIDs: runtimeIDs, daemonUUID: daemonUUID}
-			for _, rt := range resp.Runtimes {
-				d.runtimeIndex[rt.ID] = rt
-			}
-			d.mu.Unlock()
+	if daemonUUID == "" {
+		return
+	}
 
-			d.logger.Info("now watching workspace", "workspace_id", id, "name", name)
+	apiCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	assignments, err := d.client.ListMyDaemonWorkspaces(apiCtx, daemonUUID)
+	if err != nil {
+		d.logger.Debug("assignment sync failed", "error", err)
+		return
+	}
+
+	enabledIDs := make(map[string]bool)
+	for _, a := range assignments {
+		if a.Enabled {
+			enabledIDs[a.WorkspaceID] = true
 		}
 	}
 
-	// Remove workspaces no longer in config.
-	// NOTE: runtimes are not deregistered server-side; they will go offline
-	// after heartbeats stop arriving (within HeartbeatInterval).
-	for id := range currentIDs {
-		if _, ok := newIDs[id]; !ok {
-			d.mu.Lock()
-			if ws, exists := d.workspaces[id]; exists {
-				for _, rid := range ws.runtimeIDs {
-					delete(d.runtimeIndex, rid)
-				}
-			}
-			delete(d.workspaces, id)
-			d.mu.Unlock()
-			d.logger.Info("stopped watching workspace", "workspace_id", id)
+	if mapsEqual(currentIDs, enabledIDs) {
+		return
+	}
+
+	d.logger.Info("daemon assignments changed, re-registering", "before", len(currentIDs), "after", len(enabledIDs))
+	resp, err := d.doRegister(ctx, d.detectLocalRuntimes(ctx))
+	if err != nil {
+		d.logger.Warn("re-register after assignment change failed", "error", err)
+		return
+	}
+	d.applyRegisterResponse(resp)
+}
+
+func mapsEqual(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
 		}
 	}
+	return true
 }
 
 func (d *Daemon) heartbeatLoop(ctx context.Context) {
@@ -708,62 +573,44 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 				}
 			}
 
-			var legacyRuntimeIDs []string
-
-			for _, ws := range d.allWorkspaceStates() {
-				if ws.daemonUUID == "" {
-					legacyRuntimeIDs = append(legacyRuntimeIDs, ws.runtimeIDs...)
-					continue
+			d.mu.Lock()
+			daemonUUID := d.daemonUUID
+			var firstRuntimeID string
+			for _, ws := range d.workspaces {
+				if len(ws.runtimeIDs) > 0 {
+					firstRuntimeID = ws.runtimeIDs[0]
+					break
 				}
+			}
+			d.mu.Unlock()
 
-				resp, err := d.client.SendDaemonHeartbeat(ctx, ws.daemonUUID, authStatuses)
-				if err != nil {
-					d.logger.Warn("heartbeat failed", "daemon_uuid", ws.daemonUUID, "workspace_id", ws.workspaceID, "error", err)
-					continue
-				}
+			if daemonUUID == "" {
+				continue
+			}
 
-				if resp.PendingPing != nil {
-					if len(ws.runtimeIDs) > 0 {
-						rt := d.findRuntime(ws.runtimeIDs[0])
-						if rt != nil {
-							go d.handlePing(ctx, *rt, resp.PendingPing.ID)
-						}
-					}
-				}
+			resp, err := d.client.SendDaemonHeartbeat(ctx, daemonUUID, authStatuses)
+			if err != nil {
+				d.logger.Warn("heartbeat failed", "daemon_uuid", daemonUUID, "error", err)
+				continue
+			}
 
-				for _, update := range resp.PendingUpdates {
-					u := update
-					go d.handleUpdate(ctx, ws.daemonUUID, &u)
-				}
-				if resp.PendingUpdate != nil {
-					go d.handleUpdate(ctx, ws.daemonUUID, resp.PendingUpdate)
-				}
-
-				// Auto-install newly enabled providers (same cadence as auth check).
-				if refreshAuth && len(resp.ProviderConfig) > 0 && d.reconciling.CompareAndSwap(false, true) {
-					go func() {
-						defer d.reconciling.Store(false)
-						d.reconcileProviders(ctx, resp.ProviderConfig)
-					}()
+			if resp.PendingPing != nil && firstRuntimeID != "" {
+				if rt := d.findRuntime(firstRuntimeID); rt != nil {
+					go d.handlePing(ctx, *rt, resp.PendingPing.ID)
 				}
 			}
 
-			// Fallback: per-runtime heartbeat for workspaces without a daemon UUID.
-			for _, rid := range legacyRuntimeIDs {
-				resp, err := d.client.SendHeartbeat(ctx, rid)
-				if err != nil {
-					d.logger.Warn("heartbeat failed", "runtime_id", rid, "error", err)
-					continue
-				}
-				if resp.PendingPing != nil {
-					rt := d.findRuntime(rid)
-					if rt != nil {
-						go d.handlePing(ctx, *rt, resp.PendingPing.ID)
-					}
-				}
-				if resp.PendingUpdate != nil {
-					go d.handleUpdate(ctx, rid, resp.PendingUpdate)
-				}
+			for _, update := range resp.PendingUpdates {
+				u := update
+				go d.handleUpdate(ctx, daemonUUID, &u)
+			}
+
+			// Auto-install newly enabled providers (same cadence as auth check).
+			if refreshAuth && len(resp.ProviderConfig) > 0 && d.reconciling.CompareAndSwap(false, true) {
+				go func() {
+					defer d.reconciling.Store(false)
+					d.reconcileProviders(ctx, resp.ProviderConfig)
+				}()
 			}
 		}
 	}

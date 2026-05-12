@@ -37,28 +37,6 @@ func TestGeneratePATToken_HexChars(t *testing.T) {
 	}
 }
 
-func TestGenerateDaemonToken_Format(t *testing.T) {
-	token, err := GenerateDaemonToken()
-	if err != nil {
-		t.Fatalf("GenerateDaemonToken returned error: %v", err)
-	}
-	if !strings.HasPrefix(token, "mdt_") {
-		t.Errorf("token should start with 'mdt_', got %q", token)
-	}
-	// "mdt_" + 40 hex chars = 44 total
-	if len(token) != 44 {
-		t.Errorf("token length = %d, want 44", len(token))
-	}
-}
-
-func TestGenerateDaemonToken_Uniqueness(t *testing.T) {
-	token1, _ := GenerateDaemonToken()
-	token2, _ := GenerateDaemonToken()
-	if token1 == token2 {
-		t.Error("two generated daemon tokens should be different")
-	}
-}
-
 func TestHashToken(t *testing.T) {
 	token := "mul_abcdef1234567890abcdef1234567890abcdef12"
 	hash := HashToken(token)

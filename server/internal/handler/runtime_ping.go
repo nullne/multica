@@ -146,19 +146,12 @@ func randomID() string {
 
 // InitiatePing creates a new ping request (protected route, called by frontend).
 func (h *Handler) InitiatePing(w http.ResponseWriter, r *http.Request) {
-	runtimeID := chi.URLParam(r, "runtimeId")
-
-	rt, err := h.Queries.GetAgentRuntime(r.Context(), parseUUID(runtimeID))
-	if err != nil {
-		writeError(w, http.StatusNotFound, "runtime not found")
+	rt, ok := h.requireRuntimeAccess(w, r)
+	if !ok {
 		return
 	}
 
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(rt.WorkspaceID), "runtime not found"); !ok {
-		return
-	}
-
-	ping := h.PingStore.Create(runtimeID)
+	ping := h.PingStore.Create(uuidToString(rt.ID))
 	writeJSON(w, http.StatusOK, ping)
 }
 

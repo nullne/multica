@@ -1,8 +1,8 @@
 -- name: UpsertDaemon :one
 INSERT INTO daemon (
-    workspace_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at
+    user_id, daemon_id, status, cli_version, device_name, device_info, metadata, last_seen_at
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-ON CONFLICT (workspace_id, daemon_id)
+ON CONFLICT (user_id, daemon_id)
 DO UPDATE SET
     status = EXCLUDED.status,
     cli_version = EXCLUDED.cli_version,
@@ -18,15 +18,31 @@ RETURNING *;
 -- name: GetDaemon :one
 SELECT * FROM daemon WHERE id = $1;
 
--- name: ListDaemons :many
+-- name: GetDaemonForUser :one
+SELECT * FROM daemon WHERE id = $1 AND user_id = $2;
+
+-- name: GetDaemonByUserAndDaemonID :one
+SELECT * FROM daemon WHERE user_id = $1 AND daemon_id = $2;
+
+-- name: ListDaemonsForUser :many
 SELECT * FROM daemon
-WHERE workspace_id = $1
+WHERE user_id = $1
 ORDER BY archived_at NULLS FIRST, created_at ASC;
 
--- name: ListOnlineDaemons :many
-SELECT * FROM daemon
-WHERE workspace_id = $1 AND status = 'online'
-ORDER BY created_at ASC;
+-- name: ListDaemonsForWorkspace :many
+-- All daemons that are currently enabled for a workspace.
+SELECT d.* FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+WHERE dw.workspace_id = $1 AND dw.enabled = TRUE
+ORDER BY d.archived_at NULLS FIRST, d.created_at ASC;
+
+-- name: ListOnlineDaemonsForWorkspace :many
+SELECT d.* FROM daemon d
+JOIN daemon_workspace dw ON dw.daemon_id = d.id
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
+WHERE dw.workspace_id = $1 AND dw.enabled = TRUE AND d.status = 'online'
+ORDER BY d.created_at ASC;
 
 -- name: UpdateDaemonHeartbeat :one
 UPDATE daemon
@@ -79,7 +95,7 @@ UPDATE daemon
 SET status = 'offline', updated_at = now()
 WHERE status IN ('online', 'updating')
   AND last_seen_at < now() - make_interval(secs => @stale_seconds::double precision)
-RETURNING id, workspace_id;
+RETURNING id, user_id;
 
 -- name: ArchiveDaemon :one
 UPDATE daemon SET archived_at = now(), updated_at = now()

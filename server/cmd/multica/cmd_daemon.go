@@ -64,6 +64,26 @@ var daemonGetCmd = &cobra.Command{
 	RunE:  runDaemonGet,
 }
 
+var daemonEnableCmd = &cobra.Command{
+	Use:   "enable <workspace-id>",
+	Short: "Enable this user's local daemon for a workspace",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDaemonEnable,
+}
+
+var daemonDisableCmd = &cobra.Command{
+	Use:   "disable <workspace-id>",
+	Short: "Disable this user's local daemon for a workspace",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDaemonDisable,
+}
+
+var daemonAssignmentsCmd = &cobra.Command{
+	Use:   "assignments",
+	Short: "List workspace assignments for this user's local daemon",
+	RunE:  runDaemonAssignments,
+}
+
 func init() {
 	f := daemonStartCmd.Flags()
 	f.Bool("foreground", false, "Run in the foreground instead of background")
@@ -83,12 +103,67 @@ func init() {
 	daemonListCmd.Flags().String("output", "table", "Output format: table or json")
 	daemonGetCmd.Flags().String("output", "json", "Output format: table or json")
 
+	daemonAssignmentsCmd.Flags().String("output", "table", "Output format: table or json")
+
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonLogsCmd)
 	daemonCmd.AddCommand(daemonListCmd)
 	daemonCmd.AddCommand(daemonGetCmd)
+	daemonCmd.AddCommand(daemonEnableCmd)
+	daemonCmd.AddCommand(daemonDisableCmd)
+	daemonCmd.AddCommand(daemonAssignmentsCmd)
+}
+
+func runDaemonEnable(cmd *cobra.Command, args []string) error {
+	return setDaemonWorkspaceEnabled(cmd, args[0], true)
+}
+
+func runDaemonDisable(cmd *cobra.Command, args []string) error {
+	return setDaemonWorkspaceEnabled(cmd, args[0], false)
+}
+
+func runDaemonAssignments(cmd *cobra.Command, _ []string) error {
+	serverURL := resolveServerURL(cmd)
+	token := resolveToken(cmd)
+	if token == "" {
+		return fmt.Errorf("not authenticated: run 'multica login' first")
+	}
+	client := cli.NewAPIClient(serverURL, "", token)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	daemonUUID := findLocalDaemonUUID(ctx, client, cmd)
+	if daemonUUID == "" {
+		return fmt.Errorf("no daemon registered for this user yet — run 'multica daemon start' first")
+	}
+
+	var assignments []struct {
+		WorkspaceID   string `json:"workspace_id"`
+		WorkspaceName string `json:"workspace_name"`
+		Enabled       bool   `json:"enabled"`
+	}
+	if err := client.GetJSON(ctx, "/api/me/daemons/"+daemonUUID+"/workspaces", &assignments); err != nil {
+		return fmt.Errorf("list assignments: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		return json.NewEncoder(os.Stdout).Encode(assignments)
+	}
+
+	headers := []string{"WORKSPACE ID", "NAME", "ENABLED"}
+	rows := make([][]string, 0, len(assignments))
+	for _, a := range assignments {
+		mark := "no"
+		if a.Enabled {
+			mark = "yes"
+		}
+		rows = append(rows, []string{a.WorkspaceID, a.WorkspaceName, mark})
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	return nil
 }
 
 // daemonDirForProfile returns the state directory for the given profile.

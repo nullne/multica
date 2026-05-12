@@ -40,14 +40,15 @@ var workspaceMembersCmd = &cobra.Command{
 
 var workspaceWatchCmd = &cobra.Command{
 	Use:   "watch <workspace-id>",
-	Short: "Add a workspace to the daemon watch list",
+	Short: "Enable this user's local daemon for a workspace",
+	Long:  "Enables the local daemon owned by the authenticated user for the given workspace. Assignments are stored on the server (daemon_workspace).",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runWatch,
 }
 
 var workspaceUnwatchCmd = &cobra.Command{
 	Use:   "unwatch <workspace-id>",
-	Short: "Remove a workspace from the daemon watch list",
+	Short: "Disable this user's local daemon for a workspace",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runUnwatch,
 }
@@ -87,24 +88,45 @@ func runWorkspaceList(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	// Load watched set for marking.
-	profile := resolveProfile(cmd)
-	cfg, _ := cli.LoadCLIConfigForProfile(profile)
-	watched := make(map[string]bool)
-	for _, w := range cfg.WatchedWorkspaces {
-		watched[w.ID] = true
-	}
+	// Mark workspaces this user's local daemon is enabled for, by
+	// looking up the daemon owned by the user (if any).
+	enabled := loadEnabledWorkspaceIDs(ctx, client, cmd)
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tWATCHING")
+	fmt.Fprintln(w, "ID\tNAME\tDAEMON ENABLED")
 	for _, ws := range workspaces {
 		mark := ""
-		if watched[ws.ID] {
+		if enabled[ws.ID] {
 			mark = "*"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n", ws.ID, ws.Name, mark)
 	}
 	return w.Flush()
+}
+
+// loadEnabledWorkspaceIDs returns the set of workspace IDs the local daemon
+// is currently enabled for. Resolves the daemon by matching its daemon_id
+// string (defaults to the hostname) against `/api/me/daemons`. If no daemon
+// matches, the returned set is empty.
+func loadEnabledWorkspaceIDs(ctx context.Context, client *cli.APIClient, cmd *cobra.Command) map[string]bool {
+	enabled := make(map[string]bool)
+	daemonUUID := findLocalDaemonUUID(ctx, client, cmd)
+	if daemonUUID == "" {
+		return enabled
+	}
+	var assignments []struct {
+		WorkspaceID string `json:"workspace_id"`
+		Enabled     bool   `json:"enabled"`
+	}
+	if err := client.GetJSON(ctx, "/api/me/daemons/"+daemonUUID+"/workspaces", &assignments); err != nil {
+		return enabled
+	}
+	for _, a := range assignments {
+		if a.Enabled {
+			enabled[a.WorkspaceID] = true
+		}
+	}
+	return enabled
 }
 
 func workspaceIDFromArgs(cmd *cobra.Command, args []string) string {
@@ -199,8 +221,17 @@ func runWorkspaceMembers(cmd *cobra.Command, args []string) error {
 }
 
 func runWatch(cmd *cobra.Command, args []string) error {
-	workspaceID := args[0]
+	return setDaemonWorkspaceEnabled(cmd, args[0], true)
+}
 
+func runUnwatch(cmd *cobra.Command, args []string) error {
+	return setDaemonWorkspaceEnabled(cmd, args[0], false)
+}
+
+// setDaemonWorkspaceEnabled enables or disables the user's local daemon for a
+// workspace by calling the server-side assignment API. The daemon must be
+// registered before this works — assignments live on the server now.
+func setDaemonWorkspaceEnabled(cmd *cobra.Command, workspaceID string, enabled bool) error {
 	serverURL := resolveServerURL(cmd)
 	token := resolveToken(cmd)
 	if token == "" {
@@ -219,47 +250,61 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace not found: %w", err)
 	}
 
-	profile := resolveProfile(cmd)
-	cfg, err := cli.LoadCLIConfigForProfile(profile)
-	if err != nil {
-		return err
+	daemonUUID := findLocalDaemonUUID(ctx, client, cmd)
+	if daemonUUID == "" {
+		return fmt.Errorf("no daemon registered for this user yet — run 'multica daemon start' first")
 	}
 
-	if !cfg.AddWatchedWorkspace(ws.ID, ws.Name) {
-		fmt.Fprintf(os.Stderr, "Already watching workspace %s (%s)\n", ws.ID, ws.Name)
-		return nil
+	if err := client.PutJSON(ctx, "/api/me/daemons/"+daemonUUID+"/workspaces/"+ws.ID, map[string]any{
+		"enabled": enabled,
+	}, nil); err != nil {
+		return fmt.Errorf("update assignment: %w", err)
 	}
 
-	if cfg.WorkspaceID == "" {
-		cfg.WorkspaceID = ws.ID
-		fmt.Fprintf(os.Stderr, "Set default workspace to %s (%s)\n", ws.ID, ws.Name)
+	// Make this the default workspace on first enable for convenience.
+	if enabled {
+		profile := resolveProfile(cmd)
+		if cfg, err := cli.LoadCLIConfigForProfile(profile); err == nil && cfg.WorkspaceID == "" {
+			cfg.WorkspaceID = ws.ID
+			cli.SaveCLIConfigForProfile(cfg, profile)
+			fmt.Fprintf(os.Stderr, "Set default workspace to %s (%s)\n", ws.ID, ws.Name)
+		}
+		fmt.Fprintf(os.Stderr, "Watching workspace %s (%s)\n", ws.ID, ws.Name)
+	} else {
+		fmt.Fprintf(os.Stderr, "Stopped watching workspace %s (%s)\n", ws.ID, ws.Name)
 	}
-
-	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
-		return err
-	}
-
-	fmt.Fprintf(os.Stderr, "Watching workspace %s (%s)\n", ws.ID, ws.Name)
 	return nil
 }
 
-func runUnwatch(cmd *cobra.Command, args []string) error {
-	workspaceID := args[0]
-
-	profile := resolveProfile(cmd)
-	cfg, err := cli.LoadCLIConfigForProfile(profile)
-	if err != nil {
-		return err
+// findLocalDaemonUUID looks up the UUID of the daemon owned by the current
+// user whose daemon_id string matches the local hostname (the default
+// MULTICA_DAEMON_ID). Returns empty if no match.
+func findLocalDaemonUUID(ctx context.Context, client *cli.APIClient, cmd *cobra.Command) string {
+	hostname, _ := os.Hostname()
+	if v := os.Getenv("MULTICA_DAEMON_ID"); v != "" {
+		hostname = v
 	}
-
-	if !cfg.RemoveWatchedWorkspace(workspaceID) {
-		return fmt.Errorf("workspace %s is not being watched", workspaceID)
+	if v, err := cmd.Flags().GetString("daemon-id"); err == nil && v != "" {
+		hostname = v
 	}
-
-	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {
-		return err
+	if hostname == "" {
+		return ""
 	}
-
-	fmt.Fprintf(os.Stderr, "Stopped watching workspace %s\n", workspaceID)
-	return nil
+	var daemons []struct {
+		ID       string `json:"id"`
+		DaemonID string `json:"daemon_id"`
+	}
+	if err := client.GetJSON(ctx, "/api/me/daemons", &daemons); err != nil {
+		return ""
+	}
+	for _, d := range daemons {
+		if d.DaemonID == hostname {
+			return d.ID
+		}
+	}
+	// Fall back to the first daemon owned by this user.
+	if len(daemons) > 0 {
+		return daemons[0].ID
+	}
+	return ""
 }

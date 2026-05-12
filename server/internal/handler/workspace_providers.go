@@ -237,7 +237,7 @@ func (h *Handler) UpdateAllDaemons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	daemons, err := h.Queries.ListOnlineDaemons(r.Context(), parseUUID(id))
+	daemons, err := h.Queries.ListOnlineDaemonsForWorkspace(r.Context(), parseUUID(id))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list daemons")
 		return
