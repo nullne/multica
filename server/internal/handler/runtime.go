@@ -85,6 +85,14 @@ func (h *Handler) requireDaemonReadAccess(w http.ResponseWriter, r *http.Request
 
 	if workspaceID != "" {
 		if _, ok := h.requireWorkspaceMember(w, r, workspaceID, "daemon not found"); ok {
+			if _, err := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+				UserID:      d.UserID,
+				WorkspaceID: parseUUID(workspaceID),
+			}); err != nil {
+				writeError(w, http.StatusNotFound, "daemon not found")
+				return db.Daemon{}, false
+			}
+
 			if assignment, err := h.Queries.GetDaemonWorkspace(r.Context(), db.GetDaemonWorkspaceParams{
 				DaemonID:    d.ID,
 				WorkspaceID: parseUUID(workspaceID),

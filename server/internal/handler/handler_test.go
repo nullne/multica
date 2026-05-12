@@ -1004,8 +1004,8 @@ func TestDaemonRegisterRequiresDaemonID(t *testing.T) {
 // The daemon is user-scoped and projected into one workspace registration
 // entry per enabled workspace.
 type daemonRegisterResponse struct {
-	Daemon     DaemonResponse              `json:"daemon"`
-	Workspaces []WorkspaceRegistration     `json:"workspaces"`
+	Daemon     DaemonResponse          `json:"daemon"`
+	Workspaces []WorkspaceRegistration `json:"workspaces"`
 }
 
 // runtimesInTestWorkspace flattens the per-workspace runtime list and returns
@@ -2079,6 +2079,138 @@ func TestDaemonEnvHiddenWhenDisabled(t *testing.T) {
 	testHandler.GetDaemonEnv(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GetDaemonEnv by owner after disable: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestDaemonReadAccessRevokedWhenOwnerLeavesWorkspace verifies that a daemon
+// disappears from workspace-scoped list and read-only endpoints once its
+// owner is no longer a member of that workspace.
+func TestDaemonReadAccessRevokedWhenOwnerLeavesWorkspace(t *testing.T) {
+	ctx := context.Background()
+
+	var ownerID, workspaceID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO "user" (name, email) VALUES ('Read Owner', 'daemon-read-owner@multica.ai') RETURNING id`,
+	).Scan(&ownerID); err != nil {
+		t.Fatalf("create owner user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, ownerID)
+	})
+
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO workspace (name, slug, description, issue_prefix) VALUES ('Read Access WS', 'daemon-read-access', '', 'DRA') RETURNING id`,
+	).Scan(&workspaceID); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, workspaceID)
+	})
+
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner'), ($1, $3, 'admin')`,
+		workspaceID, ownerID, testUserID,
+	); err != nil {
+		t.Fatalf("create memberships: %v", err)
+	}
+
+	body := map[string]any{
+		"daemon_id":   "read-access-daemon",
+		"device_name": "read-machine",
+		"env_vars":    map[string]string{"SECRET": "visible-while-member"},
+		"runtimes": []map[string]any{
+			{"type": "codex", "version": "1.0.0", "status": "online", "auth_status": "ready"},
+		},
+	}
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(body)
+	req := httptest.NewRequest("POST", "/api/daemon/register", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", ownerID)
+	w := httptest.NewRecorder()
+	testHandler.DaemonRegister(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DaemonRegister: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp daemonRegisterResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	daemonUUID := resp.Daemon.ID
+	t.Cleanup(func() { cleanupDaemon(t, daemonUUID) })
+
+	newWorkspaceMemberRequest := func(method, path string) *http.Request {
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("X-User-ID", testUserID)
+		req.Header.Set("X-Workspace-ID", workspaceID)
+		return req
+	}
+
+	// While the owner is still a member, the workspace member can list and read it.
+	w = httptest.NewRecorder()
+	req = newWorkspaceMemberRequest("GET", "/api/daemons")
+	testHandler.ListDaemons(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListDaemons while owner member: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var listed []DaemonResponse
+	if err := json.NewDecoder(w.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode daemon list: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != daemonUUID {
+		t.Fatalf("expected daemon to be listed while owner is member, got %+v", listed)
+	}
+
+	w = httptest.NewRecorder()
+	req = newWorkspaceMemberRequest("GET", "/api/daemons/"+daemonUUID)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.GetDaemonByID(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetDaemonByID while owner member: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newWorkspaceMemberRequest("GET", "/api/daemons/"+daemonUUID+"/env")
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.GetDaemonEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetDaemonEnv while owner member: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Once the owner leaves the workspace, the daemon must disappear everywhere.
+	if _, err := testPool.Exec(ctx,
+		`DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`,
+		workspaceID, ownerID,
+	); err != nil {
+		t.Fatalf("remove owner membership: %v", err)
+	}
+
+	w = httptest.NewRecorder()
+	req = newWorkspaceMemberRequest("GET", "/api/daemons")
+	testHandler.ListDaemons(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListDaemons after owner removal: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	listed = nil
+	if err := json.NewDecoder(w.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode daemon list after removal: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("expected daemon list to be empty after owner removal, got %+v", listed)
+	}
+
+	w = httptest.NewRecorder()
+	req = newWorkspaceMemberRequest("GET", "/api/daemons/"+daemonUUID)
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.GetDaemonByID(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetDaemonByID after owner removal: expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newWorkspaceMemberRequest("GET", "/api/daemons/"+daemonUUID+"/env")
+	req = withURLParam(req, "daemonId", daemonUUID)
+	testHandler.GetDaemonEnv(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetDaemonEnv after owner removal: expected 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

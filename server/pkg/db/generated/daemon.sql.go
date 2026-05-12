@@ -166,6 +166,7 @@ func (q *Queries) ListDaemonsForUser(ctx context.Context, userID pgtype.UUID) ([
 const listDaemonsForWorkspace = `-- name: ListDaemonsForWorkspace :many
 SELECT d.id, d.daemon_id, d.status, d.cli_version, d.device_name, d.device_info, d.metadata, d.last_seen_at, d.created_at, d.updated_at, d.labels, d.archived_at, d.user_id FROM daemon d
 JOIN daemon_workspace dw ON dw.daemon_id = d.id
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
 WHERE dw.workspace_id = $1 AND dw.enabled = TRUE
 ORDER BY d.archived_at NULLS FIRST, d.created_at ASC
 `
@@ -208,6 +209,7 @@ func (q *Queries) ListDaemonsForWorkspace(ctx context.Context, workspaceID pgtyp
 const listOnlineDaemonsForWorkspace = `-- name: ListOnlineDaemonsForWorkspace :many
 SELECT d.id, d.daemon_id, d.status, d.cli_version, d.device_name, d.device_info, d.metadata, d.last_seen_at, d.created_at, d.updated_at, d.labels, d.archived_at, d.user_id FROM daemon d
 JOIN daemon_workspace dw ON dw.daemon_id = d.id
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
 WHERE dw.workspace_id = $1 AND dw.enabled = TRUE AND d.status = 'online'
 ORDER BY d.created_at ASC
 `

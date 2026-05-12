@@ -33,12 +33,14 @@ ORDER BY archived_at NULLS FIRST, created_at ASC;
 -- All daemons that are currently enabled for a workspace.
 SELECT d.* FROM daemon d
 JOIN daemon_workspace dw ON dw.daemon_id = d.id
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
 WHERE dw.workspace_id = $1 AND dw.enabled = TRUE
 ORDER BY d.archived_at NULLS FIRST, d.created_at ASC;
 
 -- name: ListOnlineDaemonsForWorkspace :many
 SELECT d.* FROM daemon d
 JOIN daemon_workspace dw ON dw.daemon_id = d.id
+JOIN member m ON m.user_id = d.user_id AND m.workspace_id = dw.workspace_id
 WHERE dw.workspace_id = $1 AND dw.enabled = TRUE AND d.status = 'online'
 ORDER BY d.created_at ASC;
 
