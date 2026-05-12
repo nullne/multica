@@ -357,6 +357,11 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			h.postSystemNotice(ctx, issue, agentLink+" has no AI providers configured and cannot accept tasks.", noticeParent)
 			continue
 		}
+		if !agent.DefaultProvider.Valid || !agent.DefaultDaemonID.Valid {
+			agentLink := fmt.Sprintf("[@%s](mention://agent/%s)", agent.Name, m.ID)
+			h.postSystemNotice(ctx, issue, agentLink+" is missing complete dispatch defaults. Configure both a default provider and environment before using mentions.", noticeParent)
+			continue
+		}
 
 		// Private agents can only be mentioned by the agent owner or workspace admin/owner.
 		if agent.Visibility == "private" && authorType == "member" {

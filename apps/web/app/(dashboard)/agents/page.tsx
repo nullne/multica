@@ -289,6 +289,7 @@ function AgentListItem({
 }) {
   const st = statusConfig[agent.status];
   const isArchived = !!agent.archived_at;
+  const hasCompleteDispatchDefaults = !!agent.default_provider && !!agent.default_daemon_id;
   const daemons = useRuntimeStore((s) => s.daemons);
   const VisibilityIcon = agent.visibility === "workspace" ? Globe : Lock;
   const codeAccess = agent.github_code_access ?? "read";
@@ -330,6 +331,12 @@ function AgentListItem({
             <>
               <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${st.dot}`} />
               <span className={`shrink-0 text-xs ${st.color}`}>{st.label}</span>
+              {!hasCompleteDispatchDefaults && (
+                <>
+                  <span className="shrink-0 text-xs text-muted-foreground/40">&middot;</span>
+                  <span className="shrink-0 text-xs text-amber-600">Dispatch defaults incomplete</span>
+                </>
+              )}
             </>
           )}
           <span className="shrink-0 text-xs text-muted-foreground/40">&middot;</span>
@@ -1205,6 +1212,7 @@ function SettingsTab({
   const [visibility, setVisibility] = useState<AgentVisibility>(agent.visibility);
   const [codeAccess, setCodeAccess] = useState(agent.github_code_access ?? "read");
   const [providers, setProviders] = useState<string[]>(agent.providers ?? []);
+  const [defaultProvider, setDefaultProvider] = useState<string | null>(agent.default_provider ?? null);
   const [defaultDaemonId, setDefaultDaemonId] = useState<string | null>(agent.default_daemon_id ?? null);
   const [maxConcurrentTasks, setMaxConcurrentTasks] = useState<string>(String(agent.max_concurrent_tasks ?? 6));
   const [saving, setSaving] = useState(false);
@@ -1239,6 +1247,7 @@ function SettingsTab({
     visibility !== agent.visibility ||
     codeAccess !== (agent.github_code_access ?? "read") ||
     JSON.stringify(providers) !== JSON.stringify(agent.providers ?? []) ||
+    defaultProvider !== (agent.default_provider ?? null) ||
     defaultDaemonId !== (agent.default_daemon_id ?? null) ||
     parsedMaxConcurrentTasks !== (agent.max_concurrent_tasks ?? 6);
 
@@ -1253,7 +1262,7 @@ function SettingsTab({
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_daemon_id: defaultDaemonId, max_concurrent_tasks: parsedMaxConcurrentTasks });
+      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_provider: defaultProvider, default_daemon_id: defaultDaemonId, max_concurrent_tasks: parsedMaxConcurrentTasks });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1395,6 +1404,9 @@ function SettingsTab({
                     ? providers.filter((k) => k !== p.key)
                     : [...providers, p.key];
                   if (next.length === 0) return;
+                  if (defaultProvider && !next.includes(defaultProvider)) {
+                    setDefaultProvider(null);
+                  }
                   setProviders(next);
                 }}
                 className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
@@ -1414,9 +1426,41 @@ function SettingsTab({
       </div>
 
       <div>
+        <Label className="text-xs text-muted-foreground">Default Provider</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+          Mentions and new issue assignments copy this provider unless the issue overrides it.
+        </p>
+        <div className="mt-1.5 flex gap-2 flex-wrap">
+          {providers.map((provider) => (
+            <button
+              key={provider}
+              type="button"
+              onClick={() => setDefaultProvider(provider)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                defaultProvider === provider
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:bg-muted"
+              }`}
+            >
+              <span className="font-medium capitalize">{provider}</span>
+            </button>
+          ))}
+          {defaultProvider && (
+            <button
+              type="button"
+              onClick={() => setDefaultProvider(null)}
+              className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-muted transition-colors"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div>
         <Label className="text-xs text-muted-foreground">Default Environment</Label>
         <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
-          Bind this agent to a specific daemon. When assigned to issues, this environment will be used automatically.
+          Mentions require both a default provider and a default environment.
         </p>
         <div className="mt-1.5">
           {defaultDaemonId ? (
@@ -1552,6 +1596,11 @@ function AgentDetail({
             {agent.providers?.length > 0 && (
               <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
                 {agent.providers.join(", ")}
+              </span>
+            )}
+            {(!agent.default_provider || !agent.default_daemon_id) && (
+              <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-700">
+                Configure dispatch defaults for mentions
               </span>
             )}
           </div>

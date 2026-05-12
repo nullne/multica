@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import type { Agent, AgentRuntime } from "@/shared/types";
-import { resolveAssigneeChange, pickBestProvider } from "./dispatch";
+import { getAgentDispatchDefaults, hasCompleteAgentDispatchDefaults, resolveAssigneeChange, pickBestProvider } from "./dispatch";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
     id: "a-1",
     workspace_id: "ws-1",
     providers: ["claude"],
+    default_provider: null,
     name: "Agent",
     description: "",
     instructions: "",
@@ -55,6 +56,10 @@ describe("pickBestProvider", () => {
 
   it("falls back to the first provider when no daemon is given", () => {
     expect(pickBestProvider(["codex", "claude"], [], undefined)).toBe("codex");
+  });
+
+  it("honors an explicit preferred provider when it is valid", () => {
+    expect(pickBestProvider(["codex", "claude"], [], "d-1", "claude")).toBe("claude");
   });
 
   it("prefers a provider with a ready runtime on the chosen daemon", () => {
@@ -141,6 +146,24 @@ describe("resolveAssigneeChange", () => {
     expect(patch.dispatch_provider).toBe("claude");
   });
 
+  it("prefers the agent's explicit default provider over saved dispatch state", () => {
+    const agent = makeAgent({
+      id: "a-1",
+      providers: ["codex", "claude"],
+      default_provider: "codex",
+      default_daemon_id: "d-1",
+    });
+    const patch = resolveAssigneeChange({
+      type: "agent",
+      id: "a-1",
+      agents: [agent],
+      runtimes: [],
+      savedDispatch: { daemonId: "d-9", provider: "claude" },
+    });
+    expect(patch.dispatch_daemon_id).toBe("d-1");
+    expect(patch.dispatch_provider).toBe("codex");
+  });
+
   it("clears the verifier when the new assignee is the same agent", () => {
     const agent = makeAgent({ id: "a-1", providers: ["claude"] });
     const patch = resolveAssigneeChange({
@@ -152,5 +175,29 @@ describe("resolveAssigneeChange", () => {
     });
     expect(patch.verifier_agent_id).toBeNull();
     expect(patch.max_verification_rounds).toBeNull();
+  });
+});
+
+describe("agent dispatch defaults helpers", () => {
+  it("detects when an agent has complete dispatch defaults", () => {
+    expect(
+      hasCompleteAgentDispatchDefaults(
+        makeAgent({ default_provider: "claude", default_daemon_id: "d-1" }),
+      ),
+    ).toBe(true);
+    expect(hasCompleteAgentDispatchDefaults(makeAgent({ default_provider: null }))).toBe(false);
+  });
+
+  it("returns the agent's explicit defaults ahead of saved dispatch state", () => {
+    const defaults = getAgentDispatchDefaults(
+      makeAgent({
+        default_provider: "claude",
+        default_daemon_id: "d-1",
+        providers: ["claude", "codex"],
+      }),
+      [],
+      { daemonId: "d-9", provider: "codex" },
+    );
+    expect(defaults).toEqual({ daemonId: "d-1", provider: "claude" });
   });
 });

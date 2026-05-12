@@ -92,6 +92,7 @@ export interface Agent {
   id: string;
   workspace_id: string;
   providers: string[];
+  default_provider: string | null;
   name: string;
   description: string;
   instructions: string;
@@ -117,6 +118,7 @@ export interface CreateAgentRequest {
   instructions?: string;
   avatar_url?: string;
   providers: string[];
+  default_provider?: string | null;
   visibility?: AgentVisibility;
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
@@ -131,6 +133,7 @@ export interface UpdateAgentRequest {
   instructions?: string;
   avatar_url?: string;
   providers?: string[];
+  default_provider?: string | null;
   visibility?: AgentVisibility;
   status?: AgentStatus;
   tools?: AgentTool[];

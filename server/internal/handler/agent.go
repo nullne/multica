@@ -19,6 +19,7 @@ type AgentResponse struct {
 	ID                 string          `json:"id"`
 	WorkspaceID        string          `json:"workspace_id"`
 	Providers          []string        `json:"providers"`
+	DefaultProvider    *string         `json:"default_provider"`
 	Name               string          `json:"name"`
 	Description        string          `json:"description"`
 	Instructions       string          `json:"instructions"`
@@ -64,6 +65,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		ID:                 uuidToString(a.ID),
 		WorkspaceID:        uuidToString(a.WorkspaceID),
 		Providers:          providers,
+		DefaultProvider:    textToPtr(a.DefaultProvider),
 		Name:               a.Name,
 		Description:        a.Description,
 		Instructions:       a.Instructions,
@@ -227,6 +229,7 @@ type CreateAgentRequest struct {
 	AvatarURL          *string  `json:"avatar_url"`
 	Providers          []string `json:"providers"`
 	Provider           string   `json:"provider"` // deprecated: single provider, use providers
+	DefaultProvider    *string  `json:"default_provider"`
 	Visibility         string   `json:"visibility"`
 	Tools              any      `json:"tools"`
 	Triggers           any      `json:"triggers"`
@@ -260,6 +263,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(providers) == 0 {
 		writeError(w, http.StatusBadRequest, "providers is required")
+		return
+	}
+	if req.DefaultProvider != nil && *req.DefaultProvider != "" && !containsString(providers, *req.DefaultProvider) {
+		writeError(w, http.StatusBadRequest, "default_provider must be one of providers")
 		return
 	}
 
@@ -301,6 +308,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Tools:              tools,
 		Triggers:           triggers,
 		GithubCodeAccess:   req.GitHubCodeAccess,
+		DefaultProvider:    ptrToText(req.DefaultProvider),
 		DefaultDaemonID:    parseOptionalUUID(req.DefaultDaemonID),
 		MaxConcurrentTasks: maxConcurrentTasks,
 	})
@@ -326,6 +334,7 @@ type UpdateAgentRequest struct {
 	Instructions       *string  `json:"instructions"`
 	AvatarURL          *string  `json:"avatar_url"`
 	Providers          []string `json:"providers"`
+	DefaultProvider    *string  `json:"default_provider"`
 	Visibility         *string  `json:"visibility"`
 	Status             *string  `json:"status"`
 	Tools              any      `json:"tools"`
@@ -380,6 +389,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 	params := db.UpdateAgentParams{
 		ID:              parseUUID(id),
+		DefaultProvider: agent.DefaultProvider,
 		DefaultDaemonID: agent.DefaultDaemonID,
 	}
 	if req.Name != nil {
@@ -396,6 +406,13 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Providers) > 0 {
 		params.Providers = req.Providers
+	}
+	effectiveProviders := agent.Providers
+	if len(req.Providers) > 0 {
+		effectiveProviders = req.Providers
+		if params.DefaultProvider.Valid && !containsString(effectiveProviders, params.DefaultProvider.String) {
+			params.DefaultProvider = pgtype.Text{Valid: false}
+		}
 	}
 	if req.Visibility != nil {
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
@@ -417,6 +434,17 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.GithubCodeAccess = pgtype.Text{String: *req.GitHubCodeAccess, Valid: true}
+	}
+	if _, ok := rawFields["default_provider"]; ok {
+		if req.DefaultProvider != nil && *req.DefaultProvider != "" {
+			if !containsString(effectiveProviders, *req.DefaultProvider) {
+				writeError(w, http.StatusBadRequest, "default_provider must be one of providers")
+				return
+			}
+			params.DefaultProvider = pgtype.Text{String: *req.DefaultProvider, Valid: true}
+		} else {
+			params.DefaultProvider = pgtype.Text{Valid: false}
+		}
 	}
 	if _, ok := rawFields["default_daemon_id"]; ok {
 		if req.DefaultDaemonID != nil && *req.DefaultDaemonID != "" {
@@ -514,6 +542,15 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": resp})
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, item := range haystack {
+		if item == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {

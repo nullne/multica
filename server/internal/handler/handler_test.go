@@ -268,6 +268,109 @@ func TestIssueCRUD(t *testing.T) {
 	}
 }
 
+func TestCreateIssue_AssignedAgentCopiesDispatchDefaults(t *testing.T) {
+	ctx := context.Background()
+
+	var daemonID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT daemon_ref
+		FROM agent_runtime
+		WHERE workspace_id = $1 AND provider = 'codex' AND daemon_ref IS NOT NULL
+		LIMIT 1
+	`, testWorkspaceID).Scan(&daemonID); err != nil {
+		t.Fatalf("get daemon: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, description, visibility, owner_id, tools, triggers, providers, default_provider, default_daemon_id)
+		VALUES ($1, 'issue-defaults-agent', '', 'workspace', $2, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'], 'codex', $3)
+		RETURNING id
+	`, testWorkspaceID, testUserID, daemonID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":         "Issue dispatch defaults",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var issue IssueResponse
+	json.NewDecoder(w.Body).Decode(&issue)
+	if issue.DispatchProvider == nil || *issue.DispatchProvider != "codex" {
+		t.Fatalf("expected dispatch_provider to copy agent default, got %v", issue.DispatchProvider)
+	}
+	if issue.DispatchDaemonID == nil || *issue.DispatchDaemonID != daemonID {
+		t.Fatalf("expected dispatch_daemon_id to copy agent default, got %v", issue.DispatchDaemonID)
+	}
+}
+
+func TestUpdateIssue_AssigneeChangeCopiesDispatchDefaults(t *testing.T) {
+	ctx := context.Background()
+
+	var daemonID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT daemon_ref
+		FROM agent_runtime
+		WHERE workspace_id = $1 AND provider = 'codex' AND daemon_ref IS NOT NULL
+		LIMIT 1
+	`, testWorkspaceID).Scan(&daemonID); err != nil {
+		t.Fatalf("get daemon: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (workspace_id, name, description, visibility, owner_id, tools, triggers, providers, default_provider, default_daemon_id)
+		VALUES ($1, 'issue-update-defaults-agent', '', 'workspace', $2, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'], 'codex', $3)
+		RETURNING id
+	`, testWorkspaceID, testUserID, daemonID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent WHERE id = $1`, agentID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Issue assignee update defaults",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/issues/"+created.ID, map[string]any{
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+	})
+	req = withURLParam(req, "id", created.ID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var updated IssueResponse
+	json.NewDecoder(w.Body).Decode(&updated)
+	if updated.DispatchProvider == nil || *updated.DispatchProvider != "codex" {
+		t.Fatalf("expected dispatch_provider to copy agent default, got %v", updated.DispatchProvider)
+	}
+	if updated.DispatchDaemonID == nil || *updated.DispatchDaemonID != daemonID {
+		t.Fatalf("expected dispatch_daemon_id to copy agent default, got %v", updated.DispatchDaemonID)
+	}
+}
+
 func TestUpdateIssuePreservesLinks(t *testing.T) {
 	ctx := context.Background()
 

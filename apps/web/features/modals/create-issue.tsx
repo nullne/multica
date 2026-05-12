@@ -37,7 +37,7 @@ import { useIssueStore } from "@/features/issues";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
 import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
 import { issueUrl } from "@/features/issues/utils/url";
-import { pickBestProvider } from "@/features/issues/utils/dispatch";
+import { getAgentDispatchDefaults } from "@/features/issues/utils/dispatch";
 import { api } from "@/shared/api";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { FileUploadButton } from "@/components/common/file-upload-button";
@@ -122,10 +122,10 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
     if (!agent) return {};
     const saved = defaults.getAgentDispatch(initAssigneeId);
     const currentRuntimes = useRuntimeStore.getState().runtimes;
-    const daemonId = agent.default_daemon_id ?? saved?.daemonId ?? undefined;
+    const dispatch = getAgentDispatchDefaults(agent, currentRuntimes, saved);
     return {
-      daemonId,
-      provider: saved?.provider ?? pickBestProvider(agent.providers ?? [], currentRuntimes, daemonId),
+      daemonId: dispatch.daemonId ?? undefined,
+      provider: dispatch.provider ?? undefined,
     };
   })();
   const [dispatchProvider, setDispatchProvider] = useState<string | undefined>(initDispatch.provider);

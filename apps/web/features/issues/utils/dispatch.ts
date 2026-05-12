@@ -9,8 +9,12 @@ export function pickBestProvider(
   agentProviders: string[],
   runtimes: AgentRuntime[],
   daemonId: string | undefined,
+  preferredProvider?: string | null,
 ): string | undefined {
   if (agentProviders.length === 0) return undefined;
+  if (preferredProvider && agentProviders.includes(preferredProvider)) {
+    return preferredProvider;
+  }
   if (!daemonId) return agentProviders[0];
   const ready = agentProviders.find((p) => {
     const rt = runtimes.find(
@@ -19,6 +23,27 @@ export function pickBestProvider(
     return rt?.auth_status === "ready";
   });
   return ready ?? agentProviders[0];
+}
+
+export function hasCompleteAgentDispatchDefaults(agent: Agent): boolean {
+  return !!agent.default_provider && !!agent.default_daemon_id;
+}
+
+export function getAgentDispatchDefaults(
+  agent: Agent | undefined,
+  runtimes: AgentRuntime[],
+  savedDispatch?: { daemonId?: string; provider?: string },
+) {
+  if (!agent) {
+    return { daemonId: null as string | null, provider: null as string | null };
+  }
+  const daemonId = agent.default_daemon_id ?? savedDispatch?.daemonId ?? null;
+  const provider =
+    agent.default_provider ??
+    savedDispatch?.provider ??
+    pickBestProvider(agent.providers ?? [], runtimes, daemonId ?? undefined) ??
+    null;
+  return { daemonId, provider };
 }
 
 export interface ResolveAssigneeChangeOpts {
@@ -49,12 +74,7 @@ export function resolveAssigneeChange(
 
   if (type === "agent" && id) {
     const agent = agents.find((a) => a.id === id);
-    const daemonId =
-      agent?.default_daemon_id ?? savedDispatch?.daemonId ?? null;
-    const provider =
-      savedDispatch?.provider ??
-      pickBestProvider(agent?.providers ?? [], runtimes, daemonId ?? undefined) ??
-      null;
+    const { daemonId, provider } = getAgentDispatchDefaults(agent, runtimes, savedDispatch);
 
     const patch: Partial<UpdateIssueRequest> = {
       assignee_type: "agent",

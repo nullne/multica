@@ -123,6 +123,48 @@ func TestAgentMaxConcurrentTasks_InvalidUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateAgent_ProvidersChangeClearsStaleDefaultProvider(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/agents?workspace_id="+testWorkspaceID, map[string]any{
+		"name":             "default-provider-reset-agent",
+		"providers":        []string{"claude", "codex"},
+		"default_provider": "codex",
+	})
+	testHandler.CreateAgent(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateAgent: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created AgentResponse
+	json.NewDecoder(w.Body).Decode(&created)
+
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, created.ID)
+	})
+
+	if created.DefaultProvider == nil || *created.DefaultProvider != "codex" {
+		t.Fatalf("expected default_provider codex at creation, got %#v", created.DefaultProvider)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("PATCH", "/api/agents/"+created.ID, map[string]any{
+		"providers": []string{"claude"},
+	})
+	req = withURLParam(req, "id", created.ID)
+	testHandler.UpdateAgent(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgent: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated AgentResponse
+	json.NewDecoder(w.Body).Decode(&updated)
+
+	if updated.DefaultProvider != nil {
+		t.Fatalf("expected default_provider to be cleared, got %#v", updated.DefaultProvider)
+	}
+	if len(updated.Providers) != 1 || updated.Providers[0] != "claude" {
+		t.Fatalf("expected providers to be updated to [claude], got %#v", updated.Providers)
+	}
+}
+
 // TestClaimAgentTask_RespectsPerAgentConcurrencyLimit verifies that ClaimAgentTask
 // will not dispatch a new task once the agent's max_concurrent_tasks limit is reached.
 func TestClaimAgentTask_RespectsPerAgentConcurrencyLimit(t *testing.T) {

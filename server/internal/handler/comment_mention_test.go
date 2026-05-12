@@ -48,18 +48,32 @@ func createTestAgent(t *testing.T, name string, providers []string, archived boo
 
 	var id string
 	var err error
+	var defaultProvider any
+	var defaultDaemonID any
+	if len(providers) > 0 {
+		defaultProvider = providers[0]
+		var daemonID string
+		if qerr := testPool.QueryRow(ctx, `
+			SELECT daemon_ref
+			FROM agent_runtime
+			WHERE workspace_id = $1 AND provider = $2 AND daemon_ref IS NOT NULL
+			LIMIT 1
+		`, testWorkspaceID, providers[0]).Scan(&daemonID); qerr == nil {
+			defaultDaemonID = daemonID
+		}
+	}
 	if archivedAt != nil {
 		err = testPool.QueryRow(ctx, `
-			INSERT INTO agent (workspace_id, name, description, visibility, owner_id, tools, triggers, providers, archived_at)
-			VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, $4::jsonb, $5, $6)
+			INSERT INTO agent (workspace_id, name, description, visibility, owner_id, tools, triggers, providers, default_provider, default_daemon_id, archived_at)
+			VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, $4::jsonb, $5, $6, $7, $8)
 			RETURNING id
-		`, testWorkspaceID, name, testUserID, triggerJSON, providers, archivedAt).Scan(&id)
+		`, testWorkspaceID, name, testUserID, triggerJSON, providers, defaultProvider, defaultDaemonID, archivedAt).Scan(&id)
 	} else {
 		err = testPool.QueryRow(ctx, `
-			INSERT INTO agent (workspace_id, name, description, visibility, owner_id, tools, triggers, providers)
-			VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, $4::jsonb, $5)
+			INSERT INTO agent (workspace_id, name, description, visibility, owner_id, tools, triggers, providers, default_provider, default_daemon_id)
+			VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, $4::jsonb, $5, $6, $7)
 			RETURNING id
-		`, testWorkspaceID, name, testUserID, triggerJSON, providers).Scan(&id)
+		`, testWorkspaceID, name, testUserID, triggerJSON, providers, defaultProvider, defaultDaemonID).Scan(&id)
 	}
 	if err != nil {
 		t.Fatalf("createTestAgent(%s): %v", name, err)
@@ -69,6 +83,17 @@ func createTestAgent(t *testing.T, name string, providers []string, archived boo
 		testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1`, id)
 	})
 	return id
+}
+
+func clearAgentDispatchDefaults(t *testing.T, agentID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent
+		SET default_provider = NULL, default_daemon_id = NULL
+		WHERE id = $1
+	`, agentID); err != nil {
+		t.Fatalf("clearAgentDispatchDefaults(%s): %v", agentID, err)
+	}
 }
 
 // listSystemNoticesForIssue returns all system-authored comments for the given issue.
@@ -211,6 +236,39 @@ func TestMentionDispatch_ArchivedAgent_PostsNotice(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected notice about archived agent, got: %v", notices)
+	}
+}
+
+func TestMentionDispatch_IncompleteDefaults_PostsNotice(t *testing.T) {
+	issueID := createTestIssue(t, "Mention dispatch: incomplete defaults test")
+
+	triggerJSON := `[{"type":"on_mention","enabled":true}]`
+	agentID := createTestAgent(t, "mention-incomplete-defaults-agent", []string{"codex"}, false, triggerJSON)
+	clearAgentDispatchDefaults(t, agentID)
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues/"+issueID+"/comments", map[string]any{
+		"content": fmt.Sprintf("[@IncompleteAgent](mention://agent/%s) please help", agentID),
+	})
+	req = withURLParam(req, "id", issueID)
+	testHandler.CreateComment(w, req)
+	if w.Code != 201 {
+		t.Fatalf("CreateComment: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	notices := listSystemNoticesForIssue(t, issueID)
+	if len(notices) == 0 {
+		t.Fatal("expected a system notice for incomplete defaults, got none")
+	}
+	found := false
+	for _, n := range notices {
+		if containsAll(n, "missing complete dispatch defaults") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected notice about incomplete defaults, got: %v", notices)
 	}
 }
 

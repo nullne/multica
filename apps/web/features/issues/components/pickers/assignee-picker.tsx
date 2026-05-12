@@ -14,7 +14,7 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
-import { pickBestProvider, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
+import { getAgentDispatchDefaults, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -363,13 +363,7 @@ export function AssigneePicker({
     if (!pendingAgent) return { daemonId: null as string | null, provider: null as string | null };
     const saved = useIssueDefaultsStore.getState().getAgentDispatch(pendingAgent.id);
     const runtimes = useRuntimeStore.getState().runtimes;
-    const daemonId =
-      pendingAgent.default_daemon_id ?? saved?.daemonId ?? null;
-    const provider =
-      saved?.provider ??
-      pickBestProvider(pendingAgent.providers ?? [], runtimes, daemonId ?? undefined) ??
-      null;
-    return { daemonId, provider };
+    return getAgentDispatchDefaults(pendingAgent, runtimes, saved);
   }, [pendingAgent]);
 
   const emitMemberOrUnassigned = (type: IssueAssigneeType | null, id: string | null) => {
