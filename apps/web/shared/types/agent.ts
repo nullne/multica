@@ -26,6 +26,12 @@ export interface Daemon {
   archived_at: string | null;
 }
 
+export interface DaemonWorkspaceAssignment {
+  workspace_id: string;
+  workspace_name: string;
+  enabled: boolean;
+}
+
 export type ProviderAuthStatus = "unknown" | "not_installed" | "unauthenticated" | "ready";
 
 export type RuntimeStatus = "online" | "offline" | "updating";

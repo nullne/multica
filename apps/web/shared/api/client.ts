@@ -17,6 +17,7 @@ import type {
   AgentTask,
   AgentRuntime,
   Daemon,
+  DaemonWorkspaceAssignment,
   InboxItem,
   IssueSubscriber,
   Comment,
@@ -412,6 +413,25 @@ export class ApiClient {
 
   async listDaemons(): Promise<Daemon[]> {
     return this.fetch("/api/daemons");
+  }
+
+  async listMyDaemons(): Promise<Daemon[]> {
+    return this.fetch("/api/me/daemons");
+  }
+
+  async listMyDaemonWorkspaces(daemonId: string): Promise<DaemonWorkspaceAssignment[]> {
+    return this.fetch(`/api/me/daemons/${daemonId}/workspaces`);
+  }
+
+  async setMyDaemonWorkspaceEnabled(
+    daemonId: string,
+    workspaceId: string,
+    enabled: boolean,
+  ): Promise<DaemonWorkspaceAssignment> {
+    return this.fetch(`/api/me/daemons/${daemonId}/workspaces/${workspaceId}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
   }
 
   async updateDaemon(daemonId: string, data: { device_name?: string; labels?: string[] }): Promise<Daemon> {

@@ -10,6 +10,7 @@ export type {
   AgentTask,
   AgentRuntime,
   Daemon,
+  DaemonWorkspaceAssignment,
   RuntimeDevice,
   CreateAgentRequest,
   UpdateAgentRequest,
