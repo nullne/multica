@@ -680,7 +680,6 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if assigneeFieldPresent {
 		newIsAgent := params.AssigneeType.Valid && params.AssigneeType.String == "agent" && params.AssigneeID.Valid
-		prevIsAgent := prevIssue.AssigneeType.Valid && prevIssue.AssigneeType.String == "agent" && prevIssue.AssigneeID.Valid
 		assigneeIdentityChanged := prevIssue.AssigneeType.String != params.AssigneeType.String ||
 			uuidToString(prevIssue.AssigneeID) != uuidToString(params.AssigneeID)
 
@@ -700,7 +699,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			if _, ok := rawFields["max_verification_rounds"]; !ok {
 				params.MaxVerificationRounds = pgtype.Int4{Valid: false}
 			}
-		} else if prevIsAgent && assigneeIdentityChanged {
+		} else if newIsAgent && assigneeIdentityChanged {
 			if !dispatchProviderPresent || !dispatchDaemonIDPresent {
 				assigneeType := params.AssigneeType.String
 				assigneeID := uuidToString(params.AssigneeID)

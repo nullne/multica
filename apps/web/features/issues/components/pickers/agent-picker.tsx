@@ -7,7 +7,7 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueDefaultsStore } from "@/features/issues/stores/defaults-store";
-import { getAgentDispatchDefaults, hasCompleteAgentDispatchDefaults } from "@/features/issues/utils/dispatch";
+import { getAgentDispatchDefaults } from "@/features/issues/utils/dispatch";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import {
   PropertyPicker,
@@ -185,31 +185,25 @@ export function AgentPicker({
         <PickerEmpty />
       ) : (
         <PickerSection label="Agents">
-              {filteredAgents.map((a) => {
-                const allowed = canAssignAgent(a, user?.id, memberRole);
-                const completeDefaults = hasCompleteAgentDispatchDefaults(a);
-                return (
-                  <PickerItem
-                    key={a.id}
-                    selected={value.agentId === a.id}
-                    disabled={!allowed || !completeDefaults}
-                    onClick={() => {
-                      if (!allowed || !completeDefaults) return;
-                      setPendingAgentId(a.id);
-                    }}
-                  >
-                    <ActorAvatar actorType="agent" actorId={a.id} size={18} />
-                    <span className={allowed && completeDefaults ? "" : "text-muted-foreground"}>
-                      {a.name}
-                    </span>
-                    {!completeDefaults && (
-                      <span className="ml-auto text-[10px] text-muted-foreground">
-                        Configure defaults
-                      </span>
-                    )}
-                    {a.visibility === "private" && (
-                      <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
-                    )}
+          {filteredAgents.map((a) => {
+            const allowed = canAssignAgent(a, user?.id, memberRole);
+            return (
+              <PickerItem
+                key={a.id}
+                selected={value.agentId === a.id}
+                disabled={!allowed}
+                onClick={() => {
+                  if (!allowed) return;
+                  setPendingAgentId(a.id);
+                }}
+              >
+                <ActorAvatar actorType="agent" actorId={a.id} size={18} />
+                <span className={allowed ? "" : "text-muted-foreground"}>
+                  {a.name}
+                </span>
+                {a.visibility === "private" && (
+                  <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
+                )}
               </PickerItem>
             );
           })}
