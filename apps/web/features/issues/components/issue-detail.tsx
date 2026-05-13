@@ -1096,7 +1096,6 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                         agent={actionPendingAssigneeAgent}
                         initialDaemonId={initialActionAssigneeDispatch.daemonId}
                         initialProvider={initialActionAssigneeDispatch.provider}
-                        daemonLocked={!!actionPendingAssigneeAgent.default_daemon_id}
                         onBack={() => setActionPendingAssigneeAgentId(null)}
                         onConfirm={handleConfirmActionAgentAssignment}
                       />

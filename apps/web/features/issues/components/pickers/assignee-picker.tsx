@@ -89,14 +89,12 @@ export function AgentDispatchConfirm({
   agent,
   initialDaemonId,
   initialProvider,
-  daemonLocked,
   onBack,
   onConfirm,
 }: {
   agent: Agent;
   initialDaemonId: string | null;
   initialProvider: string | null;
-  daemonLocked: boolean;
   onBack: () => void;
   onConfirm: (daemonId: string | null, provider: string | null) => void;
 }) {
@@ -142,114 +140,104 @@ export function AgentDispatchConfirm({
           <div className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             Environment
           </div>
-          {daemonLocked ? (
-            <div className="flex items-center gap-1.5 rounded-md border bg-muted/40 px-2 py-1.5 text-sm">
-              <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="truncate">
-                {selectedDaemon?.device_name || selectedDaemon?.daemon_id || "Default"}
-              </span>
-              <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
-            </div>
-          ) : (
-            <PropertyPicker
-              open={daemonOpen}
-              onOpenChange={(v) => {
-                setDaemonOpen(v);
-                if (!v) setShowAllDaemons(false);
-              }}
-              align="start"
-              width="w-52"
-              triggerRender={
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-1.5 rounded-md border px-2 py-1.5 text-sm hover:bg-accent transition-colors"
-                />
-              }
-              trigger={
-                <>
-                  <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className={selectedDaemon ? "truncate" : "text-muted-foreground"}>
-                    {selectedDaemon?.device_name || selectedDaemon?.daemon_id || "Pick environment"}
-                  </span>
-                  <ChevronDown className="ml-auto h-3 w-3 text-muted-foreground" />
-                </>
-              }
-            >
-              {compatible.length > 0 && (
-                <PickerSection label={provider ? "Compatible" : "Daemons"}>
-                  {compatible.map((d) => (
-                    <PickerItem
-                      key={d.id}
-                      selected={daemonId === d.id}
-                      onClick={() => {
-                        setDaemonId(d.id);
-                        setDaemonOpen(false);
-                      }}
-                    >
-                      <span className="truncate">
-                        {d.device_name || d.daemon_id}
-                      </span>
-                      <span
-                        className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
-                      />
-                    </PickerItem>
-                  ))}
-                </PickerSection>
-              )}
-              {provider && incompatible.length > 0 && !showAllDaemons && (
-                <button
-                  type="button"
-                  onClick={() => setShowAllDaemons(true)}
-                  className="flex w-full items-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <ChevronDown className="h-3 w-3" />
-                  Show {incompatible.length} incompatible
-                </button>
-              )}
-              {provider && showAllDaemons && incompatible.length > 0 && (
-                <PickerSection label="Incompatible">
-                  {incompatible.map((d) => (
-                    <PickerItem
-                      key={d.id}
-                      selected={daemonId === d.id}
-                      onClick={() => {
-                        setDaemonId(d.id);
-                        setDaemonOpen(false);
-                      }}
-                    >
-                      <span className="truncate text-muted-foreground">
-                        {d.device_name || d.daemon_id}
-                      </span>
-                      <span
-                        className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
-                      />
-                    </PickerItem>
-                  ))}
-                </PickerSection>
-              )}
-              {personal.length > 0 && (
-                <PickerSection label="Your Daemons">
-                  {personal.map((d) => (
-                    <PickerItem
-                      key={d.id}
-                      selected={daemonId === d.id}
-                      onClick={() => {
-                        setDaemonId(d.id);
-                        setDaemonOpen(false);
-                      }}
-                    >
-                      <span className="truncate">
-                        {d.device_name || d.daemon_id}
-                      </span>
-                      <span
-                        className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
-                      />
-                    </PickerItem>
-                  ))}
-                </PickerSection>
-              )}
-            </PropertyPicker>
-          )}
+          <PropertyPicker
+            open={daemonOpen}
+            onOpenChange={(v) => {
+              setDaemonOpen(v);
+              if (!v) setShowAllDaemons(false);
+            }}
+            align="start"
+            width="w-52"
+            triggerRender={
+              <button
+                type="button"
+                className="flex w-full items-center gap-1.5 rounded-md border px-2 py-1.5 text-sm hover:bg-accent transition-colors"
+              />
+            }
+            trigger={
+              <>
+                <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className={selectedDaemon ? "truncate" : "text-muted-foreground"}>
+                  {selectedDaemon?.device_name || selectedDaemon?.daemon_id || "Pick environment"}
+                </span>
+                <ChevronDown className="ml-auto h-3 w-3 text-muted-foreground" />
+              </>
+            }
+          >
+            {compatible.length > 0 && (
+              <PickerSection label={provider ? "Compatible" : "Daemons"}>
+                {compatible.map((d) => (
+                  <PickerItem
+                    key={d.id}
+                    selected={daemonId === d.id}
+                    onClick={() => {
+                      setDaemonId(d.id);
+                      setDaemonOpen(false);
+                    }}
+                  >
+                    <span className="truncate">
+                      {d.device_name || d.daemon_id}
+                    </span>
+                    <span
+                      className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                    />
+                  </PickerItem>
+                ))}
+              </PickerSection>
+            )}
+            {provider && incompatible.length > 0 && !showAllDaemons && (
+              <button
+                type="button"
+                onClick={() => setShowAllDaemons(true)}
+                className="flex w-full items-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronDown className="h-3 w-3" />
+                Show {incompatible.length} incompatible
+              </button>
+            )}
+            {provider && showAllDaemons && incompatible.length > 0 && (
+              <PickerSection label="Incompatible">
+                {incompatible.map((d) => (
+                  <PickerItem
+                    key={d.id}
+                    selected={daemonId === d.id}
+                    onClick={() => {
+                      setDaemonId(d.id);
+                      setDaemonOpen(false);
+                    }}
+                  >
+                    <span className="truncate text-muted-foreground">
+                      {d.device_name || d.daemon_id}
+                    </span>
+                    <span
+                      className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                    />
+                  </PickerItem>
+                ))}
+              </PickerSection>
+            )}
+            {personal.length > 0 && (
+              <PickerSection label="Your Daemons">
+                {personal.map((d) => (
+                  <PickerItem
+                    key={d.id}
+                    selected={daemonId === d.id}
+                    onClick={() => {
+                      setDaemonId(d.id);
+                      setDaemonOpen(false);
+                    }}
+                  >
+                    <span className="truncate">
+                      {d.device_name || d.daemon_id}
+                    </span>
+                    <span
+                      className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${d.status === "online" ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                    />
+                  </PickerItem>
+                ))}
+              </PickerSection>
+            )}
+          </PropertyPicker>
         </div>
 
         <div>
@@ -462,7 +450,6 @@ export function AssigneePicker({
           agent={pendingAgent}
           initialDaemonId={initialConfirmDispatch.daemonId}
           initialProvider={initialConfirmDispatch.provider}
-          daemonLocked={!!pendingAgent.default_daemon_id}
           onBack={() => setPendingAgentId(null)}
           onConfirm={confirmAgent}
         />
