@@ -177,7 +177,6 @@ export function AgentPicker({
           agent={pendingAgent}
           initialDaemonId={initialConfirmDispatch.daemonId}
           initialProvider={initialConfirmDispatch.provider}
-          daemonLocked={!!pendingAgent.default_daemon_id}
           onBack={() => setPendingAgentId(null)}
           onConfirm={handleConfirm}
         />
