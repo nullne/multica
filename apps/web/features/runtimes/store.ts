@@ -51,12 +51,13 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
             .map(([name]) => name)
         : [];
       const { selectedDaemonId } = get();
-      // Default selection prefers workspace-visible daemons so the detail
-      // panel doesn't open on a personal daemon that's hidden in the list.
-      const defaultDaemon =
-        daemons.find((d) => d.workspace_visible && !d.archived_at) ??
-        daemons.find((d) => !d.archived_at) ??
-        daemons[0];
+      // Default selection only opens workspace-visible daemons. Personal
+      // daemons must remain hidden until the user explicitly expands the
+      // collapsible Personal section and clicks one, so we never auto-open
+      // them on the detail pane.
+      const defaultDaemon = daemons.find(
+        (d) => d.workspace_visible && !d.archived_at,
+      );
       set({
         runtimes,
         daemons,
