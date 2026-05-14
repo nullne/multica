@@ -117,24 +117,46 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 		return "", "", err
 	}
 
+	// Seed a daemon owned by the fixture user and assigned to the workspace,
+	// then bind a local runtime to it via daemon_ref. The dispatch-defaults
+	// and mention-dispatch tests look up `agent_runtime` rows with
+	// `daemon_ref IS NOT NULL` to drive an agent's default daemon, so a
+	// cloud-only runtime is not enough.
+	var daemonUUID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO daemon (user_id, daemon_id, status, cli_version, device_name, device_info, last_seen_at)
+		VALUES ($1, $2, 'online', '0.1.0', $3, $4, now())
+		RETURNING id
+	`, userID, "handler-test-daemon", "handler-test-machine", "Handler test daemon").Scan(&daemonUUID); err != nil {
+		return "", "", err
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO daemon_workspace (daemon_id, workspace_id, enabled)
+		VALUES ($1, $2, TRUE)
+	`, daemonUUID, workspaceID); err != nil {
+		return "", "", err
+	}
+
 	var runtimeID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+			workspace_id, daemon_id, daemon_ref, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
 		)
-		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
+		VALUES ($1, $2, $3, $4, 'local', $5, 'online', $6, '{}'::jsonb, now())
 		RETURNING id
-	`, workspaceID, "Handler Test Runtime", "codex", "Handler test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "handler-test-daemon", daemonUUID, "Handler Test Runtime", "codex", "Handler test runtime").Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description,
-			visibility, owner_id, tools, triggers, providers
+			visibility, owner_id, tools, triggers, providers,
+			default_provider, default_daemon_id
 		)
-		VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'])
-	`, workspaceID, "Handler Test Agent", userID); err != nil {
+		VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'], 'codex', $4)
+	`, workspaceID, "Handler Test Agent", userID, daemonUUID); err != nil {
 		return "", "", err
 	}
 
@@ -1277,6 +1299,16 @@ func cleanupDaemon(t *testing.T, daemonUUID string) {
 	testPool.Exec(ctx, `DELETE FROM daemon WHERE id = $1`, daemonUUID)
 }
 
+// containsDaemon reports whether the slice contains a daemon with the given ID.
+func containsDaemon(daemons []DaemonResponse, id string) bool {
+	for _, d := range daemons {
+		if d.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 // TestDaemonRegisterSetsOnlineStatus verifies that registering a daemon
 // sets both the daemon and its runtimes to "online", and that runtime rows
 // are projected into the user's existing workspace.
@@ -2383,8 +2415,8 @@ func TestDaemonReadAccessRevokedWhenOwnerLeavesWorkspace(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode daemon list: %v", err)
 	}
-	if len(listed) != 1 || listed[0].ID != daemonUUID {
-		t.Fatalf("expected daemon to be listed while owner is member, got %+v", listed)
+	if !containsDaemon(listed, daemonUUID) {
+		t.Fatalf("expected daemon %s to be listed while owner is member, got %+v", daemonUUID, listed)
 	}
 
 	w = httptest.NewRecorder()
@@ -2421,8 +2453,8 @@ func TestDaemonReadAccessRevokedWhenOwnerLeavesWorkspace(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode daemon list after removal: %v", err)
 	}
-	if len(listed) != 0 {
-		t.Fatalf("expected daemon list to be empty after owner removal, got %+v", listed)
+	if containsDaemon(listed, daemonUUID) {
+		t.Fatalf("expected daemon %s to be hidden after owner removal, got %+v", daemonUUID, listed)
 	}
 
 	w = httptest.NewRecorder()

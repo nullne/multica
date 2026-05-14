@@ -125,24 +125,45 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 		return "", "", err
 	}
 
+	// Seed a daemon owned by the fixture user and assigned to the workspace,
+	// then bind a local runtime to it via daemon_ref. The on-mention dispatch
+	// path requires the assignee agent to have a `default_provider` and a
+	// `default_daemon_id` set, so we wire the fixture agent to this daemon.
+	var daemonUUID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO daemon (user_id, daemon_id, status, cli_version, device_name, device_info, last_seen_at)
+		VALUES ($1, $2, 'online', '0.1.0', $3, $4, now())
+		RETURNING id
+	`, userID, "integration-test-daemon", "integration-test-machine", "Integration test daemon").Scan(&daemonUUID); err != nil {
+		return "", "", err
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO daemon_workspace (daemon_id, workspace_id, enabled)
+		VALUES ($1, $2, TRUE)
+	`, daemonUUID, workspaceID); err != nil {
+		return "", "", err
+	}
+
 	var runtimeID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+			workspace_id, daemon_id, daemon_ref, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
 		)
-		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
+		VALUES ($1, $2, $3, $4, 'local', $5, 'online', $6, '{}'::jsonb, now())
 		RETURNING id
-	`, workspaceID, "Integration Test Runtime", "codex", "Integration test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "integration-test-daemon", daemonUUID, "Integration Test Runtime", "codex", "Integration test runtime").Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO agent (
 			workspace_id, name, description,
-			visibility, owner_id, tools, triggers, providers
+			visibility, owner_id, tools, triggers, providers,
+			default_provider, default_daemon_id
 		)
-		VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'])
-	`, workspaceID, "Integration Test Agent", userID); err != nil {
+		VALUES ($1, $2, '', 'workspace', $3, '[]'::jsonb, '[]'::jsonb, ARRAY['codex'], 'codex', $4)
+	`, workspaceID, "Integration Test Agent", userID, daemonUUID); err != nil {
 		return "", "", err
 	}
 
