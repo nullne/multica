@@ -67,6 +67,7 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
@@ -466,21 +467,44 @@ function SkillsTab({
   const refreshAgents = useWorkspaceStore((s) => s.refreshAgents);
   const [saving, setSaving] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [pickerSelected, setPickerSelected] = useState<Set<string>>(new Set());
 
   const agentSkillIds = new Set(agent.skills.map((s) => s.id));
   const availableSkills = workspaceSkills.filter((s) => !agentSkillIds.has(s.id));
 
-  const handleAdd = async (skillId: string) => {
+  const openPicker = () => {
+    setPickerSelected(new Set());
+    setShowPicker(true);
+  };
+
+  const togglePickerSelection = (skillId: string) => {
+    setPickerSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(skillId)) {
+        next.delete(skillId);
+      } else {
+        next.add(skillId);
+      }
+      return next;
+    });
+  };
+
+  const handleAddSelected = async () => {
+    if (pickerSelected.size === 0) return;
     setSaving(true);
     try {
-      const newIds = [...agent.skills.map((s) => s.id), skillId];
+      const newIds = [
+        ...agent.skills.map((s) => s.id),
+        ...Array.from(pickerSelected),
+      ];
       await api.setAgentSkills(agent.id, { skill_ids: newIds });
       await refreshAgents();
+      setShowPicker(false);
+      setPickerSelected(new Set());
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to add skill");
+      toast.error(e instanceof Error ? e.message : "Failed to add skills");
     } finally {
       setSaving(false);
-      setShowPicker(false);
     }
   };
 
@@ -509,11 +533,11 @@ function SkillsTab({
         <Button
           variant="outline"
           size="xs"
-          onClick={() => setShowPicker(true)}
+          onClick={openPicker}
           disabled={saving || availableSkills.length === 0}
         >
           <Plus className="h-3 w-3" />
-          Add Skill
+          Add Skills
         </Button>
       </div>
 
@@ -526,13 +550,13 @@ function SkillsTab({
           </p>
           {availableSkills.length > 0 && (
             <Button
-              onClick={() => setShowPicker(true)}
+              onClick={openPicker}
               size="xs"
               className="mt-3"
               disabled={saving}
             >
               <Plus className="h-3 w-3" />
-              Add Skill
+              Add Skills
             </Button>
           )}
         </div>
@@ -570,33 +594,64 @@ function SkillsTab({
 
       {/* Skill Picker Dialog */}
       {showPicker && (
-        <Dialog open onOpenChange={(v) => { if (!v) setShowPicker(false); }}>
+        <Dialog
+          open
+          onOpenChange={(v) => {
+            if (!v) {
+              setShowPicker(false);
+              setPickerSelected(new Set());
+            }
+          }}
+        >
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle className="text-sm">Add Skill</DialogTitle>
+              <DialogTitle className="text-sm">Add Skills</DialogTitle>
               <DialogDescription className="text-xs">
-                Select a skill to assign to this agent.
+                Select one or more skills to assign to this agent.
               </DialogDescription>
             </DialogHeader>
             <div className="max-h-64 overflow-y-auto space-y-1">
-              {availableSkills.map((skill) => (
-                <button
-                  key={skill.id}
-                  onClick={() => handleAdd(skill.id)}
-                  disabled={saving}
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent/50"
-                >
-                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium">{skill.name}</div>
-                    {skill.description && (
-                      <div className="text-xs text-muted-foreground truncate">
-                        {skill.description}
-                      </div>
+              {availableSkills.map((skill) => {
+                const checked = pickerSelected.has(skill.id);
+                return (
+                  <div
+                    key={skill.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={checked}
+                    onClick={() => {
+                      if (!saving) togglePickerSelection(skill.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (saving) return;
+                      if (e.key === " " || e.key === "Enter") {
+                        e.preventDefault();
+                        togglePickerSelection(skill.id);
+                      }
+                    }}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent/50",
+                      saving && "cursor-not-allowed opacity-60",
                     )}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => togglePickerSelection(skill.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      disabled={saving}
+                    />
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">{skill.name}</div>
+                      {skill.description && (
+                        <div className="text-xs text-muted-foreground truncate">
+                          {skill.description}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </button>
-              ))}
+                );
+              })}
               {availableSkills.length === 0 && (
                 <p className="py-6 text-center text-xs text-muted-foreground">
                   All workspace skills are already assigned.
@@ -604,8 +659,23 @@ function SkillsTab({
               )}
             </div>
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setShowPicker(false)}>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setShowPicker(false);
+                  setPickerSelected(new Set());
+                }}
+                disabled={saving}
+              >
                 Cancel
+              </Button>
+              <Button
+                onClick={handleAddSelected}
+                disabled={saving || pickerSelected.size === 0}
+              >
+                {pickerSelected.size > 0
+                  ? `Add ${pickerSelected.size} Skill${pickerSelected.size === 1 ? "" : "s"}`
+                  : "Add"}
               </Button>
             </DialogFooter>
           </DialogContent>
