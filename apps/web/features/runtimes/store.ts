@@ -51,6 +51,12 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
             .map(([name]) => name)
         : [];
       const { selectedDaemonId } = get();
+      // Default selection prefers workspace-visible daemons so the detail
+      // panel doesn't open on a personal daemon that's hidden in the list.
+      const defaultDaemon =
+        daemons.find((d) => d.workspace_visible && !d.archived_at) ??
+        daemons.find((d) => !d.archived_at) ??
+        daemons[0];
       set({
         runtimes,
         daemons,
@@ -59,7 +65,7 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
         selectedDaemonId:
           selectedDaemonId && daemons.some((d) => d.id === selectedDaemonId)
             ? selectedDaemonId
-            : daemons[0]?.id ?? "",
+            : defaultDaemon?.id ?? "",
         selectedId: runtimes[0]?.id ?? "",
       });
     } catch {
