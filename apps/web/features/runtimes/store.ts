@@ -51,6 +51,13 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
             .map(([name]) => name)
         : [];
       const { selectedDaemonId } = get();
+      // Default selection only opens workspace-visible daemons. Personal
+      // daemons must remain hidden until the user explicitly expands the
+      // collapsible Personal section and clicks one, so we never auto-open
+      // them on the detail pane.
+      const defaultDaemon = daemons.find(
+        (d) => d.workspace_visible && !d.archived_at,
+      );
       set({
         runtimes,
         daemons,
@@ -59,7 +66,7 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
         selectedDaemonId:
           selectedDaemonId && daemons.some((d) => d.id === selectedDaemonId)
             ? selectedDaemonId
-            : daemons[0]?.id ?? "",
+            : defaultDaemon?.id ?? "",
         selectedId: runtimes[0]?.id ?? "",
       });
     } catch {

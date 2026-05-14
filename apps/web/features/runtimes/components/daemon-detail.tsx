@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
-import { Monitor, Archive, ArchiveRestore, MoreHorizontal, Terminal, Search } from "lucide-react";
+import { Monitor, Archive, ArchiveRestore, MoreHorizontal, Terminal, Search, User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -232,6 +233,16 @@ export function DaemonDetail({
           <div className="min-w-0">
             <EditableDeviceName daemon={daemon} />
           </div>
+          {!daemon.workspace_visible && (
+            <Badge
+              variant="outline"
+              className="h-5 px-1.5 text-[10px] font-medium text-muted-foreground"
+              title="Personal daemon — not enabled in this workspace"
+            >
+              <User className="h-2.5 w-2.5" />
+              Personal
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={daemon.status} />

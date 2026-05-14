@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
-import { Server, Monitor, ArrowUpCircle, ShieldCheck, ShieldAlert, ShieldX, MoreHorizontal, Archive, ArchiveRestore, ChevronRight } from "lucide-react";
+import { Server, Monitor, ArrowUpCircle, ShieldCheck, ShieldAlert, ShieldX, MoreHorizontal, Archive, ArchiveRestore, ChevronRight, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +36,7 @@ function DaemonListItem({
   daemonRuntimes,
   enabledProviders,
   isSelected,
+  isPersonal,
   onClick,
   onArchive,
   onRestore,
@@ -43,13 +45,17 @@ function DaemonListItem({
   daemonRuntimes: AgentRuntime[];
   enabledProviders: string[];
   isSelected: boolean;
+  isPersonal?: boolean;
   onClick: () => void;
   onArchive: () => void;
   onRestore: () => void;
 }) {
   const isArchived = !!daemon.archived_at;
   const installedSet = new Set(daemonRuntimes.map((r) => r.provider));
-  const missingProviders = enabledProviders.filter((p) => !installedSet.has(p));
+  // Missing providers are workspace-scoped; only relevant for workspace-visible daemons.
+  const missingProviders = isPersonal
+    ? []
+    : enabledProviders.filter((p) => !installedSet.has(p));
 
   return (
     <div
@@ -69,8 +75,20 @@ function DaemonListItem({
           <Monitor className="h-3.5 w-3.5" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">
-            {daemon.device_name || daemon.daemon_id}
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-medium">
+              {daemon.device_name || daemon.daemon_id}
+            </span>
+            {isPersonal && (
+              <Badge
+                variant="outline"
+                className="h-4 px-1.5 text-[10px] font-medium text-muted-foreground"
+                title="Personal daemon — not enabled in this workspace"
+              >
+                <User className="h-2.5 w-2.5" />
+                Personal
+              </Badge>
+            )}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">
             {daemon.cli_version && `multica ${daemon.cli_version}`}
@@ -138,6 +156,7 @@ function DaemonListItemWrapper({
   daemon,
   runtimes,
   isSelected,
+  isPersonal,
   onClick,
   onArchive,
   onRestore,
@@ -145,6 +164,7 @@ function DaemonListItemWrapper({
   daemon: Daemon;
   runtimes: AgentRuntime[];
   isSelected: boolean;
+  isPersonal?: boolean;
   onClick: () => void;
   onArchive: () => void;
   onRestore: () => void;
@@ -156,6 +176,7 @@ function DaemonListItemWrapper({
       daemonRuntimes={runtimes.filter((r) => r.daemon_ref === daemon.id)}
       enabledProviders={enabledProviders}
       isSelected={isSelected}
+      isPersonal={isPersonal}
       onClick={onClick}
       onArchive={onArchive}
       onRestore={onRestore}
@@ -178,8 +199,17 @@ export function RuntimeList({
   const patchDaemon = useRuntimeStore((s) => s.patchDaemon);
   const [updating, setUpdating] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [personalOpen, setPersonalOpen] = useState(false);
 
-  const activeDaemons = daemons.filter((d) => !d.archived_at);
+  // Workspace daemons are surfaced by default; personal (non-workspace-visible)
+  // daemons live in a collapsible section so they aren't mistaken for
+  // workspace-enabled ones.
+  const activeWorkspaceDaemons = daemons.filter(
+    (d) => !d.archived_at && d.workspace_visible,
+  );
+  const personalDaemons = daemons.filter(
+    (d) => !d.archived_at && !d.workspace_visible,
+  );
   const archivedDaemons = daemons.filter((d) => !!d.archived_at);
 
   const handleArchive = useCallback(async (id: string) => {
@@ -231,8 +261,12 @@ export function RuntimeList({
     }
   }, [workspace]);
 
-  const hasOnline = activeDaemons.some((d) => d.status === "online");
-  const onlineCount = activeDaemons.filter((d) => d.status === "online").length;
+  // Online stats reflect what's available to this workspace; personal daemons
+  // are not counted.
+  const hasOnline = activeWorkspaceDaemons.some((d) => d.status === "online");
+  const onlineCount = activeWorkspaceDaemons.filter(
+    (d) => d.status === "online",
+  ).length;
 
   return (
     <div className="overflow-y-auto h-full border-r">
@@ -251,7 +285,7 @@ export function RuntimeList({
             </Button>
           )}
           <span className="text-xs text-muted-foreground">
-            {onlineCount}/{activeDaemons.length} online
+            {onlineCount}/{activeWorkspaceDaemons.length} online
           </span>
         </div>
       </div>
@@ -271,19 +305,63 @@ export function RuntimeList({
         </div>
       ) : (
         <>
-          <div className="divide-y">
-            {activeDaemons.map((daemon) => (
-              <DaemonListItemWrapper
-                key={daemon.id}
-                daemon={daemon}
-                runtimes={runtimes}
-                isSelected={daemon.id === selectedId}
-                onClick={() => onSelect(daemon.id)}
-                onArchive={() => handleArchive(daemon.id)}
-                onRestore={() => handleRestore(daemon.id)}
-              />
-            ))}
-          </div>
+          {activeWorkspaceDaemons.length === 0 ? (
+            <div className="flex flex-col items-center justify-center px-4 py-10">
+              <Server className="h-8 w-8 text-muted-foreground/40" />
+              <p className="mt-3 text-sm text-muted-foreground">
+                No daemons enabled in this workspace
+              </p>
+              {personalDaemons.length > 0 && (
+                <p className="mt-1 text-xs text-muted-foreground text-center">
+                  Expand <span className="font-medium">Personal</span> below to
+                  see your own daemons.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="divide-y">
+              {activeWorkspaceDaemons.map((daemon) => (
+                <DaemonListItemWrapper
+                  key={daemon.id}
+                  daemon={daemon}
+                  runtimes={runtimes}
+                  isSelected={daemon.id === selectedId}
+                  onClick={() => onSelect(daemon.id)}
+                  onArchive={() => handleArchive(daemon.id)}
+                  onRestore={() => handleRestore(daemon.id)}
+                />
+              ))}
+            </div>
+          )}
+
+          {personalDaemons.length > 0 && (
+            <Collapsible open={personalOpen} onOpenChange={setPersonalOpen}>
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 border-t px-4 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors">
+                <ChevronRight className={cn("h-3 w-3 transition-transform", personalOpen && "rotate-90")} />
+                <User className="h-3 w-3" />
+                <span>Personal ({personalDaemons.length})</span>
+                <span className="ml-auto text-[10px] text-muted-foreground/70">
+                  Not in workspace
+                </span>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="divide-y">
+                  {personalDaemons.map((daemon) => (
+                    <DaemonListItemWrapper
+                      key={daemon.id}
+                      daemon={daemon}
+                      runtimes={runtimes}
+                      isSelected={daemon.id === selectedId}
+                      isPersonal
+                      onClick={() => onSelect(daemon.id)}
+                      onArchive={() => handleArchive(daemon.id)}
+                      onRestore={() => handleRestore(daemon.id)}
+                    />
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
 
           {archivedDaemons.length > 0 && (
             <Collapsible open={archivedOpen} onOpenChange={setArchivedOpen}>
@@ -300,6 +378,7 @@ export function RuntimeList({
                       daemon={daemon}
                       runtimes={runtimes}
                       isSelected={daemon.id === selectedId}
+                      isPersonal={!daemon.workspace_visible}
                       onClick={() => onSelect(daemon.id)}
                       onArchive={() => handleArchive(daemon.id)}
                       onRestore={() => handleRestore(daemon.id)}
