@@ -105,6 +105,54 @@ server-side project ID and the public Firebase app settings used by the web UI.
 > server-side `FIREBASE_PROJECT_ID` is read at runtime and does not require
 > a rebuild.
 
+#### Custom-Domain PWA Google Sign-In
+
+When Multica is installed as a PWA (standalone display mode) from a custom
+domain such as `multica.example.com`, the web app uses `signInWithRedirect`
+instead of `signInWithPopup`. Modern browsers — Safari in particular —
+enforce third-party storage partitioning on the redirect target, so a
+Firebase auth handler hosted on `<project>.firebaseapp.com` cannot hand the
+credential back to the app's origin. `getRedirectResult()` returns `null` and
+sign-in silently fails.
+
+To make redirect sign-in work on a custom domain, the Firebase auth helper
+must be served same-origin with the app. Multica's bundled nginx config
+handles this: `/__/auth/` is proxied to your Firebase project's
+`*.firebaseapp.com` domain.
+
+**Setup checklist:**
+
+1. **Build the frontend with `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN` set to your
+   app's own domain** (not `<project>.firebaseapp.com`). This tells the
+   Firebase Web SDK to redirect users to `https://<app-domain>/__/auth/handler`
+   rather than the Firebase-hosted helper.
+
+   ```bash
+   docker build -f apps/web/Dockerfile -t my-multica-frontend:latest \
+     --build-arg NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=multica.example.com \
+     ... (other Firebase build args) ...
+     .
+   ```
+
+2. **Make sure `FIREBASE_PROJECT_ID` is set in your `.env`.** The nginx
+   container substitutes it into `deploy/nginx.conf.template` and proxies
+   `/__/auth/` to `<FIREBASE_PROJECT_ID>.firebaseapp.com`. This is the same
+   variable the backend uses to verify Firebase ID tokens — no extra
+   variable to manage.
+
+3. **Add your custom domain to Firebase authorized domains.** In the Firebase
+   Console: *Authentication → Settings → Authorized domains* — add
+   `multica.example.com`.
+
+4. **Add the redirect handler URL to your Google OAuth client.** In Google
+   Cloud Console: *APIs & Services → Credentials → OAuth 2.0 Client IDs* —
+   under *Authorized redirect URIs* add
+   `https://multica.example.com/__/auth/handler`.
+
+Skip this section if you're not exposing Multica as a PWA on a custom
+domain. Browser-tab sign-in keeps working with the default
+`<project>.firebaseapp.com` auth domain.
+
 ### File Storage (Optional)
 
 For file uploads and attachments, configure an S3 (or S3-compatible) bucket.
