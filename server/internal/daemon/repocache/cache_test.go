@@ -13,6 +13,44 @@ func testLogger() *slog.Logger {
 	return slog.Default()
 }
 
+// TestGitAuthArgsDisablesCredentialHelper guards the fix for the
+// `Duplicate header: "Authorization"` failure reported in
+// https://github.com/nullne/multica/issues/189. When the host has a
+// credential helper configured (e.g. via `gh auth setup-git`), git would
+// supply its own Authorization header in addition to the http.extraHeader
+// we inject — GitHub then rejects the request with HTTP 400.
+func TestGitAuthArgsDisablesCredentialHelper(t *testing.T) {
+	t.Parallel()
+
+	if got := gitAuthArgs(""); got != nil {
+		t.Errorf("gitAuthArgs(\"\") = %v, want nil", got)
+	}
+
+	args := gitAuthArgs("token123")
+	if len(args)%2 != 0 {
+		t.Fatalf("gitAuthArgs should return -c/value pairs, got %v", args)
+	}
+	got := map[string]string{}
+	for i := 0; i < len(args); i += 2 {
+		if args[i] != "-c" {
+			t.Errorf("expected '-c' at args[%d], got %q", i, args[i])
+			continue
+		}
+		k, v, _ := strings.Cut(args[i+1], "=")
+		got[k] = v
+	}
+	if v, ok := got["http.extraHeader"]; !ok || !strings.HasPrefix(v, "Authorization: Basic ") {
+		t.Errorf("missing or malformed http.extraHeader, got %q (present=%v)", v, ok)
+	}
+	v, ok := got["credential.helper"]
+	if !ok {
+		t.Error("expected credential.helper override to disable inherited helpers")
+	}
+	if v != "" {
+		t.Errorf("expected credential.helper to be empty (resets helper list), got %q", v)
+	}
+}
+
 func TestBareDirName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
