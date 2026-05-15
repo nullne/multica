@@ -3,10 +3,14 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const pushMock = vi.fn();
+const listIssuesMock = vi.fn();
+let mockPathname = "/issues";
+let mockSearchParams = new URLSearchParams();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
-  usePathname: () => "/issues",
+  usePathname: () => mockPathname,
+  useSearchParams: () => mockSearchParams,
 }));
 
 vi.mock("next/link", () => ({
@@ -23,6 +27,12 @@ vi.mock("next/link", () => ({
       {children}
     </a>
   ),
+}));
+
+vi.mock("@/shared/api", () => ({
+  api: {
+    listIssues: (...args: unknown[]) => listIssuesMock(...args),
+  },
 }));
 
 const authState = {
@@ -45,7 +55,10 @@ vi.mock("@/features/auth", () => ({
 
 const workspaceState = {
   workspace: { id: "ws-1", name: "Test Workspace", slug: "test" },
-  workspaces: [{ id: "ws-1", name: "Test Workspace", slug: "test" }],
+  workspaces: [
+    { id: "ws-1", name: "Test Workspace", slug: "test" },
+    { id: "ws-2", name: "Prod Debug", slug: "prod-debug" },
+  ],
   switchWorkspace: vi.fn(),
   clearWorkspace: vi.fn(),
 };
@@ -86,6 +99,30 @@ vi.mock("@/features/issues/stores/draft-store", () => ({
   ),
 }));
 
+const issueState = {
+  issues: [
+    {
+      id: "issue-1",
+      workspace_id: "ws-1",
+      identifier: "TES-1",
+      title: "Recent issue",
+      status: "todo",
+      priority: "medium",
+      creator_type: "member",
+      creator_id: "user-1",
+      updated_at: "2026-01-01T00:00:00Z",
+      created_at: "2026-01-01T00:00:00Z",
+    },
+  ],
+};
+vi.mock("@/features/issues/store", () => ({
+  useIssueStore: Object.assign(
+    (selector?: (s: typeof issueState) => unknown) =>
+      selector ? selector(issueState) : issueState,
+    { getState: () => issueState },
+  ),
+}));
+
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "./app-sidebar";
 
@@ -100,6 +137,29 @@ function renderSidebar() {
 describe("AppSidebar user menu", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPathname = "/issues";
+    mockSearchParams = new URLSearchParams();
+    listIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
+      Promise.resolve({
+        issues:
+          workspace_id === "ws-2"
+            ? [
+                {
+                  id: "issue-2",
+                  workspace_id: "ws-2",
+                  identifier: "PRD-2",
+                  title: "Other workspace issue",
+                  status: "todo",
+                  priority: "medium",
+                  creator_type: "member",
+                  creator_id: "user-1",
+                  updated_at: "2026-01-02T00:00:00Z",
+                  created_at: "2026-01-02T00:00:00Z",
+                },
+              ]
+            : issueState.issues,
+      })
+    );
   });
 
   it("opens the bottom user menu without throwing", async () => {
@@ -133,5 +193,18 @@ describe("AppSidebar user menu", () => {
     await user.click(await screen.findByText("My daemons"));
 
     expect(pushMock).toHaveBeenCalledWith("/account?tab=daemons");
+  });
+
+  it("shows only new issue and recents navigation on the home route", async () => {
+    mockPathname = "/home";
+    renderSidebar();
+
+    expect(screen.getByRole("button", { name: "New" })).toBeInTheDocument();
+    expect(screen.getByText("Recents")).toBeInTheDocument();
+    expect(screen.getByText("Recent issue")).toBeInTheDocument();
+    expect(await screen.findByText("Prod Debug")).toBeInTheDocument();
+    expect(screen.getByText("Other workspace issue")).toBeInTheDocument();
+    expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agents")).not.toBeInTheDocument();
   });
 });

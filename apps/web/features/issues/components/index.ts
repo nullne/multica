@@ -4,6 +4,7 @@ export { StatusPicker, PriorityPicker, AssigneePicker, canAssignAgent, AgentDisp
 export type { AgentPickerValue } from "./pickers";
 export { IssueDetail } from "./issue-detail";
 export { IssuesPage } from "./issues-page";
+export { RecentIssuesPage } from "./recent-issues-page";
 export { SplitView } from "./split-view";
 export { CommentCard } from "./comment-card";
 export { CommentInput } from "./comment-input";
