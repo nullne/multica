@@ -18,7 +18,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     <LoginPageClient
       cliCallback={firstParam(params.cli_callback)}
       cliState={firstParam(params.cli_state) ?? ""}
-      nextPath={firstParam(params.next) ?? "/issues"}
+      nextPath={firstParam(params.next) ?? "/home"}
     />
   );
 }

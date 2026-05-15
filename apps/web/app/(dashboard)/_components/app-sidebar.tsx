@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -17,6 +18,7 @@ import {
   SquarePen,
   CircleUser,
   UserCog,
+  SlidersHorizontal,
 } from "lucide-react";
 import { WorkspaceAvatar } from "@/features/workspace";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
@@ -34,10 +36,13 @@ import {
 } from "@/components/ui/sidebar";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -46,6 +51,10 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useInboxStore } from "@/features/inbox";
 import { useModalStore } from "@/features/modals";
+import { useIssueStore } from "@/features/issues/store";
+import { StatusIcon } from "@/features/issues/components";
+import { api } from "@/shared/api";
+import type { Issue } from "@/shared/types";
 
 const primaryNav = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -74,6 +83,12 @@ export function AppSidebar() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
+  const issues = useIssueStore((s) => s.issues);
+  const [recentIssues, setRecentIssues] = useState<Issue[]>(issues);
+  const [onlyMyIssues, setOnlyMyIssues] = useState(true);
+  const [hideCompleted, setHideCompleted] = useState(false);
+  const [groupByWorkspace, setGroupByWorkspace] = useState(true);
+  const [recentSortBy, setRecentSortBy] = useState<"updated" | "created">("updated");
 
   const unreadCount = useInboxStore((s) => s.unreadCount());
 
@@ -90,6 +105,285 @@ export function AppSidebar() {
     .join("")
     .toUpperCase()
     .slice(0, 2);
+
+  const isHome = pathname === "/home";
+  const workspaceIds = workspaces.map((ws) => ws.id).join(",");
+
+  useEffect(() => {
+    if (!isHome) return;
+
+    let cancelled = false;
+    setRecentIssues(issues);
+
+    if (workspaces.length === 0) return;
+
+    void Promise.all(
+      workspaces.map((ws) =>
+        api
+          .listIssues({ workspace_id: ws.id, limit: 50 })
+          .then((res) => res.issues)
+          .catch(() => [] as Issue[])
+      )
+    ).then((issueLists) => {
+      if (!cancelled) {
+        setRecentIssues(issueLists.flat());
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isHome, issues, workspaceIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const recentGroups = useMemo(() => {
+    const workspaceById = new Map(workspaces.map((ws) => [ws.id, ws]));
+    const filtered = recentIssues.filter((i) => {
+      if (onlyMyIssues) {
+        if (i.creator_type !== "member" || i.creator_id !== user?.id) return false;
+      }
+      if (hideCompleted && (i.status === "done" || i.status === "cancelled")) {
+        return false;
+      }
+      return true;
+    });
+    const sortField = recentSortBy === "created" ? "created_at" : "updated_at";
+    const sorted = [...filtered].sort((a, b) =>
+      b[sortField].localeCompare(a[sortField])
+    );
+    if (!groupByWorkspace) {
+      return new Map([["__all__", { workspaceName: "", issues: sorted }]]);
+    }
+    return sorted.reduce(
+      (groups, issue) => {
+        const group = groups.get(issue.workspace_id) ?? {
+          workspaceName:
+            workspaceById.get(issue.workspace_id)?.name ?? "Unknown workspace",
+          issues: [] as Issue[],
+        };
+        group.issues.push(issue);
+        groups.set(issue.workspace_id, group);
+        return groups;
+      },
+      new Map<string, { workspaceName: string; issues: Issue[] }>()
+    );
+  }, [
+    recentIssues,
+    workspaces,
+    onlyMyIssues,
+    user?.id,
+    hideCompleted,
+    recentSortBy,
+    groupByWorkspace,
+  ]);
+
+  if (isHome) {
+    return (
+      <Sidebar variant="inset">
+        <SidebarHeader className="py-3">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                render={
+                  <button
+                    type="button"
+                    onClick={() => router.push("/home?new=1")}
+                  />
+                }
+                className="font-medium"
+              >
+                <SquarePen />
+                <span>New</span>
+                <DraftDot />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarHeader>
+
+        <SidebarContent>
+          <SidebarGroup>
+            <div className="flex items-center justify-between px-2 pb-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                Recents
+              </span>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Filter recents"
+                      className="rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                    >
+                      <SlidersHorizontal className="size-3.5" />
+                    </button>
+                  }
+                />
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuCheckboxItem
+                    checked={onlyMyIssues}
+                    onCheckedChange={setOnlyMyIssues}
+                  >
+                    Only my issues
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={hideCompleted}
+                    onCheckedChange={setHideCompleted}
+                  >
+                    Hide completed
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={groupByWorkspace}
+                    onCheckedChange={setGroupByWorkspace}
+                  >
+                    Group by workspace
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel className="text-xs text-muted-foreground">
+                      Sort by
+                    </DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={recentSortBy}
+                      onValueChange={(v) =>
+                        setRecentSortBy(v as "updated" | "created")
+                      }
+                    >
+                      <DropdownMenuRadioItem value="updated">
+                        Last updated
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="created">
+                        Last created
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuGroup>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <SidebarGroupContent>
+              <SidebarMenu className="gap-1">
+                {[...recentGroups.entries()].map(([workspaceId, group]) => (
+                  <div key={workspaceId} className="space-y-0.5">
+                    {group.workspaceName && (
+                      <div className="px-2 pt-2 text-xs text-muted-foreground">
+                        {group.workspaceName}
+                      </div>
+                    )}
+                    {group.issues.map((issue) => {
+                      const isAgentRunning =
+                        issue.assignee_type === "agent" &&
+                        issue.status === "in_progress";
+                      return (
+                        <SidebarMenuItem key={issue.id}>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <SidebarMenuButton
+                                  size="sm"
+                                  onClick={async () => {
+                                    if (issue.workspace_id !== workspace?.id) {
+                                      await switchWorkspace(issue.workspace_id);
+                                    }
+                                    router.push(`/home?issue=${issue.id}`);
+                                  }}
+                                >
+                                  <span className="relative inline-flex shrink-0">
+                                    <StatusIcon
+                                      status={issue.status}
+                                      className="size-4"
+                                    />
+                                    {isAgentRunning && (
+                                      <span
+                                        aria-hidden
+                                        className="absolute -top-0.5 -right-0.5 flex size-1.5"
+                                      >
+                                        <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
+                                        <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="truncate">{issue.title}</span>
+                                </SidebarMenuButton>
+                              }
+                            />
+                            <TooltipContent side="right">
+                              {issue.identifier}
+                            </TooltipContent>
+                          </Tooltip>
+                        </SidebarMenuItem>
+                      );
+                    })}
+                  </div>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+
+        <SidebarFooter>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <SidebarMenuButton size="lg" className="gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+                        {user?.avatar_url ? (
+                          <img
+                            src={user.avatar_url}
+                            alt={user.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          userInitials || "?"
+                        )}
+                      </span>
+                      <span className="flex min-w-0 flex-1 flex-col text-left">
+                        <span className="truncate text-sm font-medium">
+                          {user?.name ?? "Account"}
+                        </span>
+                        <span className="truncate text-xs text-muted-foreground">
+                          {user?.email}
+                        </span>
+                      </span>
+                      <ChevronsUpDown className="size-3.5 text-muted-foreground" />
+                    </SidebarMenuButton>
+                  }
+                />
+                <DropdownMenuContent
+                  className="w-(--radix-dropdown-menu-trigger-width) min-w-56"
+                  align="start"
+                  side="top"
+                  sideOffset={4}
+                >
+                  <div className="px-1.5 py-1 text-xs text-muted-foreground">
+                    {user?.email}
+                  </div>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuGroup>
+                    <DropdownMenuItem onClick={() => router.push("/account")}>
+                      <UserCog className="h-3.5 w-3.5" />
+                      Account settings
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => router.push("/account?tab=daemons")}
+                    >
+                      <Monitor className="h-3.5 w-3.5" />
+                      My daemons
+                    </DropdownMenuItem>
+                  </DropdownMenuGroup>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" onClick={logout}>
+                    <LogOut className="h-3.5 w-3.5" />
+                    Log out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+    );
+  }
 
   return (
       <Sidebar variant="inset">
