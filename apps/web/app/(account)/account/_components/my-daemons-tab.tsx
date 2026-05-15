@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Monitor, Server, Wifi, WifiOff } from "lucide-react";
+import { Monitor, Server } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { StatusBadge } from "@/features/runtimes/components/shared";
 import { api } from "@/shared/api";
 import type { Daemon, DaemonWorkspaceAssignment } from "@/shared/types";
 
@@ -23,16 +23,6 @@ function formatLastSeen(value: string | null): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
-}
-
-function DaemonStatusBadge({ daemon }: { daemon: Daemon }) {
-  const online = daemon.status === "online";
-  return (
-    <Badge variant={online ? "default" : "secondary"} className="capitalize">
-      {online ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-      {daemon.status}
-    </Badge>
-  );
 }
 
 export function MyDaemonsTab() {
@@ -169,7 +159,7 @@ export function MyDaemonsTab() {
                       {daemon.daemon_id}
                     </span>
                     <span className="mt-2 flex items-center gap-2">
-                      <DaemonStatusBadge daemon={daemon} />
+                      <StatusBadge status={daemon.status} />
                     </span>
                   </span>
                 </button>
@@ -189,7 +179,7 @@ export function MyDaemonsTab() {
                       multica {selectedDaemon.cli_version || "unknown"} · {formatLastSeen(selectedDaemon.last_seen_at)}
                     </p>
                   </div>
-                  <DaemonStatusBadge daemon={selectedDaemon} />
+                  <StatusBadge status={selectedDaemon.status} />
                 </div>
               )}
 
