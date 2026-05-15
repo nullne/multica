@@ -62,13 +62,13 @@ server {
     # this proxy, getRedirectResult() returns null in PWA mode because the
     # *.firebaseapp.com helper page is cross-origin to the app.
     #
-    # FIREBASE_AUTH_HELPER_HOST is the Firebase project's auth domain
-    # (e.g. your-project.firebaseapp.com). NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
-    # must be set to the app's own domain at frontend build time so the SDK
-    # targets this proxy. See SELF_HOSTING.md.
+    # The proxy target is derived from FIREBASE_PROJECT_ID (every Firebase
+    # project exposes its auth helper at <project>.firebaseapp.com).
+    # NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN must be set to the app's own domain at
+    # frontend build time so the SDK targets this proxy. See SELF_HOSTING.md.
     location /__/auth/ {
-        proxy_pass https://${FIREBASE_AUTH_HELPER_HOST};
-        proxy_set_header Host ${FIREBASE_AUTH_HELPER_HOST};
+        proxy_pass https://${FIREBASE_PROJECT_ID}.firebaseapp.com;
+        proxy_set_header Host ${FIREBASE_PROJECT_ID}.firebaseapp.com;
         proxy_ssl_server_name on;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -77,8 +77,8 @@ server {
     }
 
     location = /__/firebase/init.json {
-        proxy_pass https://${FIREBASE_AUTH_HELPER_HOST};
-        proxy_set_header Host ${FIREBASE_AUTH_HELPER_HOST};
+        proxy_pass https://${FIREBASE_PROJECT_ID}.firebaseapp.com;
+        proxy_set_header Host ${FIREBASE_PROJECT_ID}.firebaseapp.com;
         proxy_ssl_server_name on;
     }
 

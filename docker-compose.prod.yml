@@ -97,14 +97,13 @@ services:
     ports:
       - "${LISTEN_PORT:-80}:80"
     environment:
-      # FIREBASE_AUTH_HELPER_HOST is substituted into nginx.conf.template by
-      # the nginx:alpine envsubst entrypoint. Set it to the Firebase project's
-      # *.firebaseapp.com domain to enable the /__/auth/ proxy required for
-      # PWA Google sign-in on custom domains. Defaults to firebaseapp.com so
-      # the rendered config is syntactically valid for deployments that don't
-      # use Firebase auth — the proxy is harmless when /__/auth/ is unused.
-      FIREBASE_AUTH_HELPER_HOST: ${FIREBASE_AUTH_HELPER_HOST:-firebaseapp.com}
-      NGINX_ENVSUBST_FILTER_VARIABLES: FIREBASE_AUTH_HELPER_HOST
+      # nginx:alpine's envsubst entrypoint renders nginx.conf.template and
+      # substitutes FIREBASE_PROJECT_ID into the /__/auth/ proxy target. Same
+      # value used by the backend for Firebase token verification — defaults
+      # to a placeholder so the rendered config stays syntactically valid for
+      # deployments that don't use Firebase auth.
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-firebase}
+      NGINX_ENVSUBST_FILTER_VARIABLES: FIREBASE_PROJECT_ID
     volumes:
       - ./deploy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on:

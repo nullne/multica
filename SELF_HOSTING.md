@@ -134,13 +134,11 @@ handles this: `/__/auth/` is proxied to your Firebase project's
      .
    ```
 
-2. **Set `FIREBASE_AUTH_HELPER_HOST` in your `.env`** to the Firebase
-   project's `*.firebaseapp.com` domain. The nginx container substitutes this
-   into `deploy/nginx.conf.template` and proxies `/__/auth/` to it.
-
-   ```bash
-   FIREBASE_AUTH_HELPER_HOST=your-project.firebaseapp.com
-   ```
+2. **Make sure `FIREBASE_PROJECT_ID` is set in your `.env`.** The nginx
+   container substitutes it into `deploy/nginx.conf.template` and proxies
+   `/__/auth/` to `<FIREBASE_PROJECT_ID>.firebaseapp.com`. This is the same
+   variable the backend uses to verify Firebase ID tokens — no extra
+   variable to manage.
 
 3. **Add your custom domain to Firebase authorized domains.** In the Firebase
    Console: *Authentication → Settings → Authorized domains* — add
