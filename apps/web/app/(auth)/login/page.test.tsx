@@ -59,7 +59,13 @@ vi.mock("@/shared/api", () => ({
   },
 }));
 
-import LoginPage from "./page";
+import { LoginPageClient } from "./login-page-client";
+
+function renderLoginPage() {
+  return render(
+    <LoginPageClient cliCallback={null} cliState="" nextPath="/issues" />
+  );
+}
 
 describe("LoginPage", () => {
   beforeEach(() => {
@@ -68,13 +74,13 @@ describe("LoginPage", () => {
     mockCompleteGoogleRedirectSignIn.mockResolvedValue(null);
   });
 
-  it("renders login form with email input and continue button", () => {
-    render(<LoginPage />);
+  it("renders login form with email input and continue button", async () => {
+    renderLoginPage();
 
     expect(screen.getByText("Multica")).toBeInTheDocument();
     expect(screen.getByText("Turn coding agents into real teammates")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Continue with Google" })
+      await screen.findByRole("button", { name: "Continue with Google" })
     ).toBeInTheDocument();
   });
 
@@ -84,9 +90,11 @@ describe("LoginPage", () => {
       user: { id: "u1", email: "test@multica.ai" },
     });
     const user = userEvent.setup();
-    render(<LoginPage />);
+    renderLoginPage();
 
-    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Continue with Google" })
+    );
 
     await waitFor(() => {
       expect(mockSignInWithGoogle).toHaveBeenCalled();
@@ -100,7 +108,7 @@ describe("LoginPage", () => {
       user: { id: "u1", email: "test@multica.ai" },
     });
 
-    render(<LoginPage />);
+    renderLoginPage();
 
     await waitFor(() => {
       expect(mockCompleteGoogleRedirectSignIn).toHaveBeenCalled();
@@ -110,29 +118,35 @@ describe("LoginPage", () => {
   it("shows 'Signing in...' while submitting", async () => {
     mockSignInWithGoogle.mockReturnValueOnce(new Promise(() => {}));
     const user = userEvent.setup();
-    render(<LoginPage />);
+    renderLoginPage();
 
-    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Continue with Google" })
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Signing in...")).toBeInTheDocument();
     });
   });
 
-  it("shows helper copy for Firebase auth", () => {
-    render(<LoginPage />);
+  it("shows helper copy for Firebase auth", async () => {
+    renderLoginPage();
 
     expect(
-      screen.getByText("Sign in with Google or get a one-time link by email.")
+      await screen.findByText(
+        "Sign in with Google or get a one-time link by email."
+      )
     ).toBeInTheDocument();
   });
 
   it("shows error when Google sign-in fails", async () => {
     mockSignInWithGoogle.mockRejectedValueOnce(new Error("Network error"));
     const user = userEvent.setup();
-    render(<LoginPage />);
+    renderLoginPage();
 
-    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Continue with Google" })
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Network error")).toBeInTheDocument();
@@ -142,14 +156,14 @@ describe("LoginPage", () => {
   it("sends a passwordless email link and shows the inbox screen", async () => {
     mockSendEmailSignInLink.mockResolvedValueOnce(undefined);
     const user = userEvent.setup();
-    render(<LoginPage />);
+    renderLoginPage();
 
     await user.type(
-      screen.getByPlaceholderText("you@example.com"),
+      await screen.findByPlaceholderText("you@example.com"),
       "alice@example.com"
     );
     await user.click(
-      screen.getByRole("button", { name: "Email me a sign-in link" })
+      await screen.findByRole("button", { name: "Email me a sign-in link" })
     );
 
     await waitFor(() => {
@@ -164,14 +178,14 @@ describe("LoginPage", () => {
   it("shows error when sending the email link fails", async () => {
     mockSendEmailSignInLink.mockRejectedValueOnce(new Error("Quota exceeded"));
     const user = userEvent.setup();
-    render(<LoginPage />);
+    renderLoginPage();
 
     await user.type(
-      screen.getByPlaceholderText("you@example.com"),
+      await screen.findByPlaceholderText("you@example.com"),
       "alice@example.com"
     );
     await user.click(
-      screen.getByRole("button", { name: "Email me a sign-in link" })
+      await screen.findByRole("button", { name: "Email me a sign-in link" })
     );
 
     await waitFor(() => {
