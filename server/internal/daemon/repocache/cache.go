@@ -81,12 +81,7 @@ func isBareRepo(path string) bool {
 }
 
 func gitCloneBareWithToken(url, dest, token string) error {
-	args := []string{"clone", "--bare"}
-	if token != "" {
-		args = append(args,
-			"-c", fmt.Sprintf("http.extraHeader=Authorization: Basic %s", basicAuth(token)),
-		)
-	}
+	args := append([]string{"clone", "--bare"}, gitAuthArgs(token)...)
 	args = append(args, url, dest)
 	cmd := exec.Command("git", args...)
 	if token != "" {
@@ -114,12 +109,7 @@ func configureRemoteFetchRefspec(repoPath string) error {
 }
 
 func gitFetchWithToken(barePath, token string) error {
-	args := []string{"-C", barePath}
-	if token != "" {
-		args = append(args,
-			"-c", fmt.Sprintf("http.extraHeader=Authorization: Basic %s", basicAuth(token)),
-		)
-	}
+	args := append([]string{"-C", barePath}, gitAuthArgs(token)...)
 	args = append(args, "fetch", "origin")
 	cmd := exec.Command("git", args...)
 	if token != "" {
@@ -129,6 +119,24 @@ func gitFetchWithToken(barePath, token string) error {
 		return fmt.Errorf("git fetch: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// gitAuthArgs returns the `-c` config args required to authenticate against
+// HTTPS git remotes using a GitHub App installation token.
+//
+// The Authorization header is injected via http.extraHeader, and any
+// credential helper inherited from the user's gitconfig (e.g. configured
+// by `gh auth setup-git`) is disabled. Without this, the helper would
+// supply its own Authorization header in addition to ours, and GitHub
+// rejects the request with HTTP 400: Duplicate header: "Authorization".
+func gitAuthArgs(token string) []string {
+	if token == "" {
+		return nil
+	}
+	return []string{
+		"-c", fmt.Sprintf("http.extraHeader=Authorization: Basic %s", basicAuth(token)),
+		"-c", "credential.helper=",
+	}
 }
 
 // basicAuth encodes "x-access-token:{token}" for GitHub App installation tokens.
