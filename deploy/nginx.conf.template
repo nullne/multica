@@ -4,6 +4,11 @@
 # new IP (which happens on every image update).
 resolver 127.0.0.11 valid=10s ipv6=off;
 
+# This file is processed by the nginx:alpine envsubst entrypoint. Only the
+# variables listed in NGINX_ENVSUBST_FILTER_VARIABLES (see docker-compose.prod.yml)
+# are substituted; nginx runtime variables like $host and $remote_addr are
+# preserved verbatim.
+
 server {
     listen 80;
     server_name _;
@@ -48,6 +53,33 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 86400;
         proxy_send_timeout 86400;
+    }
+
+    # Firebase auth helper — required for Google sign-in via signInWithRedirect
+    # on PWAs served from a custom domain. The Firebase Web SDK redirects the
+    # user to /__/auth/handler on the app's origin; that page in turn talks to
+    # Google and posts the credential back via same-origin storage. Without
+    # this proxy, getRedirectResult() returns null in PWA mode because the
+    # *.firebaseapp.com helper page is cross-origin to the app.
+    #
+    # FIREBASE_AUTH_HELPER_HOST is the Firebase project's auth domain
+    # (e.g. your-project.firebaseapp.com). NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    # must be set to the app's own domain at frontend build time so the SDK
+    # targets this proxy. See SELF_HOSTING.md.
+    location /__/auth/ {
+        proxy_pass https://${FIREBASE_AUTH_HELPER_HOST};
+        proxy_set_header Host ${FIREBASE_AUTH_HELPER_HOST};
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_redirect off;
+    }
+
+    location = /__/firebase/init.json {
+        proxy_pass https://${FIREBASE_AUTH_HELPER_HOST};
+        proxy_set_header Host ${FIREBASE_AUTH_HELPER_HOST};
+        proxy_ssl_server_name on;
     }
 
     # Everything else — Next.js frontend
