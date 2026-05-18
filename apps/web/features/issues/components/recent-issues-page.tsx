@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { CornerDownLeft, Loader2 } from "lucide-react";
@@ -57,6 +57,18 @@ function CreateIssuePanel({
   const [dueDate, setDueDate] = useState<string | null>(null);
   const [selectedLabels, setSelectedLabels] = useState<Label[]>([]);
   const { uploadWithToast, uploading } = useFileUpload();
+
+  // Clear workspace-scoped fields when the workspace changes so stale
+  // assignees/labels from the previous workspace cannot leak into the
+  // submitted payload.
+  useEffect(() => {
+    setAssigneeType(null);
+    setAssigneeId(null);
+    setDispatchProvider(null);
+    setDispatchDaemonId(null);
+    setDispatchDaemonLabel(null);
+    setSelectedLabels([]);
+  }, [selectedWorkspaceId]);
   const assigneeLabel =
     assigneeType && assigneeId ? getActorName(assigneeType, assigneeId) : "Assignee";
 
@@ -254,11 +266,7 @@ export function RecentIssuesPage() {
   const searchParams = useSearchParams();
   const issues = useIssueStore((s) => s.issues);
   const currentWorkspace = useWorkspaceStore((s) => s.workspace);
-  const workspaces = useWorkspaceStore((s) => s.workspaces);
-
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(
-    currentWorkspace?.id ?? workspaces[0]?.id ?? ""
-  );
+  const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
 
   const issueIdFromUrl = searchParams.get("issue");
   const showCreate = searchParams.get("new") === "1" || !issueIdFromUrl;
@@ -270,8 +278,11 @@ export function RecentIssuesPage() {
       <main className="min-w-0 flex-1">
         {showCreate ? (
           <CreateIssuePanel
-            selectedWorkspaceId={selectedWorkspaceId}
-            onWorkspaceChange={setSelectedWorkspaceId}
+            selectedWorkspaceId={currentWorkspace?.id ?? ""}
+            onWorkspaceChange={(workspaceId) => {
+              if (workspaceId === currentWorkspace?.id) return;
+              void switchWorkspace(workspaceId);
+            }}
             onCreated={(issue) => {
               router.push(`/home?issue=${issue.id}`);
             }}
