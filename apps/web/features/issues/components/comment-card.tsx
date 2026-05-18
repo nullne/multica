@@ -26,6 +26,7 @@ import {
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { ReactionBar } from "@/components/common/reaction-bar";
+import { AttachmentList } from "@/components/common/attachment-list";
 import { QuickEmojiPicker } from "@/components/common/quick-emoji-picker";
 import { cn } from "@/lib/utils";
 import { useActorName } from "@/features/workspace";
@@ -261,6 +262,12 @@ function CommentRow({
           <div className="mt-1.5 pl-8 text-sm leading-relaxed text-foreground/85">
             <ReadonlyEditor content={entry.content ?? ""} />
           </div>
+          {(entry.attachments?.length ?? 0) > 0 && (
+            <AttachmentList
+              attachments={entry.attachments ?? []}
+              className="mt-2 pl-8"
+            />
+          )}
           {!isTemp && (
             <ReactionBar
               reactions={reactions}
@@ -467,6 +474,12 @@ function CommentCard({
                 <div className="pl-10 text-sm leading-relaxed text-foreground/85">
                   <ReadonlyEditor content={entry.content ?? ""} />
                 </div>
+                {(entry.attachments?.length ?? 0) > 0 && (
+                  <AttachmentList
+                    attachments={entry.attachments ?? []}
+                    className="mt-2 pl-10"
+                  />
+                )}
                 {!isTemp && (
                   <ReactionBar
                     reactions={reactions}
