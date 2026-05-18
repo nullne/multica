@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Issue, Workspace } from "@/shared/types";
+import type { Issue, MemberWithUser, Workspace } from "@/shared/types";
 
 const mockCreateIssue = vi.fn();
 const mockSetWorkspaceId = vi.fn();
@@ -84,9 +84,29 @@ function makeIssue(
   };
 }
 
+function makeMember(
+  workspaceId: string,
+  userId: string,
+  name: string
+): MemberWithUser {
+  return {
+    id: `member-${userId}`,
+    workspace_id: workspaceId,
+    user_id: userId,
+    role: "member",
+    created_at: "2026-01-01T00:00:00Z",
+    name,
+    email: `${userId}@example.com`,
+    avatar_url: null,
+    kind: "human",
+  };
+}
+
 describe("RecentIssuesPage", () => {
   const qwip = makeWorkspace("ws-qwip", "Qwip");
   const prod = makeWorkspace("ws-prod", "Prod Debug");
+  const qwipMember = makeMember(qwip.id, "user-1", "Test User");
+  const prodMember = makeMember(prod.id, "user-2", "Prod User");
   const issues = [
     makeIssue("issue-1", qwip.id, "CON-486", "Fix side effects", "2026-01-03T00:00:00Z"),
     makeIssue("issue-2", prod.id, "CON-522", "Fix PWA login", "2026-01-02T00:00:00Z"),
@@ -99,19 +119,7 @@ describe("RecentIssuesPage", () => {
     useWorkspaceStore.setState({
       workspace: qwip,
       workspaces: [qwip, prod],
-      members: [
-        {
-          id: "member-1",
-          workspace_id: qwip.id,
-          user_id: "user-1",
-          role: "member",
-          created_at: "2026-01-01T00:00:00Z",
-          name: "Test User",
-          email: "test@example.com",
-          avatar_url: null,
-          kind: "human",
-        },
-      ],
+      members: [qwipMember],
       agents: [],
       skills: [],
     });
@@ -170,5 +178,57 @@ describe("RecentIssuesPage", () => {
       });
       expect(mockPush).toHaveBeenCalledWith("/home?issue=issue-new");
     });
+  });
+
+  it("switches the global workspace and clears the assignee picker when picking a different workspace", async () => {
+    const switchWorkspaceSpy = vi.fn(async (workspaceId: string) => {
+      const target = useWorkspaceStore
+        .getState()
+        .workspaces.find((w) => w.id === workspaceId);
+      if (!target) return;
+      useWorkspaceStore.setState({
+        workspace: target,
+        members: target.id === prod.id ? [prodMember] : [qwipMember],
+        agents: [],
+        skills: [],
+      });
+    });
+    useWorkspaceStore.setState({ switchWorkspace: switchWorkspaceSpy });
+
+    const user = userEvent.setup();
+    render(<RecentIssuesPage />);
+
+    // Pick the qwip member as assignee in the starting workspace.
+    await user.click(screen.getByRole("button", { name: "Assign" }));
+    await user.click(await screen.findByText("Test User"));
+    expect(screen.getByRole("button", { name: "Assign" })).toHaveTextContent(
+      "Test User"
+    );
+
+    // Switch workspace via the composer's workspace picker.
+    await user.click(screen.getByRole("button", { name: "Workspace" }));
+    await user.click(await screen.findByText("Prod Debug"));
+
+    expect(switchWorkspaceSpy).toHaveBeenCalledWith(prod.id);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Workspace" })).toHaveTextContent(
+        "Prod Debug"
+      );
+    });
+
+    // The previous assignee from the old workspace must be cleared.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Assign" })).toHaveTextContent(
+        "Assignee"
+      );
+      expect(
+        screen.queryByRole("button", { name: /Test User/ })
+      ).not.toBeInTheDocument();
+    });
+
+    // The assignee picker should list only the new workspace's members.
+    await user.click(screen.getByRole("button", { name: "Assign" }));
+    expect(await screen.findByText("Prod User")).toBeInTheDocument();
+    expect(screen.queryByText("Test User")).not.toBeInTheDocument();
   });
 });
