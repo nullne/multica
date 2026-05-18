@@ -26,6 +26,7 @@ function commentToTimelineEntry(c: Comment): TimelineEntry {
     updated_at: c.updated_at,
     comment_type: c.type,
     reactions: c.reactions ?? [],
+    attachments: c.attachments ?? [],
   };
 }
 
