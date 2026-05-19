@@ -28,6 +28,7 @@ interface RecentsActions {
     workspaceIds: string[],
     options?: RecentsFetchOptions,
   ) => Promise<void>;
+  refresh: () => Promise<void>;
   upsertIssue: (issue: Issue) => void;
   removeIssue: (issueId: string) => void;
   clear: () => void;
@@ -138,6 +139,15 @@ export const useRecentsStore = create<RecentsStore>((set, get) => ({
         set({ loading: false, inFlightKey: null });
       }
     }
+  },
+
+  refresh: async () => {
+    const state = get();
+    if (state.loadedWorkspaceIds.length === 0) return;
+    await get().fetch(state.loadedWorkspaceIds, {
+      mine: state.loadedMine,
+      userId: state.loadedUserId,
+    });
   },
 
   upsertIssue: (issue) =>

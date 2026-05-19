@@ -201,6 +201,30 @@ describe("useRecentsStore", () => {
     expect(useRecentsStore.getState().issues).toEqual([]);
   });
 
+  it("refresh re-runs the loaded fetch with the same mine and user", async () => {
+    listRecentIssuesMock.mockResolvedValue({ issues: [], total: 0 });
+
+    await useRecentsStore
+      .getState()
+      .fetch(["ws-1", "ws-2"], { mine: true, userId: "user-1" });
+    const initialCalls = listRecentIssuesMock.mock.calls.length;
+
+    await useRecentsStore.getState().refresh();
+
+    expect(listRecentIssuesMock).toHaveBeenCalledTimes(initialCalls + 2);
+    const refreshCalls = listRecentIssuesMock.mock.calls.slice(initialCalls);
+    for (const call of refreshCalls) {
+      expect(call[0]).toMatchObject({ mine: true });
+    }
+  });
+
+  it("refresh is a no-op when nothing has been loaded yet", async () => {
+    listRecentIssuesMock.mockResolvedValue({ issues: [], total: 0 });
+
+    await useRecentsStore.getState().refresh();
+    expect(listRecentIssuesMock).not.toHaveBeenCalled();
+  });
+
   it("removes an issue on remove", async () => {
     listRecentIssuesMock.mockResolvedValue({
       issues: [makeIssue({ id: "a", workspace_id: "ws-1", updated_at: "2026-01-01T00:00:00Z" })],

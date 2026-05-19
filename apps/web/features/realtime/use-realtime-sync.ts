@@ -247,6 +247,11 @@ export function useRealtimeSync(ws: WSClient | null) {
           useWorkspaceStore.getState().refreshAgents(),
           useWorkspaceStore.getState().refreshMembers(),
           useWorkspaceStore.getState().refreshSkills(),
+          // The home sidebar's Recents list lives in its own store now, so
+          // it needs an explicit recovery here — otherwise an `issue:*`
+          // event missed during disconnect would leave stale rows until
+          // the user manually toggles a filter or re-enters /home.
+          useRecentsStore.getState().refresh(),
           api.listActiveTasks().then((tasks) => useActiveTaskStore.getState().setTasks(tasks)).catch(console.error),
         ]);
       } catch (e) {
