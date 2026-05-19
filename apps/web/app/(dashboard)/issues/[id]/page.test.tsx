@@ -95,8 +95,18 @@ const stableStoreIssues = vi.hoisted(() => [
 ]);
 vi.mock("@/features/issues", () => ({
   useIssueStore: Object.assign(
-    (selector: (s: any) => any) => selector({ issues: stableStoreIssues }),
-    { getState: () => ({ issues: stableStoreIssues, addIssue: vi.fn(), updateIssue: vi.fn(), removeIssue: vi.fn() }) },
+    (selector: (s: any) => any) =>
+      selector({ issues: stableStoreIssues, activeIssueId: null }),
+    {
+      getState: () => ({
+        issues: stableStoreIssues,
+        activeIssueId: null,
+        addIssue: vi.fn(),
+        updateIssue: vi.fn(),
+        removeIssue: vi.fn(),
+        setActiveIssue: vi.fn(),
+      }),
+    },
   ),
 }));
 

@@ -14,6 +14,7 @@ import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 import { useWorkspaceStore } from "@/features/workspace";
 import { issueUrl } from "@/features/issues/utils/url";
 import { PriorityIcon } from "./priority-icon";
+import { StatusIcon } from "./status-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
 import { RunningIndicatorRing } from "./running-indicator-ring";
 import { PriorityPicker, AssigneePicker, DueDatePicker } from "./pickers";
@@ -72,8 +73,15 @@ export const BoardCardContent = memo(function BoardCardContent({
 
   return (
     <div className={`rounded-lg border bg-card p-3.5 shadow-[0_1px_2px_0_rgba(0,0,0,0.03)] transition-shadow group-hover:shadow-sm ${isWorking ? "border-info/30 bg-info/[0.02]" : ""}`}>
-      {/* Row 1: Identifier */}
-      <p className="text-xs text-muted-foreground">{issue.identifier}</p>
+      {/* Row 1: Status icon + identifier — the status icon is always shown so
+          the running ring has a stable anchor regardless of which card
+          properties the user has toggled off. */}
+      <div className="flex items-center gap-1.5">
+        <RunningIndicatorRing issueId={issue.id} className="size-3.5">
+          <StatusIcon status={issue.status} className="size-3.5" />
+        </RunningIndicatorRing>
+        <p className="text-xs text-muted-foreground">{issue.identifier}</p>
+      </div>
 
       {/* Row 2: Title */}
       <p className="mt-1 text-sm font-medium leading-snug line-clamp-2">
@@ -118,45 +126,41 @@ export const BoardCardContent = memo(function BoardCardContent({
       {(showAssignee || showPriority || showDueDate) && (
         <div className="mt-3 flex items-center gap-2">
           {showAssignee && issue.assignee_type === "agent" ? (
-            <RunningIndicatorRing issueId={issue.id}>
-              {editable ? (
-                <PickerWrapper>
-                  <AssigneePicker
-                    assigneeType={issue.assignee_type}
-                    assigneeId={issue.assignee_id}
-                    onUpdate={handleUpdate}
-                    trigger={<AgentDispatchBadge issue={issue} />}
-                  />
-                </PickerWrapper>
-              ) : (
-                <AgentDispatchBadge issue={issue} />
-              )}
-            </RunningIndicatorRing>
-          ) : showAssignee ? (
-            <RunningIndicatorRing issueId={issue.id}>
-              {editable ? (
-                <PickerWrapper>
-                  <AssigneePicker
-                    assigneeType={issue.assignee_type}
-                    assigneeId={issue.assignee_id}
-                    onUpdate={handleUpdate}
-                    trigger={
-                      <ActorAvatar
-                        actorType={issue.assignee_type!}
-                        actorId={issue.assignee_id!}
-                        size={22}
-                      />
-                    }
-                  />
-                </PickerWrapper>
-              ) : (
-                <ActorAvatar
-                  actorType={issue.assignee_type!}
-                  actorId={issue.assignee_id!}
-                  size={22}
+            editable ? (
+              <PickerWrapper>
+                <AssigneePicker
+                  assigneeType={issue.assignee_type}
+                  assigneeId={issue.assignee_id}
+                  onUpdate={handleUpdate}
+                  trigger={<AgentDispatchBadge issue={issue} />}
                 />
-              )}
-            </RunningIndicatorRing>
+              </PickerWrapper>
+            ) : (
+              <AgentDispatchBadge issue={issue} />
+            )
+          ) : showAssignee ? (
+            editable ? (
+              <PickerWrapper>
+                <AssigneePicker
+                  assigneeType={issue.assignee_type}
+                  assigneeId={issue.assignee_id}
+                  onUpdate={handleUpdate}
+                  trigger={
+                    <ActorAvatar
+                      actorType={issue.assignee_type!}
+                      actorId={issue.assignee_id!}
+                      size={22}
+                    />
+                  }
+                />
+              </PickerWrapper>
+            ) : (
+              <ActorAvatar
+                actorType={issue.assignee_type!}
+                actorId={issue.assignee_id!}
+                size={22}
+              />
+            )
           ) : null}
           {showPriority &&
             (editable ? (
