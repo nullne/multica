@@ -7,6 +7,21 @@ WHERE workspace_id = $1
 ORDER BY position ASC, created_at DESC
 LIMIT $2 OFFSET $3;
 
+-- name: ListRecentIssues :many
+-- Returns the most recently updated issues in a workspace, optionally limited
+-- to ones the supplied user is involved in (creator or assignee). Used to
+-- populate the home sidebar Recents list — backed by updated_at so the list
+-- reflects actual recency without client-side reordering.
+SELECT * FROM issue
+WHERE workspace_id = $1
+  AND (
+    sqlc.narg('user_id')::uuid IS NULL
+    OR creator_id = sqlc.narg('user_id')
+    OR assignee_id = sqlc.narg('user_id')
+  )
+ORDER BY updated_at DESC
+LIMIT $2;
+
 -- name: GetIssue :one
 SELECT * FROM issue
 WHERE id = $1;

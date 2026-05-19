@@ -264,14 +264,16 @@ function CreateIssuePanel({
 export function RecentIssuesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const issues = useIssueStore((s) => s.issues);
   const currentWorkspace = useWorkspaceStore((s) => s.workspace);
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
 
   const issueIdFromUrl = searchParams.get("issue");
   const showCreate = searchParams.get("new") === "1" || !issueIdFromUrl;
-  const activeIssue = issues.find((issue) => issue.id === issueIdFromUrl) ?? issues[0] ?? null;
-  const detailIssueId = activeIssue?.id ?? null;
+  // Trust the URL for the active issue id and let IssueDetail load it — falling
+  // back to the first issue in the current workspace's store would render the
+  // wrong issue when the user picks a recent from another workspace and would
+  // briefly flash the wrong content while the workspace switch is in flight.
+  const detailIssueId = issueIdFromUrl;
 
   return (
     <div className="flex flex-1 min-h-0 bg-background">

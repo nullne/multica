@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const pushMock = vi.fn();
-const listIssuesMock = vi.fn();
+const listRecentIssuesMock = vi.fn();
+const switchWorkspaceMock = vi.fn(async () => {});
 let mockPathname = "/issues";
 let mockSearchParams = new URLSearchParams();
 
@@ -31,7 +32,7 @@ vi.mock("next/link", () => ({
 
 vi.mock("@/shared/api", () => ({
   api: {
-    listIssues: (...args: unknown[]) => listIssuesMock(...args),
+    listRecentIssues: (...args: unknown[]) => listRecentIssuesMock(...args),
   },
 }));
 
@@ -59,7 +60,7 @@ const workspaceState = {
     { id: "ws-1", name: "Test Workspace", slug: "test" },
     { id: "ws-2", name: "Prod Debug", slug: "prod-debug" },
   ],
-  switchWorkspace: vi.fn(),
+  switchWorkspace: switchWorkspaceMock,
   clearWorkspace: vi.fn(),
 };
 
@@ -99,32 +100,9 @@ vi.mock("@/features/issues/stores/draft-store", () => ({
   ),
 }));
 
-const issueState = {
-  issues: [
-    {
-      id: "issue-1",
-      workspace_id: "ws-1",
-      identifier: "TES-1",
-      title: "Recent issue",
-      status: "todo",
-      priority: "medium",
-      creator_type: "member",
-      creator_id: "user-1",
-      updated_at: "2026-01-01T00:00:00Z",
-      created_at: "2026-01-01T00:00:00Z",
-    },
-  ],
-};
-vi.mock("@/features/issues/store", () => ({
-  useIssueStore: Object.assign(
-    (selector?: (s: typeof issueState) => unknown) =>
-      selector ? selector(issueState) : issueState,
-    { getState: () => issueState },
-  ),
-}));
-
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { useRecentsPrefsStore } from "@/features/navigation/recents-prefs-store";
+import { useRecentsStore } from "@/features/navigation/recents-store";
 import { AppSidebar } from "./app-sidebar";
 
 function renderSidebar() {
@@ -135,34 +113,74 @@ function renderSidebar() {
   );
 }
 
-describe("AppSidebar user menu", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockPathname = "/issues";
-    mockSearchParams = new URLSearchParams();
-    listIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
-      Promise.resolve({
-        issues:
-          workspace_id === "ws-2"
-            ? [
-                {
-                  id: "issue-2",
-                  workspace_id: "ws-2",
-                  identifier: "PRD-2",
-                  title: "Other workspace issue",
-                  status: "todo",
-                  priority: "medium",
-                  creator_type: "member",
-                  creator_id: "user-1",
-                  updated_at: "2026-01-02T00:00:00Z",
-                  created_at: "2026-01-02T00:00:00Z",
-                },
-              ]
-            : issueState.issues,
-      })
-    );
-  });
+interface RecentIssueOverrides {
+  id: string;
+  workspace_id: string;
+  identifier: string;
+  title: string;
+  status?: string;
+  priority?: string;
+  creator_type?: "member" | "agent" | null;
+  creator_id?: string | null;
+  assignee_type?: "member" | "agent" | null;
+  assignee_id?: string | null;
+  updated_at: string;
+  created_at?: string;
+}
 
+function makeIssue(overrides: RecentIssueOverrides) {
+  return {
+    status: "todo",
+    priority: "medium",
+    creator_type: "member" as const,
+    creator_id: "user-1",
+    assignee_type: null,
+    assignee_id: null,
+    created_at: overrides.updated_at,
+    ...overrides,
+  };
+}
+
+function defaultMockImpl({ workspace_id }: { workspace_id: string }) {
+  return Promise.resolve({
+    issues:
+      workspace_id === "ws-2"
+        ? [
+            makeIssue({
+              id: "issue-2",
+              workspace_id: "ws-2",
+              identifier: "PRD-2",
+              title: "Other workspace issue",
+              updated_at: "2026-01-02T00:00:00Z",
+            }),
+          ]
+        : [
+            makeIssue({
+              id: "issue-1",
+              workspace_id: "ws-1",
+              identifier: "TES-1",
+              title: "Recent issue",
+              updated_at: "2026-01-01T00:00:00Z",
+            }),
+          ],
+    total: 1,
+  });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockPathname = "/issues";
+  mockSearchParams = new URLSearchParams();
+  switchWorkspaceMock.mockImplementation(async () => {});
+  useRecentsStore.getState().clear();
+  useRecentsPrefsStore.setState({
+    collapsedWorkspaceIds: [],
+    pinnedWorkspaceIds: [],
+  });
+  listRecentIssuesMock.mockImplementation(defaultMockImpl);
+});
+
+describe("AppSidebar user menu", () => {
   it("opens the bottom user menu without throwing", async () => {
     const user = userEvent.setup();
     renderSidebar();
@@ -172,7 +190,6 @@ describe("AppSidebar user menu", () => {
 
     expect(await screen.findByText("Account settings")).toBeInTheDocument();
     expect(screen.getByText("Log out")).toBeInTheDocument();
-    // Email is shown both on the trigger and inside the menu header.
     expect(screen.getAllByText("test@example.com").length).toBeGreaterThanOrEqual(1);
   });
 
@@ -202,44 +219,131 @@ describe("AppSidebar user menu", () => {
 
     expect(screen.getByRole("button", { name: "New" })).toBeInTheDocument();
     expect(screen.getByText("Recents")).toBeInTheDocument();
-    expect(screen.getByText("Recent issue")).toBeInTheDocument();
-    expect(await screen.findByText("Prod Debug")).toBeInTheDocument();
+    expect(await screen.findByText("Recent issue")).toBeInTheDocument();
+    expect(screen.getByText("Prod Debug")).toBeInTheDocument();
     expect(screen.getByText("Other workspace issue")).toBeInTheDocument();
     expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
     expect(screen.queryByText("Agents")).not.toBeInTheDocument();
   });
 });
 
+describe("AppSidebar recents fetching", () => {
+  beforeEach(() => {
+    mockPathname = "/home";
+  });
+
+  it("calls the recents endpoint exactly once per workspace on mount", async () => {
+    renderSidebar();
+    await screen.findByText("Other workspace issue");
+
+    expect(listRecentIssuesMock).toHaveBeenCalledTimes(2);
+    expect(listRecentIssuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace_id: "ws-1" }),
+    );
+    expect(listRecentIssuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace_id: "ws-2" }),
+    );
+  });
+
+  it("does not refetch when an issue is updated incrementally", async () => {
+    renderSidebar();
+    await screen.findByText("Other workspace issue");
+    const initialCalls = listRecentIssuesMock.mock.calls.length;
+
+    useRecentsStore.getState().upsertIssue(
+      makeIssue({
+        id: "issue-1",
+        workspace_id: "ws-1",
+        identifier: "TES-1",
+        title: "Recent issue (renamed)",
+        updated_at: "2026-01-05T00:00:00Z",
+      }),
+    );
+
+    await screen.findByText("Recent issue (renamed)");
+    expect(listRecentIssuesMock).toHaveBeenCalledTimes(initialCalls);
+  });
+
+  it("pushes the new URL before awaiting any workspace switch", async () => {
+    let resolveSwitch: () => void = () => {};
+    switchWorkspaceMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSwitch = resolve;
+        }),
+    );
+
+    const user = userEvent.setup();
+    renderSidebar();
+    const item = await screen.findByText("Other workspace issue");
+
+    await user.click(item);
+
+    // URL push must happen synchronously — before the workspace switch
+    // resolves — so the detail view can render the new issue immediately.
+    expect(pushMock).toHaveBeenCalledWith("/home?issue=issue-2");
+    expect(switchWorkspaceMock).toHaveBeenCalledWith("ws-2");
+    resolveSwitch();
+  });
+});
+
+describe("AppSidebar recents filtering", () => {
+  beforeEach(() => {
+    mockPathname = "/home";
+  });
+
+  it("treats 'Only my issues' as creator or assignee, not creator alone", async () => {
+    listRecentIssuesMock.mockImplementation(
+      ({ workspace_id }: { workspace_id: string }) =>
+        Promise.resolve({
+          issues:
+            workspace_id === "ws-1"
+              ? [
+                  makeIssue({
+                    id: "issue-mine-created",
+                    workspace_id: "ws-1",
+                    identifier: "TES-10",
+                    title: "Created by me",
+                    creator_id: "user-1",
+                    assignee_id: null,
+                    updated_at: "2026-01-03T00:00:00Z",
+                  }),
+                  makeIssue({
+                    id: "issue-mine-assigned",
+                    workspace_id: "ws-1",
+                    identifier: "TES-11",
+                    title: "Assigned to me",
+                    creator_id: "user-other",
+                    assignee_type: "member",
+                    assignee_id: "user-1",
+                    updated_at: "2026-01-02T00:00:00Z",
+                  }),
+                  makeIssue({
+                    id: "issue-unrelated",
+                    workspace_id: "ws-1",
+                    identifier: "TES-12",
+                    title: "Unrelated to me",
+                    creator_id: "user-other",
+                    assignee_id: null,
+                    updated_at: "2026-01-01T00:00:00Z",
+                  }),
+                ]
+              : [],
+          total: 0,
+        }),
+    );
+
+    renderSidebar();
+
+    expect(await screen.findByText("Created by me")).toBeInTheDocument();
+    expect(screen.getByText("Assigned to me")).toBeInTheDocument();
+    expect(screen.queryByText("Unrelated to me")).not.toBeInTheDocument();
+  });
+});
+
 describe("AppSidebar grouped recents", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     mockPathname = "/home";
-    mockSearchParams = new URLSearchParams();
-    useRecentsPrefsStore.setState({
-      collapsedWorkspaceIds: [],
-      pinnedWorkspaceIds: [],
-    });
-    listIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
-      Promise.resolve({
-        issues:
-          workspace_id === "ws-2"
-            ? [
-                {
-                  id: "issue-2",
-                  workspace_id: "ws-2",
-                  identifier: "PRD-2",
-                  title: "Other workspace issue",
-                  status: "todo",
-                  priority: "medium",
-                  creator_type: "member",
-                  creator_id: "user-1",
-                  updated_at: "2026-01-02T00:00:00Z",
-                  created_at: "2026-01-02T00:00:00Z",
-                },
-              ]
-            : issueState.issues,
-      })
-    );
   });
 
   it("collapses a workspace group when its header is clicked and expands again on re-click", async () => {
@@ -261,24 +365,23 @@ describe("AppSidebar grouped recents", () => {
   });
 
   it("limits a large group to a bounded scrollable region", async () => {
-    listIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
-      Promise.resolve({
-        issues:
-          workspace_id === "ws-2"
-            ? Array.from({ length: 15 }, (_, idx) => ({
-                id: `issue-bulk-${idx}`,
-                workspace_id: "ws-2",
-                identifier: `PRD-${idx + 10}`,
-                title: `Bulk issue ${idx}`,
-                status: "todo",
-                priority: "medium",
-                creator_type: "member",
-                creator_id: "user-1",
-                updated_at: `2026-01-${String(idx + 1).padStart(2, "0")}T00:00:00Z`,
-                created_at: `2026-01-${String(idx + 1).padStart(2, "0")}T00:00:00Z`,
-              }))
-            : issueState.issues,
-      })
+    listRecentIssuesMock.mockImplementation(
+      ({ workspace_id }: { workspace_id: string }) =>
+        Promise.resolve({
+          issues:
+            workspace_id === "ws-2"
+              ? Array.from({ length: 15 }, (_, idx) =>
+                  makeIssue({
+                    id: `issue-bulk-${idx}`,
+                    workspace_id: "ws-2",
+                    identifier: `PRD-${idx + 10}`,
+                    title: `Bulk issue ${idx}`,
+                    updated_at: `2026-01-${String(idx + 1).padStart(2, "0")}T00:00:00Z`,
+                  }),
+                )
+              : [],
+          total: 15,
+        }),
     );
 
     renderSidebar();
@@ -291,7 +394,9 @@ describe("AppSidebar grouped recents", () => {
   it("does not mark a small group as scrollable", async () => {
     renderSidebar();
     const body = await screen.findByTestId("recents-group-body-ws-2");
-    expect(body.getAttribute("data-scrollable")).toBe("false");
+    await waitFor(() => {
+      expect(body.getAttribute("data-scrollable")).toBe("false");
+    });
     expect(body.style.maxHeight).toBe("");
   });
 

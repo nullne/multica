@@ -55,10 +55,9 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useInboxStore } from "@/features/inbox";
 import { useModalStore } from "@/features/modals";
-import { useIssueStore } from "@/features/issues/store";
 import { StatusIcon } from "@/features/issues/components";
 import { useRecentsPrefsStore } from "@/features/navigation/recents-prefs-store";
-import { api } from "@/shared/api";
+import { useRecentsStore } from "@/features/navigation/recents-store";
 import type { Issue } from "@/shared/types";
 
 const MAX_VISIBLE_ROWS_PER_GROUP = 10;
@@ -95,8 +94,8 @@ export function AppSidebar() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
-  const issues = useIssueStore((s) => s.issues);
-  const [recentIssues, setRecentIssues] = useState<Issue[]>(issues);
+  const recentIssues = useRecentsStore((s) => s.issues);
+  const fetchRecents = useRecentsStore((s) => s.fetch);
   const [onlyMyIssues, setOnlyMyIssues] = useState(true);
   const [hideCompleted, setHideCompleted] = useState(false);
   const [groupByWorkspace, setGroupByWorkspace] = useState(true);
@@ -119,33 +118,18 @@ export function AppSidebar() {
     .slice(0, 2);
 
   const isHome = pathname === "/home";
-  const workspaceIds = workspaces.map((ws) => ws.id).join(",");
+  const workspaceIds = useMemo(
+    () => workspaces.map((ws) => ws.id),
+    [workspaces],
+  );
+  const workspaceIdsKey = workspaceIds.join(",");
 
   useEffect(() => {
     if (!isHome) return;
-
-    let cancelled = false;
-    setRecentIssues(issues);
-
-    if (workspaces.length === 0) return;
-
-    void Promise.all(
-      workspaces.map((ws) =>
-        api
-          .listIssues({ workspace_id: ws.id, limit: 50 })
-          .then((res) => res.issues)
-          .catch(() => [] as Issue[])
-      )
-    ).then((issueLists) => {
-      if (!cancelled) {
-        setRecentIssues(issueLists.flat());
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isHome, issues, workspaceIds]); // eslint-disable-line react-hooks/exhaustive-deps
+    void fetchRecents(workspaceIds);
+    // Fetch is keyed by the set of workspace IDs — the store dedupes
+    // in-flight requests so WS-driven issue updates won't trigger a refetch.
+  }, [isHome, workspaceIdsKey, fetchRecents]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pinnedWorkspaceIds = useRecentsPrefsStore((s) => s.pinnedWorkspaceIds);
   const collapsedWorkspaceIds = useRecentsPrefsStore(
@@ -159,7 +143,14 @@ export function AppSidebar() {
     const workspaceById = new Map(workspaces.map((ws) => [ws.id, ws]));
     const filtered = recentIssues.filter((i) => {
       if (onlyMyIssues) {
-        if (i.creator_type !== "member" || i.creator_id !== user?.id) return false;
+        // "My" means the user is involved — either created or is the
+        // assignee. Restricting to creator-only buried users in busy
+        // workspaces who get assigned issues but rarely file them.
+        const createdByMe =
+          i.creator_type === "member" && i.creator_id === user?.id;
+        const assignedToMe =
+          i.assignee_type === "member" && i.assignee_id === user?.id;
+        if (!createdByMe && !assignedToMe) return false;
       }
       if (hideCompleted && (i.status === "done" || i.status === "cancelled")) {
         return false;
@@ -410,11 +401,16 @@ export function AppSidebar() {
                                     render={
                                       <SidebarMenuButton
                                         size="sm"
-                                        onClick={async () => {
-                                          if (issue.workspace_id !== workspace?.id) {
-                                            await switchWorkspace(issue.workspace_id);
-                                          }
+                                        onClick={() => {
+                                          // Update the URL first so the
+                                          // detail view swaps in immediately;
+                                          // any cross-workspace switch
+                                          // happens in the background and
+                                          // does not gate the navigation.
                                           router.push(`/home?issue=${issue.id}`);
+                                          if (issue.workspace_id !== workspace?.id) {
+                                            void switchWorkspace(issue.workspace_id);
+                                          }
                                         }}
                                       >
                                         <span className="relative inline-flex shrink-0">

@@ -245,6 +245,16 @@ export class ApiClient {
     return this.fetch(`/api/issues?${search}`);
   }
 
+  async listRecentIssues(
+    params: { workspace_id: string; limit?: number; mine?: boolean },
+  ): Promise<ListIssuesResponse> {
+    const search = new URLSearchParams();
+    search.set("workspace_id", params.workspace_id);
+    if (params.limit) search.set("limit", String(params.limit));
+    if (params.mine) search.set("mine", "true");
+    return this.fetch(`/api/issues/recent?${search}`);
+  }
+
   async getIssue(id: string): Promise<Issue> {
     return this.fetch(`/api/issues/${id}`);
   }

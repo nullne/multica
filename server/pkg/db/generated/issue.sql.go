@@ -360,6 +360,75 @@ func (q *Queries) ListIssuesByParent(ctx context.Context, parentIssueID pgtype.U
 	return items, nil
 }
 
+const listRecentIssues = `-- name: ListRecentIssues :many
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation FROM issue
+WHERE workspace_id = $1
+  AND (
+    $3::uuid IS NULL
+    OR creator_id = $3
+    OR assignee_id = $3
+  )
+ORDER BY updated_at DESC
+LIMIT $2
+`
+
+type ListRecentIssuesParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Limit       int32       `json:"limit"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+// Returns the most recently updated issues in a workspace, optionally limited
+// to ones the supplied user is involved in (creator or assignee). Used to
+// populate the home sidebar Recents list — backed by updated_at so the list
+// reflects actual recency without client-side reordering.
+func (q *Queries) ListRecentIssues(ctx context.Context, arg ListRecentIssuesParams) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listRecentIssues, arg.WorkspaceID, arg.Limit, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.VerifierAgentID,
+			&i.MaxVerificationRounds,
+			&i.CriteriaStatus,
+			&i.DispatchProvider,
+			&i.DispatchDaemonID,
+			&i.DispatchDaemonLabel,
+			&i.AgentMentionChainCount,
+			&i.AgentMentionChainGeneration,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const releaseIssueAgentMentionChainSlot = `-- name: ReleaseIssueAgentMentionChainSlot :execrows
 UPDATE issue SET
     agent_mention_chain_count = agent_mention_chain_count - 1

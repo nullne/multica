@@ -290,6 +290,116 @@ func TestIssueCRUD(t *testing.T) {
 	}
 }
 
+func TestListRecentIssues(t *testing.T) {
+	ctx := context.Background()
+
+	otherUserEmail := "recent-other@multica.ai"
+	var otherUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email) VALUES ($1, $2) RETURNING id
+	`, "Recent Other", otherUserEmail).Scan(&otherUserID); err != nil {
+		t.Fatalf("create other user: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'member')
+	`, testWorkspaceID, otherUserID); err != nil {
+		t.Fatalf("add other user as member: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, otherUserID)
+	})
+
+	insertIssue := func(title, creatorID string, assigneeID *string, updatedAt string) string {
+		var number int
+		if err := testPool.QueryRow(ctx, `
+			UPDATE workspace SET issue_counter = issue_counter + 1
+			WHERE id = $1 RETURNING issue_counter
+		`, testWorkspaceID).Scan(&number); err != nil {
+			t.Fatalf("bump issue counter: %v", err)
+		}
+		var id string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO issue (
+				workspace_id, title, status, priority,
+				creator_type, creator_id,
+				assignee_type, assignee_id,
+				number, position, updated_at
+			) VALUES (
+				$1, $2, 'todo', 'medium',
+				'member', $3,
+				CASE WHEN $4::uuid IS NULL THEN NULL ELSE 'member' END, $4,
+				$5, 0, $6::timestamptz
+			) RETURNING id
+		`, testWorkspaceID, title, creatorID, assigneeID, number, updatedAt).Scan(&id); err != nil {
+			t.Fatalf("insert issue %q: %v", title, err)
+		}
+		t.Cleanup(func() {
+			testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, id)
+		})
+		return id
+	}
+
+	// Use far-future timestamps so the seeded issues are the most recent
+	// regardless of any sibling tests that also insert issues into this
+	// shared workspace fixture.
+	mineCreated := insertIssue("Recent mine created", testUserID, nil, "2099-12-31T03:00:00Z")
+	mineAssigned := insertIssue("Recent mine assigned", otherUserID, &testUserID, "2099-12-31T02:00:00Z")
+	unrelated := insertIssue("Recent unrelated", otherUserID, &otherUserID, "2099-12-31T01:00:00Z")
+
+	seeded := map[string]bool{mineCreated: true, mineAssigned: true, unrelated: true}
+	filterSeeded := func(ids []string) []string {
+		out := make([]string, 0, len(seeded))
+		for _, id := range ids {
+			if seeded[id] {
+				out = append(out, id)
+			}
+		}
+		return out
+	}
+
+	listRecent := func(query string) []string {
+		w := httptest.NewRecorder()
+		req := newRequest("GET", "/api/issues/recent?workspace_id="+testWorkspaceID+"&"+query, nil)
+		testHandler.ListRecentIssues(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("ListRecentIssues: expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var resp struct {
+			Issues []IssueResponse `json:"issues"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		ids := make([]string, len(resp.Issues))
+		for i, iss := range resp.Issues {
+			ids[i] = iss.ID
+		}
+		return ids
+	}
+
+	allSeeded := filterSeeded(listRecent("limit=200"))
+	if got, want := allSeeded, []string{mineCreated, mineAssigned, unrelated}; !equalStrings(got, want) {
+		t.Fatalf("expected recent order %v, got %v", want, got)
+	}
+
+	mineSeeded := filterSeeded(listRecent("mine=true&limit=200"))
+	if got, want := mineSeeded, []string{mineCreated, mineAssigned}; !equalStrings(got, want) {
+		t.Fatalf("expected mine recent order %v, got %v", want, got)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCreateIssue_AssignedAgentCopiesDispatchDefaults(t *testing.T) {
 	ctx := context.Background()
 

@@ -8,6 +8,7 @@ import { useInboxStore } from "@/features/inbox";
 import { useLabelStore } from "@/features/labels";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useAuthStore } from "@/features/auth";
+import { useRecentsStore } from "@/features/navigation/recents-store";
 import { createLogger } from "@/shared/logger";
 import { api } from "@/shared/api";
 import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
@@ -104,6 +105,7 @@ export function useRealtimeSync(ws: WSClient | null) {
       const { issue } = p as IssueUpdatedPayload;
       if (!issue?.id) return;
       useIssueStore.getState().updateIssue(issue.id, issue);
+      useRecentsStore.getState().upsertIssue(issue);
       if (issue.status) {
         useInboxStore.getState().updateIssueStatus(issue.id, issue.status);
       }
@@ -111,12 +113,16 @@ export function useRealtimeSync(ws: WSClient | null) {
 
     const unsubIssueCreated = ws.on("issue:created", (p) => {
       const { issue } = p as IssueCreatedPayload;
-      if (issue) useIssueStore.getState().addIssue(issue);
+      if (!issue) return;
+      useIssueStore.getState().addIssue(issue);
+      useRecentsStore.getState().upsertIssue(issue);
     });
 
     const unsubIssueDeleted = ws.on("issue:deleted", (p) => {
       const { issue_id } = p as IssueDeletedPayload;
-      if (issue_id) useIssueStore.getState().removeIssue(issue_id);
+      if (!issue_id) return;
+      useIssueStore.getState().removeIssue(issue_id);
+      useRecentsStore.getState().removeIssue(issue_id);
     });
 
     const unsubLabelCreated = ws.on("label:created", (p) => {

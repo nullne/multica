@@ -302,6 +302,94 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListRecentIssues returns the most recently updated issues in a workspace,
+// optionally narrowed to issues the caller is involved in (creator or
+// assignee). Powers the home sidebar Recents list so the order reflects
+// actual recency rather than the position/created_at ordering used elsewhere.
+func (h *Handler) ListRecentIssues(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	workspaceID := resolveWorkspaceID(r)
+
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	var userFilter pgtype.UUID
+	if r.URL.Query().Get("mine") == "true" {
+		userID := requestUserID(r)
+		if userID != "" {
+			userFilter = parseUUID(userID)
+		}
+	}
+
+	issues, err := h.Queries.ListRecentIssues(ctx, db.ListRecentIssuesParams{
+		WorkspaceID: parseUUID(workspaceID),
+		Limit:       int32(limit),
+		UserID:      userFilter,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list recent issues")
+		return
+	}
+
+	prefix := h.getIssuePrefix(ctx, parseUUID(workspaceID))
+	resp := make([]IssueResponse, len(issues))
+	for i, issue := range issues {
+		resp[i] = issueToResponse(issue, prefix)
+	}
+
+	if len(issues) > 0 {
+		issueIDs := make([]pgtype.UUID, len(issues))
+		for i, issue := range issues {
+			issueIDs[i] = issue.ID
+		}
+		labelRows, err := h.Queries.ListLabelsForIssues(ctx, issueIDs)
+		if err == nil {
+			labelMap := make(map[string][]LabelResponse)
+			for _, row := range labelRows {
+				iid := uuidToString(row.IssueID)
+				labelMap[iid] = append(labelMap[iid], LabelResponse{
+					ID:          uuidToString(row.ID),
+					WorkspaceID: uuidToString(row.WorkspaceID),
+					Name:        row.Name,
+					Color:       row.Color,
+				})
+			}
+			for i := range resp {
+				if labels, ok := labelMap[resp[i].ID]; ok {
+					resp[i].Labels = labels
+				}
+			}
+		}
+
+		linkRows, err := h.Queries.ListIssueLinksByIssues(ctx, issueIDs)
+		if err == nil {
+			linkMap := make(map[string][]IssueLinkResponse)
+			for _, l := range linkRows {
+				iid := uuidToString(l.IssueID)
+				linkMap[iid] = append(linkMap[iid], issueLinkToResponse(l))
+			}
+			for i := range resp {
+				if links, ok := linkMap[resp[i].ID]; ok {
+					resp[i].Links = links
+				}
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issues": resp,
+		"total":  len(resp),
+	})
+}
+
 func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	issue, ok := h.loadIssueForUser(w, r, id)
