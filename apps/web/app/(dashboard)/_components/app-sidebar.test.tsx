@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const pushMock = vi.fn();
@@ -124,6 +124,7 @@ vi.mock("@/features/issues/store", () => ({
 }));
 
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { useRecentsPrefsStore } from "@/features/navigation/recents-prefs-store";
 import { AppSidebar } from "./app-sidebar";
 
 function renderSidebar() {
@@ -206,5 +207,157 @@ describe("AppSidebar user menu", () => {
     expect(screen.getByText("Other workspace issue")).toBeInTheDocument();
     expect(screen.queryByText("Inbox")).not.toBeInTheDocument();
     expect(screen.queryByText("Agents")).not.toBeInTheDocument();
+  });
+});
+
+describe("AppSidebar grouped recents", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPathname = "/home";
+    mockSearchParams = new URLSearchParams();
+    useRecentsPrefsStore.setState({
+      collapsedWorkspaceIds: [],
+      pinnedWorkspaceIds: [],
+    });
+    listIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
+      Promise.resolve({
+        issues:
+          workspace_id === "ws-2"
+            ? [
+                {
+                  id: "issue-2",
+                  workspace_id: "ws-2",
+                  identifier: "PRD-2",
+                  title: "Other workspace issue",
+                  status: "todo",
+                  priority: "medium",
+                  creator_type: "member",
+                  creator_id: "user-1",
+                  updated_at: "2026-01-02T00:00:00Z",
+                  created_at: "2026-01-02T00:00:00Z",
+                },
+              ]
+            : issueState.issues,
+      })
+    );
+  });
+
+  it("collapses a workspace group when its header is clicked and expands again on re-click", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    expect(await screen.findByText("Other workspace issue")).toBeInTheDocument();
+
+    const header = screen.getByRole("button", { name: "Prod Debug" });
+    expect(header).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Other workspace issue")).not.toBeInTheDocument();
+
+    await user.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Other workspace issue")).toBeInTheDocument();
+  });
+
+  it("limits a large group to a bounded scrollable region", async () => {
+    listIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
+      Promise.resolve({
+        issues:
+          workspace_id === "ws-2"
+            ? Array.from({ length: 15 }, (_, idx) => ({
+                id: `issue-bulk-${idx}`,
+                workspace_id: "ws-2",
+                identifier: `PRD-${idx + 10}`,
+                title: `Bulk issue ${idx}`,
+                status: "todo",
+                priority: "medium",
+                creator_type: "member",
+                creator_id: "user-1",
+                updated_at: `2026-01-${String(idx + 1).padStart(2, "0")}T00:00:00Z`,
+                created_at: `2026-01-${String(idx + 1).padStart(2, "0")}T00:00:00Z`,
+              }))
+            : issueState.issues,
+      })
+    );
+
+    renderSidebar();
+    const body = await screen.findByTestId("recents-group-body-ws-2");
+    expect(body.getAttribute("data-scrollable")).toBe("true");
+    expect(body.style.maxHeight).not.toBe("");
+    expect(within(body).getAllByText(/^Bulk issue/)).toHaveLength(15);
+  });
+
+  it("does not mark a small group as scrollable", async () => {
+    renderSidebar();
+    const body = await screen.findByTestId("recents-group-body-ws-2");
+    expect(body.getAttribute("data-scrollable")).toBe("false");
+    expect(body.style.maxHeight).toBe("");
+  });
+
+  it("pins a workspace group and renders it before unpinned groups", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    expect(await screen.findByText("Other workspace issue")).toBeInTheDocument();
+
+    const initialGroups = screen.getAllByTestId(/^recents-group-ws-/);
+    const initialOrder = initialGroups.map((el) => el.dataset.testid);
+    expect(initialOrder).toContain("recents-group-ws-1");
+    expect(initialOrder).toContain("recents-group-ws-2");
+    expect(initialGroups.every((el) => el.dataset.pinned === "false")).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: /Pin Test Workspace/i }));
+
+    const reorderedGroups = screen.getAllByTestId(/^recents-group-ws-/);
+    const firstGroup = reorderedGroups[0]!;
+    const secondGroup = reorderedGroups[1]!;
+    expect(firstGroup.dataset.testid).toBe("recents-group-ws-1");
+    expect(firstGroup.dataset.pinned).toBe("true");
+    expect(secondGroup.dataset.testid).toBe("recents-group-ws-2");
+    expect(secondGroup.dataset.pinned).toBe("false");
+  });
+
+  it("unpins a workspace group from the pin toggle", async () => {
+    const user = userEvent.setup();
+    useRecentsPrefsStore.setState({ pinnedWorkspaceIds: ["ws-2"] });
+    renderSidebar();
+
+    expect(await screen.findByText("Other workspace issue")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Unpin Prod Debug/i }));
+
+    expect(useRecentsPrefsStore.getState().pinnedWorkspaceIds).toEqual([]);
+  });
+
+  it("reorders pinned workspaces with the move buttons", async () => {
+    const user = userEvent.setup();
+    useRecentsPrefsStore.setState({ pinnedWorkspaceIds: ["ws-1", "ws-2"] });
+    renderSidebar();
+
+    expect(await screen.findByText("Other workspace issue")).toBeInTheDocument();
+    expect(
+      screen.getAllByTestId(/^recents-group-ws-/).map((el) => el.dataset.testid),
+    ).toEqual(["recents-group-ws-1", "recents-group-ws-2"]);
+
+    await user.click(
+      screen.getByRole("button", { name: /Move Prod Debug up/i }),
+    );
+
+    expect(useRecentsPrefsStore.getState().pinnedWorkspaceIds).toEqual([
+      "ws-2",
+      "ws-1",
+    ]);
+    expect(
+      screen.getAllByTestId(/^recents-group-ws-/).map((el) => el.dataset.testid),
+    ).toEqual(["recents-group-ws-2", "recents-group-ws-1"]);
+
+    await user.click(
+      screen.getByRole("button", { name: /Move Prod Debug down/i }),
+    );
+
+    expect(useRecentsPrefsStore.getState().pinnedWorkspaceIds).toEqual([
+      "ws-1",
+      "ws-2",
+    ]);
   });
 });
