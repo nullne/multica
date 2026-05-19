@@ -9,7 +9,7 @@ import { useWorkspaceStore } from "@/features/workspace";
 import { issueUrl } from "@/features/issues/utils/url";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
-import { AgentWorkingIndicator } from "./agent-working-indicator";
+import { RunningIndicatorRing } from "./running-indicator-ring";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -29,7 +29,10 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
         selected ? "bg-accent/30" : ""
       }`}
     >
-      <div className="relative flex shrink-0 items-center justify-center w-4 h-4">
+      <RunningIndicatorRing
+        issueId={issue.id}
+        className="relative w-4 h-4"
+      >
         <PriorityIcon
           priority={issue.priority}
           className={selected ? "hidden" : "group-hover/row:hidden"}
@@ -42,7 +45,7 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
             selected ? "" : "hidden group-hover/row:block"
           }`}
         />
-      </div>
+      </RunningIndicatorRing>
       <Link
         href={issueUrl(issue.id, workspaceSlug)}
         className="flex flex-1 items-center gap-2 min-w-0"
@@ -81,7 +84,6 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
             {formatDate(issue.due_date)}
           </span>
         )}
-        <AgentWorkingIndicator issueId={issue.id} layout="inline" />
         {issue.assignee_type && issue.assignee_id && (
           issue.assignee_type === "agent" ? (
             <AgentDispatchBadge issue={issue} layout="inline" />

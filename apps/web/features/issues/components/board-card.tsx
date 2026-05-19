@@ -15,7 +15,7 @@ import { useWorkspaceStore } from "@/features/workspace";
 import { issueUrl } from "@/features/issues/utils/url";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
-import { AgentWorkingIndicator } from "./agent-working-indicator";
+import { RunningIndicatorRing } from "./running-indicator-ring";
 import { PriorityPicker, AssigneePicker, DueDatePicker } from "./pickers";
 import { PRIORITY_CONFIG } from "@/features/issues/config";
 import type { CardProperties } from "@/features/issues/stores/view-store";
@@ -114,48 +114,49 @@ export const BoardCardContent = memo(function BoardCardContent({
         </div>
       )}
 
-      {/* Working indicator */}
-      <AgentWorkingIndicator issueId={issue.id} layout="card" />
-
       {/* Row 3: Assignee, priority badge, due date */}
       {(showAssignee || showPriority || showDueDate) && (
         <div className="mt-3 flex items-center gap-2">
           {showAssignee && issue.assignee_type === "agent" ? (
-            editable ? (
-              <PickerWrapper>
-                <AssigneePicker
-                  assigneeType={issue.assignee_type}
-                  assigneeId={issue.assignee_id}
-                  onUpdate={handleUpdate}
-                  trigger={<AgentDispatchBadge issue={issue} />}
-                />
-              </PickerWrapper>
-            ) : (
-              <AgentDispatchBadge issue={issue} />
-            )
+            <RunningIndicatorRing issueId={issue.id}>
+              {editable ? (
+                <PickerWrapper>
+                  <AssigneePicker
+                    assigneeType={issue.assignee_type}
+                    assigneeId={issue.assignee_id}
+                    onUpdate={handleUpdate}
+                    trigger={<AgentDispatchBadge issue={issue} />}
+                  />
+                </PickerWrapper>
+              ) : (
+                <AgentDispatchBadge issue={issue} />
+              )}
+            </RunningIndicatorRing>
           ) : showAssignee ? (
-            editable ? (
-              <PickerWrapper>
-                <AssigneePicker
-                  assigneeType={issue.assignee_type}
-                  assigneeId={issue.assignee_id}
-                  onUpdate={handleUpdate}
-                  trigger={
-                    <ActorAvatar
-                      actorType={issue.assignee_type!}
-                      actorId={issue.assignee_id!}
-                      size={22}
-                    />
-                  }
+            <RunningIndicatorRing issueId={issue.id}>
+              {editable ? (
+                <PickerWrapper>
+                  <AssigneePicker
+                    assigneeType={issue.assignee_type}
+                    assigneeId={issue.assignee_id}
+                    onUpdate={handleUpdate}
+                    trigger={
+                      <ActorAvatar
+                        actorType={issue.assignee_type!}
+                        actorId={issue.assignee_id!}
+                        size={22}
+                      />
+                    }
+                  />
+                </PickerWrapper>
+              ) : (
+                <ActorAvatar
+                  actorType={issue.assignee_type!}
+                  actorId={issue.assignee_id!}
+                  size={22}
                 />
-              </PickerWrapper>
-            ) : (
-              <ActorAvatar
-                actorType={issue.assignee_type!}
-                actorId={issue.assignee_id!}
-                size={22}
-              />
-            )
+              )}
+            </RunningIndicatorRing>
           ) : null}
           {showPriority &&
             (editable ? (

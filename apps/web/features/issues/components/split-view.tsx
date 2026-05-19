@@ -16,6 +16,7 @@ import { IssueDetail } from "./issue-detail";
 import { StatusIcon } from "./status-icon";
 import { PriorityIcon } from "./priority-icon";
 import { ActorAvatar } from "@/components/common/actor-avatar";
+import { RunningIndicatorRing } from "./running-indicator-ring";
 
 // ---------------------------------------------------------------------------
 // SplitListRow
@@ -33,11 +34,17 @@ function SplitListRow({
   return (
     <button
       onClick={onClick}
-      className={`group flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
-        isSelected ? "bg-accent" : "hover:bg-accent/50"
+      aria-current={isSelected ? "true" : undefined}
+      data-active={isSelected || undefined}
+      className={`group relative flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition-colors ${
+        isSelected
+          ? "bg-accent text-accent-foreground before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[3px] before:rounded-r before:bg-primary"
+          : "hover:bg-accent/50"
       }`}
     >
-      <PriorityIcon priority={issue.priority} className="size-3.5 shrink-0 text-muted-foreground" />
+      <RunningIndicatorRing issueId={issue.id} className="size-3.5">
+        <PriorityIcon priority={issue.priority} className="size-3.5 text-muted-foreground" />
+      </RunningIndicatorRing>
       <span className="hidden md:inline w-16 shrink-0 text-xs text-muted-foreground">
         {issue.identifier}
       </span>
