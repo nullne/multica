@@ -17,11 +17,9 @@ function makeIssue(overrides: Partial<Issue> & {
   updated_at: string;
 }): Issue {
   return {
-    id: overrides.id,
-    workspace_id: overrides.workspace_id,
     number: 0,
     identifier: overrides.id,
-    title: overrides.title ?? "Untitled",
+    title: "Untitled",
     description: null,
     status: "todo",
     priority: "medium",
@@ -41,7 +39,6 @@ function makeIssue(overrides: Partial<Issue> & {
     dispatch_daemon_label: null,
     labels: [],
     created_at: overrides.updated_at,
-    updated_at: overrides.updated_at,
     ...overrides,
   };
 }
@@ -79,6 +76,99 @@ describe("useRecentsStore", () => {
     await Promise.all([first, second]);
 
     expect(listRecentIssuesMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("forwards the mine flag with the user id to the server", async () => {
+    listRecentIssuesMock.mockResolvedValue({ issues: [], total: 0 });
+
+    await useRecentsStore
+      .getState()
+      .fetch(["ws-1"], { mine: true, userId: "user-1" });
+
+    expect(listRecentIssuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace_id: "ws-1", mine: true }),
+    );
+  });
+
+  it("refetches when the mine flag toggles", async () => {
+    listRecentIssuesMock.mockResolvedValue({ issues: [], total: 0 });
+
+    await useRecentsStore.getState().fetch(["ws-1"], { userId: "user-1" });
+    await useRecentsStore
+      .getState()
+      .fetch(["ws-1"], { mine: true, userId: "user-1" });
+
+    expect(listRecentIssuesMock).toHaveBeenCalledTimes(2);
+    expect(listRecentIssuesMock.mock.calls[0]?.[0]).not.toMatchObject({
+      mine: true,
+    });
+    expect(listRecentIssuesMock.mock.calls[1]?.[0]).toMatchObject({
+      mine: true,
+    });
+  });
+
+  it("drops upserts that do not involve the user while in mine mode", async () => {
+    listRecentIssuesMock.mockResolvedValue({
+      issues: [
+        makeIssue({
+          id: "mine",
+          workspace_id: "ws-1",
+          updated_at: "2026-01-01T00:00:00Z",
+          assignee_type: "member",
+          assignee_id: "user-1",
+        }),
+      ],
+      total: 1,
+    });
+
+    await useRecentsStore
+      .getState()
+      .fetch(["ws-1"], { mine: true, userId: "user-1" });
+
+    useRecentsStore.getState().upsertIssue(
+      makeIssue({
+        id: "not-mine",
+        workspace_id: "ws-1",
+        updated_at: "2026-01-10T00:00:00Z",
+        creator_id: "user-other",
+        assignee_id: null,
+      }),
+    );
+
+    expect(useRecentsStore.getState().issues.map((i) => i.id)).toEqual(["mine"]);
+  });
+
+  it("removes a previously-mine issue from the list when it gets reassigned away", async () => {
+    listRecentIssuesMock.mockResolvedValue({
+      issues: [
+        makeIssue({
+          id: "mine",
+          workspace_id: "ws-1",
+          updated_at: "2026-01-01T00:00:00Z",
+          assignee_type: "member",
+          assignee_id: "user-1",
+        }),
+      ],
+      total: 1,
+    });
+
+    await useRecentsStore
+      .getState()
+      .fetch(["ws-1"], { mine: true, userId: "user-1" });
+
+    useRecentsStore.getState().upsertIssue(
+      makeIssue({
+        id: "mine",
+        workspace_id: "ws-1",
+        updated_at: "2026-01-10T00:00:00Z",
+        creator_type: "member",
+        creator_id: "user-other",
+        assignee_type: "member",
+        assignee_id: "user-other",
+      }),
+    );
+
+    expect(useRecentsStore.getState().issues).toEqual([]);
   });
 
   it("upserts an incoming issue update without refetching", async () => {

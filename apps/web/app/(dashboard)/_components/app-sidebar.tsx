@@ -124,12 +124,15 @@ export function AppSidebar() {
   );
   const workspaceIdsKey = workspaceIds.join(",");
 
+  const userId = user?.id ?? null;
   useEffect(() => {
     if (!isHome) return;
-    void fetchRecents(workspaceIds);
-    // Fetch is keyed by the set of workspace IDs — the store dedupes
-    // in-flight requests so WS-driven issue updates won't trigger a refetch.
-  }, [isHome, workspaceIdsKey, fetchRecents]); // eslint-disable-line react-hooks/exhaustive-deps
+    void fetchRecents(workspaceIds, { mine: onlyMyIssues, userId });
+    // Re-fetch when the workspace set, mine toggle, or signed-in user
+    // changes. The mine filter must hit the server — a user's recent
+    // involved issues can be outside the global top 50 in busy workspaces,
+    // so client-only filtering would leave Recents empty or sparse.
+  }, [isHome, workspaceIdsKey, fetchRecents, onlyMyIssues, userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pinnedWorkspaceIds = useRecentsPrefsStore((s) => s.pinnedWorkspaceIds);
   const collapsedWorkspaceIds = useRecentsPrefsStore(
@@ -141,17 +144,10 @@ export function AppSidebar() {
 
   const recentGroups = useMemo(() => {
     const workspaceById = new Map(workspaces.map((ws) => [ws.id, ws]));
+    // "Only my issues" is enforced server-side via the recents fetch (and
+    // mirrored by the store when applying WS upserts), so this stage only
+    // applies the remaining UI-level toggles.
     const filtered = recentIssues.filter((i) => {
-      if (onlyMyIssues) {
-        // "My" means the user is involved — either created or is the
-        // assignee. Restricting to creator-only buried users in busy
-        // workspaces who get assigned issues but rarely file them.
-        const createdByMe =
-          i.creator_type === "member" && i.creator_id === user?.id;
-        const assignedToMe =
-          i.assignee_type === "member" && i.assignee_id === user?.id;
-        if (!createdByMe && !assignedToMe) return false;
-      }
       if (hideCompleted && (i.status === "done" || i.status === "cancelled")) {
         return false;
       }

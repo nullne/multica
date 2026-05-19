@@ -113,29 +113,35 @@ function renderSidebar() {
   );
 }
 
-interface RecentIssueOverrides {
+import type { Issue } from "@/shared/types";
+
+function makeIssue(overrides: Partial<Issue> & {
   id: string;
   workspace_id: string;
   identifier: string;
   title: string;
-  status?: string;
-  priority?: string;
-  creator_type?: "member" | "agent" | null;
-  creator_id?: string | null;
-  assignee_type?: "member" | "agent" | null;
-  assignee_id?: string | null;
   updated_at: string;
-  created_at?: string;
-}
-
-function makeIssue(overrides: RecentIssueOverrides) {
+}): Issue {
   return {
+    number: 0,
+    description: null,
     status: "todo",
     priority: "medium",
-    creator_type: "member" as const,
+    creator_type: "member",
     creator_id: "user-1",
     assignee_type: null,
     assignee_id: null,
+    verifier_agent_id: null,
+    max_verification_rounds: null,
+    parent_issue_id: null,
+    acceptance_criteria: [],
+    criteria_status: null,
+    position: 0,
+    due_date: null,
+    dispatch_provider: null,
+    dispatch_daemon_id: null,
+    dispatch_daemon_label: null,
+    labels: [],
     created_at: overrides.updated_at,
     ...overrides,
   };
@@ -292,52 +298,83 @@ describe("AppSidebar recents filtering", () => {
     mockPathname = "/home";
   });
 
-  it("treats 'Only my issues' as creator or assignee, not creator alone", async () => {
+  it("requests recents with the server-side mine filter by default", async () => {
+    renderSidebar();
+    await screen.findByText("Other workspace issue");
+
+    for (const call of listRecentIssuesMock.mock.calls) {
+      expect(call[0]).toMatchObject({ mine: true });
+    }
+  });
+
+  it("re-requests recents without the mine filter when the toggle is turned off", async () => {
+    const userInteract = userEvent.setup();
+    renderSidebar();
+    await screen.findByText("Other workspace issue");
+
+    const callsBeforeToggle = listRecentIssuesMock.mock.calls.length;
+
+    await userInteract.click(screen.getByLabelText("Filter recents"));
+    await userInteract.click(await screen.findByText("Only my issues"));
+
+    await waitFor(() => {
+      expect(listRecentIssuesMock.mock.calls.length).toBeGreaterThan(
+        callsBeforeToggle,
+      );
+    });
+    const newCalls = listRecentIssuesMock.mock.calls.slice(callsBeforeToggle);
+    for (const call of newCalls) {
+      expect(call[0]).not.toMatchObject({ mine: true });
+    }
+  });
+
+  it("shows the user's issues even when they would fall outside the global top 50", async () => {
     listRecentIssuesMock.mockImplementation(
-      ({ workspace_id }: { workspace_id: string }) =>
-        Promise.resolve({
-          issues:
-            workspace_id === "ws-1"
-              ? [
-                  makeIssue({
-                    id: "issue-mine-created",
-                    workspace_id: "ws-1",
-                    identifier: "TES-10",
-                    title: "Created by me",
-                    creator_id: "user-1",
-                    assignee_id: null,
-                    updated_at: "2026-01-03T00:00:00Z",
-                  }),
-                  makeIssue({
-                    id: "issue-mine-assigned",
-                    workspace_id: "ws-1",
-                    identifier: "TES-11",
-                    title: "Assigned to me",
-                    creator_id: "user-other",
-                    assignee_type: "member",
-                    assignee_id: "user-1",
-                    updated_at: "2026-01-02T00:00:00Z",
-                  }),
-                  makeIssue({
-                    id: "issue-unrelated",
-                    workspace_id: "ws-1",
-                    identifier: "TES-12",
-                    title: "Unrelated to me",
-                    creator_id: "user-other",
-                    assignee_id: null,
-                    updated_at: "2026-01-01T00:00:00Z",
-                  }),
-                ]
-              : [],
-          total: 0,
-        }),
+      ({ workspace_id, mine }: { workspace_id: string; mine?: boolean }) => {
+        if (workspace_id !== "ws-1") return Promise.resolve({ issues: [], total: 0 });
+        // The 50 globally most recent issues in this workspace are all
+        // unrelated to the user — so a client-side filter over the
+        // unfiltered list would render Recents empty.
+        if (!mine) {
+          return Promise.resolve({
+            issues: Array.from({ length: 50 }, (_, idx) =>
+              makeIssue({
+                id: `issue-other-${idx}`,
+                workspace_id: "ws-1",
+                identifier: `TES-${100 + idx}`,
+                title: `Someone else's issue ${idx}`,
+                creator_id: "user-other",
+                assignee_id: null,
+                updated_at: `2026-02-${String(idx + 1).padStart(2, "0")}T00:00:00Z`,
+              }),
+            ),
+            total: 50,
+          });
+        }
+        // Server-side mine filter pulls the user's older issue back in.
+        return Promise.resolve({
+          issues: [
+            makeIssue({
+              id: "issue-buried-mine",
+              workspace_id: "ws-1",
+              identifier: "TES-9",
+              title: "My buried issue",
+              creator_id: "user-1",
+              assignee_id: null,
+              updated_at: "2026-01-15T00:00:00Z",
+            }),
+          ],
+          total: 1,
+        });
+      },
     );
 
     renderSidebar();
 
-    expect(await screen.findByText("Created by me")).toBeInTheDocument();
-    expect(screen.getByText("Assigned to me")).toBeInTheDocument();
-    expect(screen.queryByText("Unrelated to me")).not.toBeInTheDocument();
+    expect(await screen.findByText("My buried issue")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Someone else's issue 0"),
+    ).not.toBeInTheDocument();
   });
 });
 
