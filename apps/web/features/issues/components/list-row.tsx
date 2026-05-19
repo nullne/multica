@@ -5,11 +5,12 @@ import Link from "next/link";
 import type { Issue } from "@/shared/types";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
+import { useIssueStore } from "@/features/issues/store";
 import { useWorkspaceStore } from "@/features/workspace";
 import { issueUrl } from "@/features/issues/utils/url";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
-import { AgentWorkingIndicator } from "./agent-working-indicator";
+import { RunningIndicatorRing } from "./running-indicator-ring";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -21,15 +22,28 @@ function formatDate(date: string): string {
 export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
   const selected = useIssueSelectionStore((s) => s.selectedIds.has(issue.id));
   const toggle = useIssueSelectionStore((s) => s.toggle);
+  const isActive = useIssueStore((s) => s.activeIssueId === issue.id);
   const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
+
+  // Highlight precedence: currently opened (active) > batch selected > hover.
+  // The active state uses a primary leading bar so it stays distinct from the
+  // softer accent tint used for multi-select.
+  const rowStateClass = isActive
+    ? "bg-accent text-accent-foreground before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[3px] before:rounded-r before:bg-primary"
+    : selected
+      ? "bg-accent/30"
+      : "";
 
   return (
     <div
-      className={`group/row flex h-9 items-center gap-2 px-2 md:px-4 text-sm transition-colors hover:bg-accent/50 ${
-        selected ? "bg-accent/30" : ""
-      }`}
+      aria-current={isActive ? "true" : undefined}
+      data-active={isActive || undefined}
+      className={`group/row relative flex h-9 items-center gap-2 px-2 md:px-4 text-sm transition-colors hover:bg-accent/50 ${rowStateClass}`}
     >
-      <div className="relative flex shrink-0 items-center justify-center w-4 h-4">
+      <RunningIndicatorRing
+        issueId={issue.id}
+        className="relative w-4 h-4"
+      >
         <PriorityIcon
           priority={issue.priority}
           className={selected ? "hidden" : "group-hover/row:hidden"}
@@ -42,7 +56,7 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
             selected ? "" : "hidden group-hover/row:block"
           }`}
         />
-      </div>
+      </RunningIndicatorRing>
       <Link
         href={issueUrl(issue.id, workspaceSlug)}
         className="flex flex-1 items-center gap-2 min-w-0"
@@ -81,7 +95,6 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
             {formatDate(issue.due_date)}
           </span>
         )}
-        <AgentWorkingIndicator issueId={issue.id} layout="inline" />
         {issue.assignee_type && issue.assignee_id && (
           issue.assignee_type === "agent" ? (
             <AgentDispatchBadge issue={issue} layout="inline" />

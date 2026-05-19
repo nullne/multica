@@ -641,6 +641,12 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
     if (workspace) fetchAllRuntimes();
   }, [workspace, fetchAllRuntimes]);
 
+  // Mark this issue as the currently-opened one so list rows can highlight it.
+  // Persists across unmount so the row stays highlighted after navigating back.
+  useEffect(() => {
+    useIssueStore.getState().setActiveIssue(id);
+  }, [id]);
+
   // Single source of truth: read issue directly from global store
   const issue = useIssueStore((s) => s.issues.find((i) => i.id === id)) ?? null;
   const allIssues = useIssueStore((s) => s.issues);
