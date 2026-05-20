@@ -350,6 +350,33 @@ func TestCodexRawTurnCompletedAborted(t *testing.T) {
 	}
 }
 
+func TestCodexRawTurnCompletedFailedCapturesError(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := newTestCodexClient(t)
+	c.notificationProtocol = "raw"
+
+	var done bool
+	c.onTurnDone = func(aborted bool) {
+		done = true
+		if aborted {
+			t.Fatal("expected aborted=false for failed status")
+		}
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"id":"turn-3","status":"failed","error":{"message":"bad auth"}}}}`)
+
+	if !done {
+		t.Fatal("expected onTurnDone for failed status")
+	}
+	if c.lastTurnStatus != "failed" {
+		t.Fatalf("expected lastTurnStatus failed, got %q", c.lastTurnStatus)
+	}
+	if c.lastError != "bad auth" {
+		t.Fatalf("expected lastError bad auth, got %q", c.lastError)
+	}
+}
+
 func TestCodexRawItemCommandExecution(t *testing.T) {
 	t.Parallel()
 
@@ -432,6 +459,47 @@ func TestCodexRawItemAgentMessageFinalAnswer(t *testing.T) {
 	}
 	if !turnDone {
 		t.Fatal("expected onTurnDone for final_answer")
+	}
+}
+
+func TestCodexRawAgentMessageDelta(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := newTestCodexClient(t)
+	c.notificationProtocol = "raw"
+
+	var gotText string
+	c.onMessage = func(msg Message) {
+		if msg.Type == MessageText {
+			gotText += msg.Content
+		}
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"msg-1","delta":"4"}}`)
+
+	if gotText != "4" {
+		t.Fatalf("expected text delta '4', got %q", gotText)
+	}
+}
+
+func TestCodexRawAgentMessageFinalDoesNotDuplicateDelta(t *testing.T) {
+	t.Parallel()
+
+	c, _, _ := newTestCodexClient(t)
+	c.notificationProtocol = "raw"
+
+	var gotText string
+	c.onMessage = func(msg Message) {
+		if msg.Type == MessageText {
+			gotText += msg.Content
+		}
+	}
+
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"msg-1","delta":"4"}}`)
+	c.handleLine(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg-1","text":"4","phase":"final_answer"}}}`)
+
+	if gotText != "4" {
+		t.Fatalf("expected text to be emitted once, got %q", gotText)
 	}
 }
 

@@ -1,6 +1,8 @@
-FROM golang:1.26-alpine
+FROM golang:1.26
 
-RUN apk add --no-cache nodejs npm curl git bash su-exec shadow
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nodejs npm curl git bash ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user (Claude CLI refuses --permission-mode bypassPermissions as root).
 RUN useradd -m -s /bin/bash testuser
@@ -11,6 +13,8 @@ ARG CODEX_VERSION=0.118.0
 
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION}
 RUN npm install -g @openai/codex@${CODEX_VERSION}
+RUN curl https://cursor.com/install -fsS | bash \
+    && ln -sf /root/.local/bin/agent /usr/local/bin/agent
 
 # OpenCode: binary from GitHub releases (skip if unavailable).
 ARG OPENCODE_VERSION=0.3.7
