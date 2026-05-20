@@ -49,9 +49,9 @@ test.describe("Workspace Providers", () => {
     const claudeCard = page.locator("[data-slot='card']").filter({ hasText: "Claude Code" }).first();
     await claudeCard.locator("[data-slot='switch']").click();
 
-    // API Key and Target Version fields should appear
+    // API Key and read-only tested version should appear.
     await expect(page.locator("label:has-text('API Key')").first()).toBeVisible();
-    await expect(page.locator("label:has-text('Target Version')").first()).toBeVisible();
+    await expect(page.locator("text=Tested Version").first()).toBeVisible();
 
     // Fill in an API key
     const apiKeyInput = page.locator("input[placeholder='sk-...']").first();
@@ -74,7 +74,7 @@ test.describe("Workspace Providers", () => {
     // Pre-configure a provider via API
     await api.updateProviderConfig({
       providers: {
-        claude: { enabled: true, api_key: "sk-test-disable-me", target_version: "" },
+        claude: { enabled: true, api_key: "sk-test-disable-me" },
       },
     });
 
@@ -109,33 +109,39 @@ test.describe("Workspace Providers", () => {
     expect(config).toBeDefined();
   });
 
-  test("provider config API: update and get roundtrip", async () => {
+  test("provider config API: update and get roundtrip returns repo version", async () => {
     // Set provider config
     const updated = await api.updateProviderConfig({
       providers: {
-        codex: { enabled: true, api_key: "sk-codex-test-key-1234", target_version: "0.1.0" },
+        codex: { enabled: true, api_key: "sk-codex-test-key-1234" },
       },
-      multica_target_version: "0.2.0",
     });
 
     // Response should have redacted API key
     expect(updated.providers?.codex?.enabled).toBe(true);
     expect(updated.providers?.codex?.api_key).toContain("****");
     expect(updated.providers?.codex?.api_key).toContain("1234");
-    expect(updated.providers?.codex?.target_version).toBe("0.1.0");
-    expect(updated.multica_target_version).toBe("0.2.0");
+    expect(updated.providers?.codex?.target_version).toBeTruthy();
 
     // GET should return same redacted config
     const fetched = await api.getProviderConfig();
     expect(fetched.providers?.codex?.enabled).toBe(true);
-    expect(fetched.providers?.codex?.target_version).toBe("0.1.0");
-    expect(fetched.multica_target_version).toBe("0.2.0");
+    expect(fetched.providers?.codex?.target_version).toBe(updated.providers?.codex?.target_version);
+  });
+
+  test("provider config API: rejects configured target version", async () => {
+    const res = await api.updateProviderConfig({
+      providers: {
+        codex: { enabled: true, api_key: "sk-codex-test-key-1234", target_version: "0.1.0" },
+      },
+    });
+    expect((res as Record<string, unknown>).error).toBeDefined();
   });
 
   test("provider config API: rejects unsupported provider", async () => {
     const res = await api.updateProviderConfig({
       providers: {
-        "unsupported-provider": { enabled: true, api_key: "", target_version: "" },
+        "unsupported-provider": { enabled: true, api_key: "" },
       },
     });
     // The response should indicate an error (400 status), but since updateProviderConfig
@@ -147,7 +153,7 @@ test.describe("Workspace Providers", () => {
     // Set initial key
     await api.updateProviderConfig({
       providers: {
-        claude: { enabled: true, api_key: "sk-ant-real-key-abcd", target_version: "" },
+        claude: { enabled: true, api_key: "sk-ant-real-key-abcd" },
       },
     });
 
@@ -160,13 +166,13 @@ test.describe("Workspace Providers", () => {
     // Send back with the redacted key — server should preserve the original
     await api.updateProviderConfig({
       providers: {
-        claude: { enabled: true, api_key: redactedKey, target_version: "1.0.0" },
+        claude: { enabled: true, api_key: redactedKey },
       },
     });
 
     // Verify the key is still the same (not overwritten with the redacted value)
     const after = await api.getProviderConfig();
     expect(after.providers?.claude?.api_key).toContain("abcd");
-    expect(after.providers?.claude?.target_version).toBe("1.0.0");
+    expect(after.providers?.claude?.target_version).toBe(config.providers?.claude?.target_version);
   });
 });

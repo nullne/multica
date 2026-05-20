@@ -218,6 +218,28 @@ func TestBuildEnvNilExtras(t *testing.T) {
 	}
 }
 
+func TestBuildEnvOmittingSkipsSystemEnv(t *testing.T) {
+	t.Setenv("OMIT_ME", "system")
+
+	env := buildEnvOmitting(map[string]string{"KEEP_ME": "extra"}, "OMIT_ME")
+	for _, item := range env {
+		if item == "OMIT_ME=system" {
+			t.Fatal("expected OMIT_ME to be omitted")
+		}
+	}
+	if !containsEnv(env, "KEEP_ME=extra") {
+		t.Fatal("expected KEEP_ME extra env var")
+	}
+}
+
+func containsEnv(env []string, want string) bool {
+	for _, item := range env {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
 
 func mustMarshal(t *testing.T, v any) json.RawMessage {
 	t.Helper()

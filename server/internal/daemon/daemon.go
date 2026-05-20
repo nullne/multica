@@ -1173,7 +1173,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		case "claude":
 			agentEnv["ANTHROPIC_API_KEY"] = apiKey
 		case "codex":
-			agentEnv["OPENAI_API_KEY"] = apiKey
+			agentEnv["CODEX_API_KEY"] = apiKey
 		case "opencode":
 			agentEnv["OPENAI_API_KEY"] = apiKey
 		case "cursor":
@@ -1187,7 +1187,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
 		if provider == "codex" || provider == "opencode" {
-			if key := agentEnv["OPENAI_API_KEY"]; key != "" {
+			key := agentEnv["OPENAI_API_KEY"]
+			if provider == "codex" {
+				key = agentEnv["CODEX_API_KEY"]
+			}
+			if key != "" {
 				execenv.WriteCodexAuth(env.CodexHome, key, d.logger)
 			}
 		}

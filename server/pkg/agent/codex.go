@@ -36,7 +36,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-	cmd.Env = buildEnv(b.cfg.Env)
+	cmd.Env = buildEnvOmitting(b.cfg.Env, "OPENAI_API_KEY")
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -143,19 +143,19 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 
 		// 2. Start thread
 		threadResult, err := c.request(runCtx, "thread/start", map[string]any{
-			"model":                    nilIfEmpty(opts.Model),
-			"modelProvider":            nil,
-			"profile":                  nil,
-			"cwd":                      opts.Cwd,
-			"approvalPolicy":           nil,
-			"sandbox":                  "workspace-write",
-			"config":                   nil,
-			"baseInstructions":         nil,
-			"developerInstructions":    nilIfEmpty(opts.SystemPrompt),
-			"compactPrompt":            nil,
-			"includeApplyPatchTool":    nil,
-			"experimentalRawEvents":    false,
-			"persistExtendedHistory":   true,
+			"model":                  nilIfEmpty(opts.Model),
+			"modelProvider":          nil,
+			"profile":                nil,
+			"cwd":                    opts.Cwd,
+			"approvalPolicy":         nil,
+			"sandbox":                "workspace-write",
+			"config":                 nil,
+			"baseInstructions":       nil,
+			"developerInstructions":  nilIfEmpty(opts.SystemPrompt),
+			"compactPrompt":          nil,
+			"includeApplyPatchTool":  nil,
+			"experimentalRawEvents":  true,
+			"persistExtendedHistory": true,
 		})
 		if err != nil {
 			finalStatus = "failed"
@@ -191,7 +191,17 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		// Wait for turn completion or context cancellation
 		select {
 		case aborted := <-turnDone:
-			if aborted {
+			c.mu.Lock()
+			turnStatus := c.lastTurnStatus
+			turnError := c.lastError
+			c.mu.Unlock()
+			if turnStatus == "failed" {
+				finalStatus = "failed"
+				finalError = turnError
+				if finalError == "" {
+					finalError = "codex turn failed"
+				}
+			} else if aborted {
 				finalStatus = "aborted"
 				finalError = "turn was aborted"
 			}
@@ -235,19 +245,22 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 // ── codexClient: JSON-RPC 2.0 transport ──
 
 type codexClient struct {
-	cfg       Config
-	stdin     interface{ Write([]byte) (int, error) }
-	mu        sync.Mutex
-	nextID    int
-	pending   map[int]*pendingRPC
-	threadID  string
-	turnID    string
-	onMessage func(Message)
+	cfg        Config
+	stdin      interface{ Write([]byte) (int, error) }
+	mu         sync.Mutex
+	nextID     int
+	pending    map[int]*pendingRPC
+	threadID   string
+	turnID     string
+	onMessage  func(Message)
 	onTurnDone func(aborted bool)
 
 	notificationProtocol string // "unknown", "legacy", "raw"
 	turnStarted          bool
 	completedTurnIDs     map[string]bool
+	emittedText          bool
+	lastTurnStatus       string
+	lastError            string
 	// pendingCommands maps itemId → command string captured from
 	// item/commandExecution/requestApproval, which is the only place
 	// Codex includes the raw command text in the raw v2 protocol.
@@ -454,7 +467,8 @@ func (c *codexClient) handleNotification(raw map[string]json.RawMessage) {
 	if c.notificationProtocol != "legacy" {
 		if c.notificationProtocol == "unknown" &&
 			(method == "turn/started" || method == "turn/completed" ||
-				method == "thread/started" || strings.HasPrefix(method, "item/")) {
+				method == "thread/started" || method == "error" ||
+				strings.HasPrefix(method, "item/") || method == "rawResponseItem/completed") {
 			c.notificationProtocol = "raw"
 		}
 
@@ -475,9 +489,7 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 		}
 	case "agent_message":
 		text, _ := msg["message"].(string)
-		if text != "" && c.onMessage != nil {
-			c.onMessage(Message{Type: MessageText, Content: text})
-		}
+		c.emitText(text)
 	case "exec_command_begin":
 		callID, _ := msg["call_id"].(string)
 		command, _ := msg["command"].(string)
@@ -531,6 +543,16 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 
 func (c *codexClient) handleRawNotification(method string, params map[string]any) {
 	switch method {
+	case "error":
+		if msg := extractNestedString(params, "error", "message"); msg != "" {
+			c.mu.Lock()
+			c.lastError = msg
+			c.mu.Unlock()
+			if c.onMessage != nil {
+				c.onMessage(Message{Type: MessageError, Content: msg})
+			}
+		}
+
 	case "turn/started":
 		c.turnStarted = true
 		if turnID := extractNestedString(params, "turn", "id"); turnID != "" {
@@ -545,6 +567,14 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 		status := extractNestedString(params, "turn", "status")
 		aborted := status == "cancelled" || status == "canceled" ||
 			status == "aborted" || status == "interrupted"
+		errorMessage := extractNestedString(params, "turn", "error", "message")
+
+		c.mu.Lock()
+		c.lastTurnStatus = status
+		if errorMessage != "" {
+			c.lastError = errorMessage
+		}
+		c.mu.Unlock()
 
 		if c.completedTurnIDs == nil {
 			c.completedTurnIDs = map[string]bool{}
@@ -567,6 +597,10 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 				c.onTurnDone(false)
 			}
 		}
+
+	case "item/agentMessage/delta":
+		delta, _ := params["delta"].(string)
+		c.emitText(delta)
 
 	default:
 		if strings.HasPrefix(method, "item/") {
@@ -635,8 +669,8 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 
 	case method == "item/completed" && itemType == "agentMessage":
 		text, _ := item["text"].(string)
-		if text != "" && c.onMessage != nil {
-			c.onMessage(Message{Type: MessageText, Content: text})
+		if !c.emittedText {
+			c.emitText(text)
 		}
 		phase, _ := item["phase"].(string)
 		if phase == "final_answer" && c.turnStarted {
@@ -645,6 +679,14 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 			}
 		}
 	}
+}
+
+func (c *codexClient) emitText(text string) {
+	if text == "" || c.onMessage == nil {
+		return
+	}
+	c.emittedText = true
+	c.onMessage(Message{Type: MessageText, Content: text})
 }
 
 // ── Helpers ──

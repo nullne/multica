@@ -4,9 +4,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	osexec "os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,7 +17,7 @@ import (
 // agentKeyEnv maps agent type to the environment variable holding the API key.
 var agentKeyEnv = map[string]string{
 	"claude":   "ANTHROPIC_API_KEY",
-	"codex":    "OPENAI_API_KEY",
+	"codex":    "CODEX_API_KEY or OPENAI_API_KEY",
 	"opencode": "OPENAI_API_KEY",
 	"cursor":   "CURSOR_API_KEY",
 }
@@ -44,7 +47,7 @@ func requireAgent(t *testing.T, agentType string) Config {
 	t.Helper()
 
 	envName := agentKeyEnv[agentType]
-	key := os.Getenv(envName)
+	key := providerAPIKey(agentType)
 	if key == "" {
 		t.Skipf("skipping %s: %s not set", agentType, envName)
 	}
@@ -80,8 +83,8 @@ func buildAgentEnv(agentType string) map[string]string {
 			env["ANTHROPIC_API_KEY"] = key
 		}
 	case "codex":
-		if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-			env["OPENAI_API_KEY"] = key
+		if key := providerAPIKey(agentType); key != "" {
+			env["CODEX_API_KEY"] = key
 		}
 	case "opencode":
 		if key := os.Getenv("OPENAI_API_KEY"); key != "" {
@@ -94,6 +97,18 @@ func buildAgentEnv(agentType string) map[string]string {
 	}
 
 	return env
+}
+
+func providerAPIKey(agentType string) string {
+	switch agentType {
+	case "codex":
+		if key := os.Getenv("CODEX_API_KEY"); key != "" {
+			return key
+		}
+		return os.Getenv("OPENAI_API_KEY")
+	default:
+		return os.Getenv(agentKeyEnv[agentType])
+	}
 }
 
 // drainSession reads all messages and the final result from a session.
@@ -136,6 +151,7 @@ func runCompatTest(t *testing.T, agentType string) {
 
 	cfg := requireAgent(t, agentType)
 	cfg.Env = buildAgentEnv(agentType)
+	configureAgentAuth(t, agentType, cfg.Env)
 
 	backend, err := New(agentType, cfg)
 	if err != nil {
@@ -169,7 +185,10 @@ func runCompatTest(t *testing.T, agentType string) {
 		t.Errorf("Result.DurationMs = %d, expected > 0", result.DurationMs)
 	}
 	if result.Output == "" {
-		t.Logf("WARNING: Result.Output is empty (agent completed but produced no captured text)")
+		t.Fatal("Result.Output is empty; agent completed but produced no captured text")
+	}
+	if !strings.Contains(result.Output, "4") {
+		t.Fatalf("Result.Output = %q, expected it to contain %q", result.Output, "4")
 	}
 
 	// --- Validate Messages ---
@@ -185,6 +204,24 @@ func runCompatTest(t *testing.T, agentType string) {
 
 	t.Logf("%s: %d messages, result.Status=%s, output=%q",
 		agentType, len(msgs), result.Status, truncate(result.Output, 100))
+}
+
+func configureAgentAuth(t *testing.T, agentType string, env map[string]string) {
+	t.Helper()
+	if agentType != "codex" {
+		return
+	}
+	key := env["CODEX_API_KEY"]
+	if key == "" {
+		return
+	}
+	codexHome := t.TempDir()
+	authPath := filepath.Join(codexHome, "auth.json")
+	content := fmt.Sprintf(`{"auth_mode":"apikey","OPENAI_API_KEY":%q}`, key)
+	if err := os.WriteFile(authPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write codex auth: %v", err)
+	}
+	env["CODEX_HOME"] = codexHome
 }
 
 func truncate(s string, n int) string {

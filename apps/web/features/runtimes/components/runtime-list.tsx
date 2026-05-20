@@ -238,9 +238,6 @@ export function RuntimeList({
     try {
       const config: WorkspaceProviderSettings = await api.getProviderConfig(workspace.id);
       const targets: { target: string; version: string }[] = [];
-      if (config.multica_target_version) {
-        targets.push({ target: "multica", version: config.multica_target_version });
-      }
       if (config.providers) {
         for (const [provider, pc] of Object.entries(config.providers)) {
           if (pc.enabled && pc.target_version) {
@@ -249,7 +246,7 @@ export function RuntimeList({
         }
       }
       if (targets.length === 0) {
-        toast.error("No target versions configured. Set versions in Settings > Providers.");
+        toast.error("No managed provider versions available for enabled providers.");
         return;
       }
       const result = await api.updateAllDaemons(workspace.id, targets);

@@ -287,7 +287,7 @@ type claudeLogEntry struct {
 }
 
 type claudeMessageContent struct {
-	Role    string             `json:"role"`
+	Role    string               `json:"role"`
 	Content []claudeContentBlock `json:"content"`
 }
 
@@ -319,7 +319,23 @@ func trySend(ch chan<- Message, msg Message) {
 }
 
 func buildEnv(extra map[string]string) []string {
-	env := os.Environ()
+	return buildEnvOmitting(extra)
+}
+
+func buildEnvOmitting(extra map[string]string, omittedKeys ...string) []string {
+	omit := make(map[string]bool, len(omittedKeys))
+	for _, key := range omittedKeys {
+		omit[key] = true
+	}
+
+	env := make([]string, 0, len(os.Environ())+len(extra))
+	for _, item := range os.Environ() {
+		key, _, ok := strings.Cut(item, "=")
+		if ok && omit[key] {
+			continue
+		}
+		env = append(env, item)
+	}
 	for k, v := range extra {
 		env = append(env, k+"="+v)
 	}

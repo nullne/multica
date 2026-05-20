@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/nullne/multica/server/internal/codeagent"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -209,6 +210,10 @@ func (h *Handler) InitiateUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TargetVersion == "" {
 		writeError(w, http.StatusBadRequest, "target_version is required")
+		return
+	}
+	if verified, ok := codeagent.Version(rt.Provider); ok && req.TargetVersion != verified {
+		writeError(w, http.StatusBadRequest, "target_version is repository-owned")
 		return
 	}
 
