@@ -121,43 +121,31 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 
 	mergedProviderConfig := make(map[string]map[string]any)
 	mergeProviderConfig := func(ps WorkspaceProviderSettings) {
-		if ps.Providers == nil {
-			return
-		}
-		for k, v := range ps.Providers {
+		for k, v := range daemonProviderConfig(ps) {
 			cur := mergedProviderConfig[k]
 			if cur == nil {
-				cur = map[string]any{
-					"enabled":        v.Enabled,
-					"api_key":        v.APIKey,
-					"target_version": v.TargetVersion,
-				}
-				mergedProviderConfig[k] = cur
+				mergedProviderConfig[k] = v
 				continue
 			}
 			// Provider is "enabled across daemon" if any workspace enables it.
-			if v.Enabled {
+			if enabled, _ := v["enabled"].(bool); enabled {
 				cur["enabled"] = true
 			}
-			if cur["api_key"] == "" && v.APIKey != "" {
-				cur["api_key"] = v.APIKey
+			if cur["api_key"] == "" && v["api_key"] != "" {
+				cur["api_key"] = v["api_key"]
 			}
-			if cur["target_version"] == "" && v.TargetVersion != "" {
-				cur["target_version"] = v.TargetVersion
+			if cur["target_version"] == "" && v["target_version"] != "" {
+				cur["target_version"] = v["target_version"]
 			}
 		}
 	}
 
 	workspaceRegs := make([]WorkspaceRegistration, 0, len(memberWorkspaces))
-	var multicaTargetVersion string
 
 	for _, ws := range memberWorkspaces {
 		wsID := ws.ID
 		_, enabled := enabledByWorkspace[uuidToString(wsID)]
 		ps := parseProviderSettings(ws.Settings)
-		if multicaTargetVersion == "" && ps.MulticaTargetVersion != "" {
-			multicaTargetVersion = ps.MulticaTargetVersion
-		}
 		mergeProviderConfig(ps)
 
 		runtimeResp, err := h.projectDaemonRuntimes(r.Context(), daemon, req, ps, wsID)
@@ -174,16 +162,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			repos = []RepoData{}
 		}
 
-		wsProviderConfig := make(map[string]map[string]any)
-		if ps.Providers != nil {
-			for k, v := range ps.Providers {
-				wsProviderConfig[k] = map[string]any{
-					"enabled":        v.Enabled,
-					"api_key":        v.APIKey,
-					"target_version": v.TargetVersion,
-				}
-			}
-		}
+		wsProviderConfig := daemonProviderConfig(ps)
 
 		workspaceRegs = append(workspaceRegs, WorkspaceRegistration{
 			WorkspaceID:    uuidToString(wsID),
@@ -209,10 +188,9 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 	)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"daemon":                 daemonToResponse(daemon),
-		"workspaces":             workspaceRegs,
-		"provider_config":        mergedProviderConfig,
-		"multica_target_version": multicaTargetVersion,
+		"daemon":          daemonToResponse(daemon),
+		"workspaces":      workspaceRegs,
+		"provider_config": mergedProviderConfig,
 	})
 }
 
@@ -400,25 +378,20 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			ps := parseProviderSettings(ws.Settings)
-			for k, v := range ps.Providers {
+			for k, v := range daemonProviderConfig(ps) {
 				cur := merged[k]
 				if cur == nil {
-					cur = map[string]any{
-						"enabled":        v.Enabled,
-						"api_key":        v.APIKey,
-						"target_version": v.TargetVersion,
-					}
-					merged[k] = cur
+					merged[k] = v
 					continue
 				}
-				if v.Enabled {
+				if enabled, _ := v["enabled"].(bool); enabled {
 					cur["enabled"] = true
 				}
-				if cur["api_key"] == "" && v.APIKey != "" {
-					cur["api_key"] = v.APIKey
+				if cur["api_key"] == "" && v["api_key"] != "" {
+					cur["api_key"] = v["api_key"]
 				}
-				if cur["target_version"] == "" && v.TargetVersion != "" {
-					cur["target_version"] = v.TargetVersion
+				if cur["target_version"] == "" && v["target_version"] != "" {
+					cur["target_version"] = v["target_version"]
 				}
 			}
 		}

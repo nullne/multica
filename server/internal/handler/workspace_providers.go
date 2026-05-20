@@ -2,10 +2,12 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/nullne/multica/server/internal/codeagent"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/pkg/protocol"
 )
@@ -31,7 +33,7 @@ type WorkspaceProviderSettings struct {
 var SupportedProviders = []string{"claude", "codex", "opencode", "cursor"}
 
 // defaultProviderSettings returns the JSON bytes for the default workspace
-// settings with cursor enabled out of the box.
+// provider settings. Target versions are repository-owned and are not stored.
 func defaultProviderSettings() []byte {
 	b, _ := json.Marshal(WorkspaceProviderSettings{
 		Providers: map[string]ProviderConfig{
@@ -92,29 +94,46 @@ func mergeProviderSettingsIntoWorkspace(raw []byte, ps WorkspaceProviderSettings
 		}
 		full["providers"] = b
 	}
-	if ps.MulticaTargetVersion != "" {
-		b, err := json.Marshal(ps.MulticaTargetVersion)
-		if err != nil {
-			return nil, err
-		}
-		full["multica_target_version"] = b
-	}
+	delete(full, "multica_target_version")
 	return json.Marshal(full)
 }
 
 // redactProviderSettings returns a copy with API keys masked for safe API responses.
 func redactProviderSettings(ps WorkspaceProviderSettings) WorkspaceProviderSettings {
 	out := WorkspaceProviderSettings{
-		MulticaTargetVersion: ps.MulticaTargetVersion,
+		Providers: make(map[string]ProviderConfig, len(SupportedProviders)),
 	}
-	if ps.Providers != nil {
-		out.Providers = make(map[string]ProviderConfig, len(ps.Providers))
-		for k, v := range ps.Providers {
-			out.Providers[k] = ProviderConfig{
-				Enabled:       v.Enabled,
-				APIKey:        redactAPIKey(v.APIKey),
-				TargetVersion: v.TargetVersion,
-			}
+	for _, provider := range SupportedProviders {
+		cfg := ProviderConfig{}
+		if ps.Providers != nil {
+			cfg = ps.Providers[provider]
+		}
+		cfg.APIKey = redactAPIKey(cfg.APIKey)
+		cfg.TargetVersion = codeagent.MustVersion(provider)
+		out.Providers[provider] = cfg
+	}
+	return out
+}
+
+func rejectConfiguredTargetVersions(ps WorkspaceProviderSettings) error {
+	if ps.MulticaTargetVersion != "" {
+		return fmt.Errorf("multica_target_version is repository-owned")
+	}
+	for provider, cfg := range ps.Providers {
+		if cfg.TargetVersion != "" {
+			return fmt.Errorf("provider %s target_version is repository-owned", provider)
+		}
+	}
+	return nil
+}
+
+func daemonProviderConfig(ps WorkspaceProviderSettings) map[string]map[string]any {
+	out := make(map[string]map[string]any)
+	for provider, cfg := range ps.Providers {
+		out[provider] = map[string]any{
+			"enabled":        cfg.Enabled,
+			"api_key":        cfg.APIKey,
+			"target_version": codeagent.MustVersion(provider),
 		}
 	}
 	return out
@@ -157,6 +176,10 @@ func (h *Handler) UpdateWorkspaceProviders(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
+	}
+	if err := rejectConfiguredTargetVersions(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(id))
@@ -251,6 +274,10 @@ func (h *Handler) UpdateAllDaemons(w http.ResponseWriter, r *http.Request) {
 	for _, d := range daemons {
 		daemonUUID := uuidToString(d.ID)
 		for _, target := range req.Targets {
+			if verified, ok := codeagent.Version(target.Target); ok && target.Version != verified {
+				writeError(w, http.StatusBadRequest, "target_version is repository-owned")
+				return
+			}
 			if _, err := h.UpdateStore.CreateForDaemon(daemonUUID, target.Target, target.Version); err != nil {
 				slog.Debug("skip update", "daemon_id", daemonUUID, "target", target.Target, "error", err)
 				continue

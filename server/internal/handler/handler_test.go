@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nullne/multica/server/internal/auth"
+	"github.com/nullne/multica/server/internal/codeagent"
 	"github.com/nullne/multica/server/internal/events"
 	"github.com/nullne/multica/server/internal/realtime"
 	whpkg "github.com/nullne/multica/server/internal/webhook"
@@ -2707,7 +2708,8 @@ func TestRuntimeVisibilityRespectsAssignmentAndMembership(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req = wsMemberRequest("POST", "/api/runtimes/"+runtimeID+"/update", map[string]any{"target_version": "1.2.3"})
+	codexVersion, _ := codeagent.Version("codex")
+	req = wsMemberRequest("POST", "/api/runtimes/"+runtimeID+"/update", map[string]any{"target_version": codexVersion})
 	req = withURLParam(req, "runtimeId", runtimeID)
 	testHandler.InitiateUpdate(w, req)
 	if w.Code != http.StatusOK {

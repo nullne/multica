@@ -143,12 +143,12 @@ export class TestApiClient {
     return this.workspaceId;
   }
 
-  async getProviderConfig(): Promise<{ providers?: Record<string, { enabled: boolean; api_key: string; target_version: string }>; multica_target_version?: string }> {
+  async getProviderConfig(): Promise<{ providers?: Record<string, { enabled: boolean; api_key: string; target_version?: string }> }> {
     const res = await this.authedFetch(`/api/workspaces/${this.workspaceId}/providers`);
     return res.json();
   }
 
-  async updateProviderConfig(data: { providers?: Record<string, { enabled: boolean; api_key: string; target_version: string }>; multica_target_version?: string }) {
+  async updateProviderConfig(data: { providers?: Record<string, { enabled: boolean; api_key: string; target_version?: string }> }) {
     const res = await this.authedFetch(`/api/workspaces/${this.workspaceId}/providers`, {
       method: "PATCH",
       body: JSON.stringify(data),

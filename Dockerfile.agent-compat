@@ -10,10 +10,17 @@ RUN useradd -m -s /bin/bash testuser
 # Pinned CLI versions — bump these when upgrading agent CLIs.
 ARG CLAUDE_VERSION=2.1.109
 ARG CODEX_VERSION=0.118.0
+ARG CURSOR_VERSION=2026.05.16-0338208
 
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION}
 RUN npm install -g @openai/codex@${CODEX_VERSION}
-RUN curl https://cursor.com/install -fsS | bash \
+RUN os="$(uname -s | tr '[:upper:]' '[:lower:]')" \
+    && arch="$(uname -m)" \
+    && case "$arch" in x86_64|amd64) arch=x64 ;; arm64|aarch64) arch=arm64 ;; *) exit 1 ;; esac \
+    && mkdir -p "/root/.local/share/cursor-agent/versions/${CURSOR_VERSION}" /root/.local/bin \
+    && curl -fSL "https://downloads.cursor.com/lab/${CURSOR_VERSION}/${os}/${arch}/agent-cli-package.tar.gz" \
+        | tar --strip-components=1 -xzf - -C "/root/.local/share/cursor-agent/versions/${CURSOR_VERSION}" \
+    && ln -sf "/root/.local/share/cursor-agent/versions/${CURSOR_VERSION}/cursor-agent" /root/.local/bin/agent \
     && ln -sf /root/.local/bin/agent /usr/local/bin/agent
 
 # OpenCode: binary from GitHub releases (skip if unavailable).

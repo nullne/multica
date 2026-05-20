@@ -44,7 +44,6 @@ export function ProvidersTab() {
   const user = useWorkspaceStore.getState;
 
   const [providers, setProviders] = useState<Record<string, ProviderConfig>>({});
-  const [multicaVersion, setMulticaVersion] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
@@ -54,7 +53,6 @@ export function ProvidersTab() {
     try {
       const config = await api.getProviderConfig(workspace.id);
       setProviders(normalizeProviders(config.providers));
-      setMulticaVersion(config.multica_target_version ?? "");
     } catch {
       toast.error("Failed to load provider configuration");
     } finally {
@@ -89,17 +87,20 @@ export function ProvidersTab() {
     if (!workspace) return;
     setSaving(true);
     try {
+      const providersForSave = Object.fromEntries(
+        Object.entries(providers).map(([key, config]) => [
+          key,
+          {
+            enabled: config.enabled,
+            api_key: config.api_key,
+          },
+        ]),
+      );
       const data: WorkspaceProviderSettings = {
-        providers,
+        providers: providersForSave,
       };
-      if (multicaVersion.trim()) {
-        data.multica_target_version = multicaVersion.trim();
-      }
       const result = await api.updateProviderConfig(workspace.id, data);
       setProviders(normalizeProviders(result.providers));
-      if (result.multica_target_version) {
-        setMulticaVersion(result.multica_target_version);
-      }
       toast.success("Provider configuration saved");
     } catch {
       toast.error("Failed to save provider configuration");
@@ -186,13 +187,10 @@ export function ProvidersTab() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Target Version</Label>
-                      <Input
-                        value="latest"
-                        readOnly
-                        disabled
-                        className="text-xs"
-                      />
+                      <Label className="text-xs">Tested Version</Label>
+                      <p className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+                        {config.target_version || "Not managed"}
+                      </p>
                     </div>
                   </div>
                 )}
@@ -201,24 +199,6 @@ export function ProvidersTab() {
           );
         })}
       </div>
-
-      <Card>
-        <CardContent className="pt-4 space-y-3">
-          <p className="text-sm font-medium">Multica CLI</p>
-          <div className="space-y-1.5">
-            <Label className="text-xs">Target Version</Label>
-            <Input
-              placeholder="latest"
-              value={multicaVersion}
-              onChange={(e) => setMulticaVersion(e.target.value)}
-              className="text-xs"
-            />
-            <p className="text-xs text-muted-foreground">
-              Target multica CLI version for environment updates.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
 
       <Button onClick={handleSave} disabled={saving}>
         <Save className="h-4 w-4 mr-1" />

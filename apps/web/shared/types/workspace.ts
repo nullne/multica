@@ -22,12 +22,11 @@ export interface Workspace {
 export interface ProviderConfig {
   enabled: boolean;
   api_key: string;
-  target_version: string;
+  target_version?: string;
 }
 
 export interface WorkspaceProviderSettings {
   providers?: Record<string, ProviderConfig>;
-  multica_target_version?: string;
 }
 
 export interface Member {
