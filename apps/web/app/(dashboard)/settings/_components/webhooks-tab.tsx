@@ -576,7 +576,7 @@ function WebhookCard({
               <div className="italic text-muted-foreground/70">No actions configured</div>
             )}
             <WebhookEventsPanel
-              events={events}
+              events={events?.filter((e) => !e.action_id) ?? null}
               loading={eventsLoading}
               expanded={eventsExpanded}
               onToggle={() => setEventsExpanded((v) => !v)}
@@ -1684,7 +1684,8 @@ function ActionEventsPanel({
 }
 
 // ----------------------------------------------------------------------------
-// Per-webhook events panel (shown inside expanded card)
+// Per-webhook unrouted events panel (dedup / filter / pause / parse errors)
+// Shows only events that did not reach any action (action_id is null).
 // ----------------------------------------------------------------------------
 
 function WebhookEventsPanel({
@@ -1709,7 +1710,7 @@ function WebhookEventsPanel({
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <History className="h-3 w-3" />
-        Recent Events
+        Unrouted events
       </button>
       {expanded && (
         <>
@@ -1717,7 +1718,7 @@ function WebhookEventsPanel({
             <div className="text-muted-foreground/70 italic">Loading events…</div>
           )}
           {!loading && events !== null && displayEvents.length === 0 && (
-            <div className="italic text-muted-foreground/70">No events recorded yet</div>
+            <div className="italic text-muted-foreground/70">No unrouted events</div>
           )}
           {!loading && displayEvents.map((evt) => (
             <WebhookEventRow key={evt.id} event={evt} />
