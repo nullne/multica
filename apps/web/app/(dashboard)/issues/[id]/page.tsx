@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect } from "react";
+import { use, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { IssueDetail } from "@/features/issues/components";
 import { useWorkspaceStore } from "@/features/workspace";
@@ -15,11 +15,16 @@ export default function LegacyIssueDetailPage({
   const router = useRouter();
   const workspace = useWorkspaceStore((s) => s.workspace);
 
-  // Resolve the issue's workspace in background. If it belongs to a different
-  // workspace than the active one, redirect to the canonical workspace-aware URL
-  // so the correct workspace context is loaded before rendering.
+  // Resolve the issue's workspace once on initial load. The ref prevents
+  // re-running after a user-initiated workspace switch, which would otherwise
+  // redirect back to the issue's original workspace.
+  const resolved = useRef(false);
+
   useEffect(() => {
+    if (resolved.current) return;
     if (!workspace?.slug) return;
+
+    resolved.current = true;
 
     api
       .resolveIssueWorkspace(id)
