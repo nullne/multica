@@ -127,6 +127,7 @@ function RecentIssueRow({
           event.preventDefault();
           event.stopPropagation();
           onTogglePin();
+          event.currentTarget.blur();
         }}
       >
         {pinned ? <PinOff /> : <Pin />}

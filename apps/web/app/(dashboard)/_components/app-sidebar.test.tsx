@@ -653,6 +653,20 @@ describe("AppSidebar pinned issues", () => {
     expect(sectionContainers[0]).toBe("recents-pinned-section");
   });
 
+  it("blurs the pin button after clicking so controls hide when the pointer leaves", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await screen.findByText("Other workspace issue");
+
+    const pinBtn = screen.getByRole("button", { name: /Pin Other workspace issue/i });
+    await user.click(pinBtn);
+
+    // After clicking, the button must not hold focus so the hover-only
+    // controls disappear when the pointer moves away.
+    expect(document.activeElement).not.toBe(pinBtn);
+  });
+
   it("unpins an issue from the Pinned section", async () => {
     const user = userEvent.setup();
     useRecentsPrefsStore.setState({ pinnedIssueIds: ["issue-2"] });
