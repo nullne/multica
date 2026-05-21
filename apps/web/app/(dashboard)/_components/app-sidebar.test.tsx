@@ -201,7 +201,7 @@ beforeEach(() => {
   useRecentsStore.getState().clear();
   useRecentsPrefsStore.setState({
     collapsedWorkspaceIds: [],
-    pinnedWorkspaceIds: [],
+    pinnedIssueIds: [],
   });
   useActiveTaskStore.setState({ tasks: new Map() });
   listRecentIssuesMock.mockImplementation(defaultMockImpl);
@@ -525,69 +525,83 @@ describe("AppSidebar grouped recents", () => {
     expect(body.style.maxHeight).toBe("");
   });
 
-  it("pins a workspace group and renders it before unpinned groups", async () => {
-    const user = userEvent.setup();
+  it("does not render workspace-level pin or move controls", async () => {
     renderSidebar();
-
     expect(await screen.findByText("Other workspace issue")).toBeInTheDocument();
 
-    const initialGroups = screen.getAllByTestId(/^recents-group-ws-/);
-    const initialOrder = initialGroups.map((el) => el.dataset.testid);
-    expect(initialOrder).toContain("recents-group-ws-1");
-    expect(initialOrder).toContain("recents-group-ws-2");
-    expect(initialGroups.every((el) => el.dataset.pinned === "false")).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: /Pin Test Workspace/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Pin Prod Debug/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Move .* (up|down)/i }),
+    ).not.toBeInTheDocument();
+  });
+});
 
-    await user.click(screen.getByRole("button", { name: /Pin Test Workspace/i }));
-
-    const reorderedGroups = screen.getAllByTestId(/^recents-group-ws-/);
-    const firstGroup = reorderedGroups[0]!;
-    const secondGroup = reorderedGroups[1]!;
-    expect(firstGroup.dataset.testid).toBe("recents-group-ws-1");
-    expect(firstGroup.dataset.pinned).toBe("true");
-    expect(secondGroup.dataset.testid).toBe("recents-group-ws-2");
-    expect(secondGroup.dataset.pinned).toBe("false");
+describe("AppSidebar pinned issues", () => {
+  beforeEach(() => {
+    mockPathname = "/home";
   });
 
-  it("unpins a workspace group from the pin toggle", async () => {
-    const user = userEvent.setup();
-    useRecentsPrefsStore.setState({ pinnedWorkspaceIds: ["ws-2"] });
+  it("does not render the Pinned section when nothing is pinned", async () => {
     renderSidebar();
+    await screen.findByText("Other workspace issue");
 
-    expect(await screen.findByText("Other workspace issue")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Unpin Prod Debug/i }));
-
-    expect(useRecentsPrefsStore.getState().pinnedWorkspaceIds).toEqual([]);
+    expect(screen.queryByTestId("recents-pinned-section")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pinned")).not.toBeInTheDocument();
   });
 
-  it("reorders pinned workspaces with the move buttons", async () => {
+  it("pins an issue from its row and renders it in the Pinned section above the workspace groups", async () => {
     const user = userEvent.setup();
-    useRecentsPrefsStore.setState({ pinnedWorkspaceIds: ["ws-1", "ws-2"] });
     renderSidebar();
 
     expect(await screen.findByText("Other workspace issue")).toBeInTheDocument();
-    expect(
-      screen.getAllByTestId(/^recents-group-ws-/).map((el) => el.dataset.testid),
-    ).toEqual(["recents-group-ws-1", "recents-group-ws-2"]);
+    expect(screen.queryByTestId("recents-pinned-section")).not.toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: /Move Prod Debug up/i }),
+      screen.getByRole("button", { name: /Pin Other workspace issue/i }),
     );
 
-    expect(useRecentsPrefsStore.getState().pinnedWorkspaceIds).toEqual([
-      "ws-2",
-      "ws-1",
-    ]);
-    expect(
-      screen.getAllByTestId(/^recents-group-ws-/).map((el) => el.dataset.testid),
-    ).toEqual(["recents-group-ws-2", "recents-group-ws-1"]);
+    expect(useRecentsPrefsStore.getState().pinnedIssueIds).toEqual(["issue-2"]);
+
+    const pinnedSection = await screen.findByTestId("recents-pinned-section");
+    expect(within(pinnedSection).getByText("Other workspace issue")).toBeInTheDocument();
+
+    // The pinned row leaves the workspace group it came from.
+    const prodBody = screen.queryByTestId("recents-group-body-ws-2");
+    expect(prodBody).toBeNull();
+
+    // Pinned section renders above the remaining workspace groups.
+    const sectionContainers = screen
+      .getAllByTestId(/^recents-(pinned-section|group-ws-)/)
+      .map((el) => el.dataset.testid);
+    expect(sectionContainers[0]).toBe("recents-pinned-section");
+  });
+
+  it("unpins an issue from the Pinned section", async () => {
+    const user = userEvent.setup();
+    useRecentsPrefsStore.setState({ pinnedIssueIds: ["issue-2"] });
+    renderSidebar();
+
+    await screen.findByTestId("recents-pinned-section");
+    expect(useRecentsPrefsStore.getState().pinnedIssueIds).toEqual(["issue-2"]);
 
     await user.click(
-      screen.getByRole("button", { name: /Move Prod Debug down/i }),
+      screen.getByRole("button", { name: /Unpin Other workspace issue/i }),
     );
 
-    expect(useRecentsPrefsStore.getState().pinnedWorkspaceIds).toEqual([
-      "ws-1",
-      "ws-2",
-    ]);
+    expect(useRecentsPrefsStore.getState().pinnedIssueIds).toEqual([]);
+    expect(screen.queryByTestId("recents-pinned-section")).not.toBeInTheDocument();
+  });
+
+  it("hides the Pinned section when the pinned issue is no longer in Recents", async () => {
+    useRecentsPrefsStore.setState({ pinnedIssueIds: ["issue-missing"] });
+    renderSidebar();
+
+    await screen.findByText("Other workspace issue");
+    expect(screen.queryByTestId("recents-pinned-section")).not.toBeInTheDocument();
   });
 });

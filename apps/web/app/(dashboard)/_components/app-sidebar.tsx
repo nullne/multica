@@ -10,7 +10,6 @@ import {
   Monitor,
   ChevronDown,
   ChevronRight,
-  ChevronUp,
   ChevronsUpDown,
   Settings,
   LogOut,
@@ -34,6 +33,7 @@ import {
   SidebarHeader,
   SidebarFooter,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
@@ -86,6 +86,48 @@ function DraftDot() {
   return <span className="absolute top-0 right-0 size-1.5 rounded-full bg-brand" />;
 }
 
+function RecentIssueRow({
+  issue,
+  pinned,
+  onSelect,
+  onTogglePin,
+}: {
+  issue: Issue;
+  pinned: boolean;
+  onSelect: () => void;
+  onTogglePin: () => void;
+}) {
+  return (
+    <SidebarMenuItem>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SidebarMenuButton size="sm" onClick={onSelect}>
+              <RunningIndicatorRing issueId={issue.id} className="size-4">
+                <StatusIcon status={issue.status} className="size-4" />
+              </RunningIndicatorRing>
+              <span className="truncate">{issue.title}</span>
+            </SidebarMenuButton>
+          }
+        />
+        <TooltipContent side="right">{issue.identifier}</TooltipContent>
+      </Tooltip>
+      <SidebarMenuAction
+        showOnHover={!pinned}
+        aria-label={pinned ? `Unpin ${issue.title}` : `Pin ${issue.title}`}
+        aria-pressed={pinned}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onTogglePin();
+        }}
+      >
+        {pinned ? <PinOff /> : <Pin />}
+      </SidebarMenuAction>
+    </SidebarMenuItem>
+  );
+}
+
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -134,20 +176,31 @@ export function AppSidebar() {
     // so client-only filtering would leave Recents empty or sparse.
   }, [isHome, workspaceIdsKey, fetchRecents, onlyMyIssues, userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pinnedWorkspaceIds = useRecentsPrefsStore((s) => s.pinnedWorkspaceIds);
+  const pinnedIssueIds = useRecentsPrefsStore((s) => s.pinnedIssueIds);
   const collapsedWorkspaceIds = useRecentsPrefsStore(
     (s) => s.collapsedWorkspaceIds,
   );
-  const togglePinned = useRecentsPrefsStore((s) => s.togglePinned);
+  const togglePinnedIssue = useRecentsPrefsStore((s) => s.togglePinnedIssue);
   const toggleCollapsed = useRecentsPrefsStore((s) => s.toggleCollapsed);
-  const movePinned = useRecentsPrefsStore((s) => s.movePinned);
+
+  const pinnedIssues = useMemo(() => {
+    if (pinnedIssueIds.length === 0) return [] as Issue[];
+    const byId = new Map(recentIssues.map((i) => [i.id, i]));
+    return pinnedIssueIds
+      .map((id) => byId.get(id))
+      .filter((i): i is Issue => !!i);
+  }, [pinnedIssueIds, recentIssues]);
 
   const recentGroups = useMemo(() => {
     const workspaceById = new Map(workspaces.map((ws) => [ws.id, ws]));
+    const pinnedIdSet = new Set(pinnedIssueIds);
     // "Only my issues" is enforced server-side via the recents fetch (and
     // mirrored by the store when applying WS upserts), so this stage only
-    // applies the remaining UI-level toggles.
+    // applies the remaining UI-level toggles. Pinned issues render in the
+    // dedicated Pinned section above; exclude them from the normal groups
+    // so they don't appear twice.
     const filtered = recentIssues.filter((i) => {
+      if (pinnedIdSet.has(i.id)) return false;
       if (hideCompleted && (i.status === "done" || i.status === "cancelled")) {
         return false;
       }
@@ -158,9 +211,7 @@ export function AppSidebar() {
       b[sortField].localeCompare(a[sortField])
     );
     if (!groupByWorkspace) {
-      return [
-        { id: "__all__", workspaceName: "", issues: sorted, pinned: false },
-      ];
+      return [{ id: "__all__", workspaceName: "", issues: sorted }];
     }
 
     const grouped = sorted.reduce(
@@ -170,7 +221,6 @@ export function AppSidebar() {
           workspaceName:
             workspaceById.get(issue.workspace_id)?.name ?? "Unknown workspace",
           issues: [] as Issue[],
-          pinned: false,
         };
         group.issues.push(issue);
         groups.set(issue.workspace_id, group);
@@ -178,21 +228,11 @@ export function AppSidebar() {
       },
       new Map<
         string,
-        { id: string; workspaceName: string; issues: Issue[]; pinned: boolean }
+        { id: string; workspaceName: string; issues: Issue[] }
       >(),
     );
 
-    const pinned = pinnedWorkspaceIds
-      .map((id) => grouped.get(id))
-      .filter(
-        (g): g is { id: string; workspaceName: string; issues: Issue[]; pinned: boolean } =>
-          !!g,
-      )
-      .map((g) => ({ ...g, pinned: true }));
-    const pinnedIdSet = new Set(pinnedWorkspaceIds);
-    const unpinned = [...grouped.values()].filter((g) => !pinnedIdSet.has(g.id));
-
-    return [...pinned, ...unpinned];
+    return [...grouped.values()];
   }, [
     recentIssues,
     workspaces,
@@ -201,7 +241,7 @@ export function AppSidebar() {
     hideCompleted,
     recentSortBy,
     groupByWorkspace,
-    pinnedWorkspaceIds,
+    pinnedIssueIds,
   ]);
 
   if (isHome) {
@@ -288,31 +328,59 @@ export function AppSidebar() {
             </div>
             <SidebarGroupContent>
               <SidebarMenu className="gap-1">
+                {pinnedIssues.length > 0 && (
+                  <div
+                    className="space-y-0.5"
+                    data-testid="recents-pinned-section"
+                  >
+                    <div className="flex items-center gap-1 px-2 pt-2">
+                      <Pin className="size-3 shrink-0 text-muted-foreground" />
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Pinned
+                      </span>
+                    </div>
+                    <div
+                      data-testid="recents-pinned-body"
+                      className="space-y-0.5"
+                    >
+                      {pinnedIssues.map((issue) => (
+                        <RecentIssueRow
+                          key={issue.id}
+                          issue={issue}
+                          pinned
+                          onSelect={() => {
+                            router.push(`/home?issue=${issue.id}`);
+                            if (issue.workspace_id !== workspace?.id) {
+                              void switchWorkspace(issue.workspace_id);
+                            }
+                          }}
+                          onTogglePin={() => togglePinnedIssue(issue.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {recentGroups.map((group, groupIndex) => {
                   const isGrouped = group.id !== "__all__";
                   const isCollapsed =
                     isGrouped && collapsedWorkspaceIds.includes(group.id);
-                  const pinnedIndex = group.pinned
-                    ? pinnedWorkspaceIds.indexOf(group.id)
-                    : -1;
-                  const canMoveUp = group.pinned && pinnedIndex > 0;
-                  const canMoveDown =
-                    group.pinned &&
-                    pinnedIndex >= 0 &&
-                    pinnedIndex < pinnedWorkspaceIds.length - 1;
                   const showScroll =
                     group.issues.length > MAX_VISIBLE_ROWS_PER_GROUP;
                   const issueListId = `recent-group-${group.id}`;
+                  if (isGrouped && group.issues.length === 0) {
+                    // After pinning out every issue from a workspace, drop
+                    // the empty group header rather than leaving a stub.
+                    return null;
+                  }
                   return (
                     <div
                       key={group.id}
                       className="space-y-0.5"
                       data-testid={`recents-group-${group.id}`}
-                      data-pinned={group.pinned ? "true" : "false"}
                       data-group-index={groupIndex}
                     >
                       {isGrouped && (
-                        <div className="group/recents-header flex items-center gap-1 px-2 pt-2">
+                        <div className="flex items-center gap-1 px-2 pt-2">
                           <button
                             type="button"
                             onClick={() => toggleCollapsed(group.id)}
@@ -327,47 +395,6 @@ export function AppSidebar() {
                             )}
                             <span className="truncate">{group.workspaceName}</span>
                           </button>
-                          <div className="flex shrink-0 items-center opacity-0 group-hover/recents-header:opacity-100 focus-within:opacity-100 transition-opacity">
-                            {group.pinned && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => movePinned(group.id, "up")}
-                                  disabled={!canMoveUp}
-                                  aria-label={`Move ${group.workspaceName} up`}
-                                  className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed"
-                                >
-                                  <ChevronUp className="size-3" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => movePinned(group.id, "down")}
-                                  disabled={!canMoveDown}
-                                  aria-label={`Move ${group.workspaceName} down`}
-                                  className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed"
-                                >
-                                  <ChevronDown className="size-3" />
-                                </button>
-                              </>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => togglePinned(group.id)}
-                              aria-label={
-                                group.pinned
-                                  ? `Unpin ${group.workspaceName}`
-                                  : `Pin ${group.workspaceName}`
-                              }
-                              aria-pressed={group.pinned}
-                              className="rounded-sm p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                            >
-                              {group.pinned ? (
-                                <PinOff className="size-3" />
-                              ) : (
-                                <Pin className="size-3" />
-                              )}
-                            </button>
-                          </div>
                         </div>
                       )}
                       {!isCollapsed && (
@@ -386,46 +413,24 @@ export function AppSidebar() {
                               : undefined
                           }
                         >
-                          {group.issues.map((issue) => {
-                            return (
-                              <SidebarMenuItem key={issue.id}>
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <SidebarMenuButton
-                                        size="sm"
-                                        onClick={() => {
-                                          // Update the URL first so the
-                                          // detail view swaps in immediately;
-                                          // any cross-workspace switch
-                                          // happens in the background and
-                                          // does not gate the navigation.
-                                          router.push(`/home?issue=${issue.id}`);
-                                          if (issue.workspace_id !== workspace?.id) {
-                                            void switchWorkspace(issue.workspace_id);
-                                          }
-                                        }}
-                                      >
-                                        <RunningIndicatorRing
-                                          issueId={issue.id}
-                                          className="size-4"
-                                        >
-                                          <StatusIcon
-                                            status={issue.status}
-                                            className="size-4"
-                                          />
-                                        </RunningIndicatorRing>
-                                        <span className="truncate">{issue.title}</span>
-                                      </SidebarMenuButton>
-                                    }
-                                  />
-                                  <TooltipContent side="right">
-                                    {issue.identifier}
-                                  </TooltipContent>
-                                </Tooltip>
-                              </SidebarMenuItem>
-                            );
-                          })}
+                          {group.issues.map((issue) => (
+                            <RecentIssueRow
+                              key={issue.id}
+                              issue={issue}
+                              pinned={false}
+                              onSelect={() => {
+                                // Update the URL first so the detail view
+                                // swaps in immediately; any cross-workspace
+                                // switch happens in the background and does
+                                // not gate the navigation.
+                                router.push(`/home?issue=${issue.id}`);
+                                if (issue.workspace_id !== workspace?.id) {
+                                  void switchWorkspace(issue.workspace_id);
+                                }
+                              }}
+                              onTogglePin={() => togglePinnedIssue(issue.id)}
+                            />
+                          ))}
                         </div>
                       )}
                     </div>
