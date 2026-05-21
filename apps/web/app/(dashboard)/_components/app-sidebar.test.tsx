@@ -677,6 +677,45 @@ describe("AppSidebar pinned issues", () => {
     expect(screen.queryByTestId("recents-pinned-section")).not.toBeInTheDocument();
   });
 
+  it("drops focus from the pin button after a mouse click so the hover-revealed cluster collapses on pointer leave", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    const pinButton = await screen.findByRole("button", {
+      name: /Pin Other workspace issue/i,
+    });
+    const blurSpy = vi.spyOn(pinButton, "blur");
+
+    await user.click(pinButton);
+
+    // A pointer-driven click leaves the button focused, which keeps the
+    // parent row's :focus-within matching even after the mouse leaves —
+    // so the hover-revealed pin action stays visible until the user
+    // clicks empty space. Blurring on pointer activations is what makes
+    // the cluster collapse when the pointer leaves.
+    expect(blurSpy).toHaveBeenCalled();
+  });
+
+  it("keeps focus on the pin button after a keyboard activation so tab navigation stays intact", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    const pinButton = await screen.findByRole("button", {
+      name: /Pin Other workspace issue/i,
+    });
+    pinButton.focus();
+    const blurSpy = vi.spyOn(pinButton, "blur");
+
+    await user.keyboard("{Enter}");
+
+    // Keyboard activations land with `event.detail === 0`; focus must
+    // stay on the button so a sighted keyboard user can keep tabbing
+    // from where they were, and the action cluster remains visible via
+    // :focus-within while the user is navigating by focus.
+    expect(blurSpy).not.toHaveBeenCalled();
+    expect(useRecentsPrefsStore.getState().pinnedIssueIds).toEqual(["issue-2"]);
+  });
+
   it("hides a pinned done issue when Hide completed is enabled", async () => {
     const userInteract = userEvent.setup();
     listRecentIssuesMock.mockImplementation(
