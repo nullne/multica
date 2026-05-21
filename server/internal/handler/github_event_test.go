@@ -420,6 +420,101 @@ func TestReceiveGitHubEvent_MultipleCreateActionsStillCreateSeparateIssues(t *te
 	}
 }
 
+// TestReceiveGitHubEvent_StaleDispatchDaemonIDIsDropped exercises the
+// fallback path in executeCreateIssueAction: when the webhook's create_issue
+// config still references a daemon that no longer exists (e.g. the owner
+// removed the local daemon, or a migration wiped the table), the webhook
+// must not fail with the issue_dispatch_daemon_id_fkey FK violation. The
+// issue should be created with dispatch_daemon_id = NULL instead.
+func TestReceiveGitHubEvent_StaleDispatchDaemonIDIsDropped(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	ctx := context.Background()
+	secret := []byte("test-secret")
+
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	installationID := time.Now().UnixNano()
+	webhookID := setupGitHubWebhookFixture(t, installationID)
+
+	var agentIDStr string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentIDStr); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	// Random UUID that is guaranteed not to exist in the daemon table.
+	var bogusDaemonID string
+	if err := testPool.QueryRow(ctx, `SELECT gen_random_uuid()`).Scan(&bogusDaemonID); err != nil {
+		t.Fatalf("generate bogus daemon id: %v", err)
+	}
+
+	cfgJSON, _ := json.Marshal(CreateIssueActionConfig{
+		AgentID:          agentIDStr,
+		TitleTemplate:    "PR: {{.title}}",
+		DispatchDaemonID: bogusDaemonID,
+	})
+	if _, err := testHandler.Queries.CreateWebhookAction(ctx, db.CreateWebhookActionParams{
+		WebhookID:  webhookID,
+		ActionType: "create_issue",
+		Config:     cfgJSON,
+		Enabled:    true,
+		Position:   0,
+	}); err != nil {
+		t.Fatalf("create action: %v", err)
+	}
+
+	prURL := fmt.Sprintf("https://github.com/acme/widgets/pull/%d", uniqueIssueNumber())
+	body := []byte(fmt.Sprintf(`{
+		"action":"opened",
+		"installation":{"id":%d},
+		"pull_request":{"number":888,"title":"Stale daemon","html_url":%q,"user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"x"},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, prURL))
+
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("PR opened with stale daemon id: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	link, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Url:         prURL,
+	})
+	if err != nil {
+		t.Fatalf("issue_link not found: %v", err)
+	}
+	t.Cleanup(func() {
+		testHandler.Queries.DeleteIssue(ctx, link.IssueID)
+		testHandler.Queries.DeleteIssueLink(ctx, link.ID)
+	})
+
+	var storedDaemonID *string
+	if err := testPool.QueryRow(ctx,
+		`SELECT dispatch_daemon_id::text FROM issue WHERE id = $1`,
+		uuidToString(link.IssueID),
+	).Scan(&storedDaemonID); err != nil {
+		t.Fatalf("load issue dispatch_daemon_id: %v", err)
+	}
+	if storedDaemonID != nil {
+		t.Fatalf("dispatch_daemon_id = %q, want NULL (stale id should have been dropped)", *storedDaemonID)
+	}
+}
+
 // uniqueIssueNumber yields a value unlikely to collide across parallel test
 // runs on the same DB. We don't actually care about the number's meaning —
 // it just makes the PR URL unique so the issue_link unique constraint never

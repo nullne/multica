@@ -1044,6 +1044,25 @@ func (h *Handler) executeCreateIssueAction(ctx context.Context, webhook db.Webho
 		priority = "medium"
 	}
 
+	// Resolve dispatch_daemon_id against the daemon table. The config can
+	// outlive the daemon row (e.g. the daemon's owner removed it, or a
+	// migration wiped the table), so a stale id here would trip the
+	// issue.dispatch_daemon_id foreign key on INSERT. Mirror the FK's
+	// ON DELETE SET NULL behavior: drop the id and continue without it.
+	dispatchDaemonID := parseOptionalUUID(&cfg.DispatchDaemonID)
+	if dispatchDaemonID.Valid {
+		if _, err := h.Queries.GetDaemon(ctx, dispatchDaemonID); err != nil {
+			if !isNotFound(err) {
+				return pgtype.UUID{}, err
+			}
+			slog.Warn("webhook create_issue: dispatch_daemon_id no longer exists, falling back to no daemon",
+				"webhook_id", uuidToString(webhook.ID),
+				"dispatch_daemon_id", cfg.DispatchDaemonID,
+			)
+			dispatchDaemonID = pgtype.UUID{}
+		}
+	}
+
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return pgtype.UUID{}, err
@@ -1073,7 +1092,7 @@ func (h *Handler) executeCreateIssueAction(ctx context.Context, webhook db.Webho
 		CreatorID:           webhook.ID,
 		Number:              issueNumber,
 		DispatchProvider:    strToText(cfg.DispatchProvider),
-		DispatchDaemonID:    parseOptionalUUID(&cfg.DispatchDaemonID),
+		DispatchDaemonID:    dispatchDaemonID,
 		DispatchDaemonLabel: strToText(cfg.DispatchDaemonLabel),
 	})
 	if err != nil {
