@@ -755,8 +755,12 @@ func (h *Handler) ListTaskMessages(w http.ResponseWriter, r *http.Request) {
 // GetActiveTaskForIssue returns the currently running task for an issue, if any.
 func (h *Handler) GetActiveTaskForIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, issueID)
+	if !ok {
+		return
+	}
 
-	tasks, err := h.Queries.ListActiveTasksByIssue(r.Context(), parseUUID(issueID))
+	tasks, err := h.Queries.ListActiveTasksByIssue(r.Context(), issue.ID)
 	if err != nil || len(tasks) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"task": nil})
 		return
@@ -805,8 +809,12 @@ func (h *Handler) ListActiveTasksForWorkspace(w http.ResponseWriter, r *http.Req
 // ListTasksByIssue returns all tasks (any status) for an issue — used for execution history.
 func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "id")
+	issue, ok := h.loadIssueForUser(w, r, issueID)
+	if !ok {
+		return
+	}
 
-	tasks, err := h.Queries.ListTasksByIssue(r.Context(), parseUUID(issueID))
+	tasks, err := h.Queries.ListTasksByIssue(r.Context(), issue.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list tasks")
 		return
