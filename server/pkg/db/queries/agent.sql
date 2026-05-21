@@ -114,6 +114,15 @@ SET status = 'completed', completed_at = now(), result = $2, session_id = $3, wo
 WHERE id = $1 AND status = 'running'
 RETURNING *;
 
+-- name: SetAgentTaskResultComment :one
+-- Links a task to the comment it produced as its final reply. Only sets if
+-- not already linked, so callers can safely call this even if a comment was
+-- created in a transient path that already wrote the link.
+UPDATE agent_task_queue
+SET result_comment_id = $2
+WHERE id = $1 AND result_comment_id IS NULL
+RETURNING *;
+
 -- name: GetLastTaskSession :one
 -- Returns the session_id and work_dir from the most recent completed task
 -- for a given (agent_id, issue_id) pair, used for session resumption.

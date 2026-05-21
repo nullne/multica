@@ -91,6 +91,10 @@ type CreateCommentRequest struct {
 	Type          string   `json:"type"`
 	ParentID      *string  `json:"parent_id"`
 	AttachmentIDs []string `json:"attachment_ids"`
+	// TaskID, when set by an agent CLI invocation, links the created comment
+	// back to the task that produced it (sets result_comment_id). Ignored for
+	// non-agent authors and tasks owned by a different agent.
+	TaskID string `json:"task_id,omitempty"`
 }
 
 func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +159,29 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// Link uploaded attachments to this comment.
 	if len(req.AttachmentIDs) > 0 {
 		h.linkAttachmentsByIDs(r.Context(), comment.ID, issue.ID, req.AttachmentIDs)
+	}
+
+	// Link this reply back to its originating task when the agent CLI passes
+	// MULTICA_TASK_ID. Only honored for agent authors whose ID matches the
+	// task's agent_id, so a member can't hijack the link.
+	if req.TaskID != "" && authorType == "agent" && req.Type == "comment" {
+		taskUUID := parseUUID(req.TaskID)
+		if taskUUID.Valid {
+			if task, err := h.Queries.GetAgentTask(r.Context(), taskUUID); err == nil {
+				if uuidToString(task.AgentID) == authorID && uuidToString(task.IssueID) == issueID {
+					if _, err := h.Queries.SetAgentTaskResultComment(r.Context(), db.SetAgentTaskResultCommentParams{
+						ID:              taskUUID,
+						ResultCommentID: comment.ID,
+					}); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+						slog.Warn("link result comment failed",
+							"task_id", req.TaskID,
+							"comment_id", uuidToString(comment.ID),
+							"error", err,
+						)
+					}
+				}
+			}
+		}
 	}
 
 	// Fetch linked attachments so the response includes them.
