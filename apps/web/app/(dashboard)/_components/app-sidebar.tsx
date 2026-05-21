@@ -55,7 +55,7 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useInboxStore } from "@/features/inbox";
 import { useModalStore } from "@/features/modals";
-import { StatusIcon } from "@/features/issues/components";
+import { StatusIcon, RunningIndicatorRing } from "@/features/issues/components";
 import { useRecentsPrefsStore } from "@/features/navigation/recents-prefs-store";
 import { useRecentsStore } from "@/features/navigation/recents-store";
 import type { Issue } from "@/shared/types";
@@ -387,9 +387,6 @@ export function AppSidebar() {
                           }
                         >
                           {group.issues.map((issue) => {
-                            const isAgentRunning =
-                              issue.assignee_type === "agent" &&
-                              issue.status === "in_progress";
                             return (
                               <SidebarMenuItem key={issue.id}>
                                 <Tooltip>
@@ -409,21 +406,15 @@ export function AppSidebar() {
                                           }
                                         }}
                                       >
-                                        <span className="relative inline-flex shrink-0">
+                                        <RunningIndicatorRing
+                                          issueId={issue.id}
+                                          className="size-4"
+                                        >
                                           <StatusIcon
                                             status={issue.status}
                                             className="size-4"
                                           />
-                                          {isAgentRunning && (
-                                            <span
-                                              aria-hidden
-                                              className="absolute -top-0.5 -right-0.5 flex size-1.5"
-                                            >
-                                              <span className="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-75" />
-                                              <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
-                                            </span>
-                                          )}
-                                        </span>
+                                        </RunningIndicatorRing>
                                         <span className="truncate">{issue.title}</span>
                                       </SidebarMenuButton>
                                     }

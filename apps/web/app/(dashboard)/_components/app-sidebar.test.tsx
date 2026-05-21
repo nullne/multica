@@ -103,6 +103,8 @@ vi.mock("@/features/issues/stores/draft-store", () => ({
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { useRecentsPrefsStore } from "@/features/navigation/recents-prefs-store";
 import { useRecentsStore } from "@/features/navigation/recents-store";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
+import type { AgentTask } from "@/shared/types/agent";
 import { AppSidebar } from "./app-sidebar";
 
 function renderSidebar() {
@@ -173,6 +175,24 @@ function defaultMockImpl({ workspace_id }: { workspace_id: string }) {
   });
 }
 
+function makeAgentTask(issueId: string): AgentTask {
+  return {
+    id: `task-${issueId}`,
+    agent_id: "agent-1",
+    runtime_id: "rt-1",
+    issue_id: issueId,
+    status: "running",
+    priority: 0,
+    dispatched_at: null,
+    started_at: null,
+    completed_at: null,
+    result: null,
+    error: null,
+    created_at: "2026-05-01T00:00:00Z",
+    trigger_comment_id: null,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockPathname = "/issues";
@@ -183,6 +203,7 @@ beforeEach(() => {
     collapsedWorkspaceIds: [],
     pinnedWorkspaceIds: [],
   });
+  useActiveTaskStore.setState({ tasks: new Map() });
   listRecentIssuesMock.mockImplementation(defaultMockImpl);
 });
 
@@ -375,6 +396,73 @@ describe("AppSidebar recents filtering", () => {
     expect(
       screen.queryByText("Someone else's issue 0"),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("AppSidebar recents running indicator", () => {
+  beforeEach(() => {
+    mockPathname = "/home";
+  });
+
+  it("renders the shared spinning ring when the recent issue has an active agent task", async () => {
+    listRecentIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
+      Promise.resolve({
+        issues:
+          workspace_id === "ws-1"
+            ? [
+                makeIssue({
+                  id: "issue-1",
+                  workspace_id: "ws-1",
+                  identifier: "TES-1",
+                  title: "Running issue",
+                  status: "in_progress",
+                  assignee_type: "agent",
+                  assignee_id: "agent-1",
+                  updated_at: "2026-01-01T00:00:00Z",
+                }),
+              ]
+            : [],
+        total: 1,
+      }),
+    );
+    useActiveTaskStore.setState({
+      tasks: new Map([["issue-1", makeAgentTask("issue-1")]]),
+    });
+
+    renderSidebar();
+    await screen.findByText("Running issue");
+
+    expect(screen.getByTitle("Agent is working")).toBeInTheDocument();
+    expect(document.querySelector(".animate-ping")).toBeNull();
+  });
+
+  it("does not show the ring for an in_progress agent issue when no active task is tracked", async () => {
+    listRecentIssuesMock.mockImplementation(({ workspace_id }: { workspace_id: string }) =>
+      Promise.resolve({
+        issues:
+          workspace_id === "ws-1"
+            ? [
+                makeIssue({
+                  id: "issue-stale",
+                  workspace_id: "ws-1",
+                  identifier: "TES-2",
+                  title: "Stale in_progress issue",
+                  status: "in_progress",
+                  assignee_type: "agent",
+                  assignee_id: "agent-1",
+                  updated_at: "2026-01-01T00:00:00Z",
+                }),
+              ]
+            : [],
+        total: 1,
+      }),
+    );
+
+    renderSidebar();
+    await screen.findByText("Stale in_progress issue");
+
+    expect(screen.queryByTitle("Agent is working")).not.toBeInTheDocument();
+    expect(document.querySelector(".animate-ping")).toBeNull();
   });
 });
 
