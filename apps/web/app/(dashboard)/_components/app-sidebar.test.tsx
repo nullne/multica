@@ -604,4 +604,52 @@ describe("AppSidebar pinned issues", () => {
     await screen.findByText("Other workspace issue");
     expect(screen.queryByTestId("recents-pinned-section")).not.toBeInTheDocument();
   });
+
+  it("hides a pinned done issue when Hide completed is enabled", async () => {
+    const userInteract = userEvent.setup();
+    listRecentIssuesMock.mockImplementation(
+      ({ workspace_id }: { workspace_id: string }) =>
+        Promise.resolve({
+          issues:
+            workspace_id === "ws-1"
+              ? [
+                  makeIssue({
+                    id: "issue-done",
+                    workspace_id: "ws-1",
+                    identifier: "TES-3",
+                    title: "Done pinned issue",
+                    status: "done",
+                    updated_at: "2026-01-03T00:00:00Z",
+                  }),
+                ]
+              : [
+                  makeIssue({
+                    id: "issue-open",
+                    workspace_id: "ws-2",
+                    identifier: "PRD-4",
+                    title: "Open issue",
+                    updated_at: "2026-01-04T00:00:00Z",
+                  }),
+                ],
+          total: 1,
+        }),
+    );
+    useRecentsPrefsStore.setState({ pinnedIssueIds: ["issue-done"] });
+
+    renderSidebar();
+
+    const pinnedSection = await screen.findByTestId("recents-pinned-section");
+    expect(within(pinnedSection).getByText("Done pinned issue")).toBeInTheDocument();
+
+    await userInteract.click(screen.getByLabelText("Filter recents"));
+    await userInteract.click(await screen.findByText("Hide completed"));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("recents-pinned-section"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText("Done pinned issue")).not.toBeInTheDocument();
+    expect(screen.getByText("Open issue")).toBeInTheDocument();
+  });
 });

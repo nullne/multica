@@ -186,10 +186,19 @@ export function AppSidebar() {
   const pinnedIssues = useMemo(() => {
     if (pinnedIssueIds.length === 0) return [] as Issue[];
     const byId = new Map(recentIssues.map((i) => [i.id, i]));
+    // Pinned issues honor the same UI-level filters as the normal Recents
+    // groups — toggling Hide completed should hide a pinned done/cancelled
+    // issue too, not strand it at the top of the list.
     return pinnedIssueIds
       .map((id) => byId.get(id))
-      .filter((i): i is Issue => !!i);
-  }, [pinnedIssueIds, recentIssues]);
+      .filter((i): i is Issue => {
+        if (!i) return false;
+        if (hideCompleted && (i.status === "done" || i.status === "cancelled")) {
+          return false;
+        }
+        return true;
+      });
+  }, [pinnedIssueIds, recentIssues, hideCompleted]);
 
   const recentGroups = useMemo(() => {
     const workspaceById = new Map(workspaces.map((ws) => [ws.id, ws]));
