@@ -6,8 +6,9 @@ import type { Issue, Comment, TimelineEntry } from "@/shared/types";
 import type { AgentTask } from "@/shared/types/agent";
 
 // Mock next/navigation
+const routerReplaceMock = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: vi.fn(), replace: routerReplaceMock }),
   usePathname: () => "/issues/issue-1",
 }));
 
@@ -37,10 +38,12 @@ vi.mock("@/features/auth", () => ({
     }),
 }));
 
-// Mock workspace feature
+// Mock workspace feature — mutable so tests can simulate a user workspace switch.
+const wsOne = { id: "ws-1", name: "Test WS", slug: "test-ws" };
+const wsTwo = { id: "ws-2", name: "Other WS", slug: "other-ws" };
 const workspaceState = {
-  workspace: { id: "ws-1", name: "Test WS", slug: "test-ws" },
-  workspaces: [{ id: "ws-1", name: "Test WS", slug: "test-ws" }],
+  workspace: wsOne as typeof wsOne,
+  workspaces: [wsOne, wsTwo],
   members: [{ user_id: "user-1", name: "Test User", email: "test@multica.ai" }],
   agents: [{ id: "agent-1", name: "Claude Agent" }],
 };
@@ -259,6 +262,7 @@ async function renderPage(id = "issue-1") {
 describe("IssueDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    workspaceState.workspace = wsOne;
   });
 
   it("renders issue details after loading", async () => {
@@ -522,6 +526,41 @@ describe("IssueDetailPage", () => {
       });
 
       expect(scrollIntoView).toHaveBeenCalled();
+    });
+  });
+
+  describe("workspace switching", () => {
+    it("redirects to /issues instead of reverting when user switches workspace", async () => {
+      mockGetIssue.mockResolvedValue(mockIssue);
+      mockListTimeline.mockResolvedValue(mockTimeline);
+
+      // Start in ws-1; mount the legacy page.
+      workspaceState.workspace = wsOne;
+      const { rerender } = await renderPage();
+
+      await waitFor(() => {
+        expect(
+          screen.getAllByText("Implement authentication").length,
+        ).toBeGreaterThanOrEqual(1);
+      });
+
+      // Simulate the user switching to a different workspace via the sidebar.
+      workspaceState.workspace = wsTwo;
+      await act(async () => {
+        rerender(
+          <Suspense fallback={<div>Suspense loading...</div>}>
+            <IssueDetailPage params={Promise.resolve({ id: "issue-1" })} />
+          </Suspense>,
+        );
+      });
+
+      await waitFor(() => {
+        expect(routerReplaceMock).toHaveBeenCalledWith("/issues");
+      });
+      // We must not have redirected back to the issue's original workspace URL.
+      expect(routerReplaceMock).not.toHaveBeenCalledWith(
+        expect.stringMatching(/^\/w\//),
+      );
     });
   });
 });
