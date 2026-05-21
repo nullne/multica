@@ -126,6 +126,16 @@ function RecentIssueRow({
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
+          // Drop focus on pointer-driven clicks so the parent row's
+          // :focus-within stops matching once the mouse leaves. Without
+          // this the hover-revealed pin action would stay visible after
+          // the click — the button still has focus, so :focus-within on
+          // the menu item holds the action cluster open until the user
+          // clicks empty space. Keyboard activations (Enter / Space land
+          // with `detail === 0`) keep focus so tab navigation is intact.
+          if (event.detail > 0) {
+            event.currentTarget.blur();
+          }
           onTogglePin();
         }}
       >
