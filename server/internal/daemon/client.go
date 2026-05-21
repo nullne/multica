@@ -86,7 +86,7 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branchName, sessionID, workDir string) error {
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branchName, sessionID, workDir, requestedModel, observedModel string) error {
 	body := map[string]any{"output": output}
 	if prURL != "" {
 		body["pr_url"] = prURL
@@ -99,6 +99,12 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branch
 	}
 	if workDir != "" {
 		body["work_dir"] = workDir
+	}
+	if requestedModel != "" {
+		body["requested_model"] = requestedModel
+	}
+	if observedModel != "" {
+		body["observed_model"] = observedModel
 	}
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/complete", taskID), body, nil)
 }
@@ -143,7 +149,7 @@ type PendingPing struct {
 // PendingUpdate represents a CLI update request from the server.
 type PendingUpdate struct {
 	ID            string `json:"id"`
-	Target        string `json:"target"`         // "multica", "claude", "codex", etc.
+	Target        string `json:"target"` // "multica", "claude", "codex", etc.
 	TargetVersion string `json:"target_version"`
 }
 

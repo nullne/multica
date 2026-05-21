@@ -23,6 +23,8 @@ export interface ProviderConfig {
   enabled: boolean;
   api_key: string;
   target_version?: string;
+  default_model?: string;
+  supported_models?: string[];
 }
 
 export interface WorkspaceProviderSettings {

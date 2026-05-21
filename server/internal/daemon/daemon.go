@@ -1086,7 +1086,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task) {
 		}
 	default:
 		taskLog.Info("task completed", "status", result.Status)
-		if err := d.client.CompleteTask(ctx, task.ID, result.Comment, result.PRURL, result.BranchName, result.SessionID, result.WorkDir); err != nil {
+		if err := d.client.CompleteTask(ctx, task.ID, result.Comment, result.PRURL, result.BranchName, result.SessionID, result.WorkDir, result.RequestedModel, result.ObservedModel); err != nil {
 			taskLog.Error("complete task failed, falling back to fail", "error", err)
 			if failErr := d.client.FailTask(ctx, task.ID, fmt.Sprintf("complete task failed: %s", err.Error())); failErr != nil {
 				taskLog.Error("fail task fallback also failed", "error", failErr)
@@ -1215,10 +1215,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	}
 
 	reused := task.PriorWorkDir != "" && env.WorkDir == task.PriorWorkDir
+	model := executionModel(task, entry)
 	taskLog.Info("starting agent",
 		"provider", provider,
 		"workdir", env.WorkDir,
-		"model", entry.Model,
+		"model", model,
 		"reused", reused,
 	)
 	if task.PriorSessionID != "" {
@@ -1229,7 +1230,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 
 	session, err := backend.Execute(ctx, prompt, agent.ExecOptions{
 		Cwd:             env.WorkDir,
-		Model:           entry.Model,
+		Model:           model,
 		Timeout:         d.cfg.AgentTimeout,
 		ResumeSessionID: task.PriorSessionID,
 	})
@@ -1382,10 +1383,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 			return TaskResult{}, fmt.Errorf("%s returned empty output", provider)
 		}
 		return TaskResult{
-			Status:    "completed",
-			Comment:   result.Output,
-			SessionID: result.SessionID,
-			WorkDir:   env.WorkDir,
+			Status:         "completed",
+			Comment:        result.Output,
+			SessionID:      result.SessionID,
+			WorkDir:        env.WorkDir,
+			RequestedModel: model,
 		}, nil
 	case "timeout":
 		return TaskResult{}, fmt.Errorf("%s timed out after %s", provider, d.cfg.AgentTimeout)
@@ -1396,6 +1398,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		}
 		return TaskResult{Status: "blocked", Comment: errMsg}, nil
 	}
+}
+
+func executionModel(task Task, entry AgentEntry) string {
+	if task.RequestedModel != "" {
+		return task.RequestedModel
+	}
+	return entry.Model
 }
 
 func convertReposForEnv(repos []RepoData) []execenv.RepoContextForEnv {

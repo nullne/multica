@@ -39,6 +39,7 @@ import type {
   AgentTrigger,
   AgentTriggerType,
   AgentTask,
+  ProviderConfig,
   CreateAgentRequest,
   UpdateAgentRequest,
 } from "@/shared/types";
@@ -121,6 +122,25 @@ const SUPPORTED_PROVIDERS = [
   { key: "cursor", label: "Cursor" },
 ] as const;
 
+function providerLabel(provider: string): string {
+  return SUPPORTED_PROVIDERS.find((p) => p.key === provider)?.label ?? provider;
+}
+
+function normalizeProviderConfig(raw: Record<string, ProviderConfig> | undefined): Record<string, ProviderConfig> {
+  if (!raw) return {};
+  const out: Record<string, ProviderConfig> = {};
+  for (const [key, config] of Object.entries(raw)) {
+    out[key] = {
+      enabled: config.enabled ?? false,
+      api_key: config.api_key ?? "",
+      target_version: config.target_version ?? "",
+      default_model: config.default_model ?? "",
+      supported_models: config.supported_models ?? [],
+    };
+  }
+  return out;
+}
+
 function CreateAgentDialog({
   onClose,
   onCreate,
@@ -128,11 +148,29 @@ function CreateAgentDialog({
   onClose: () => void;
   onCreate: (data: CreateAgentRequest) => Promise<void>;
 }) {
+  const workspace = useWorkspaceStore((s) => s.workspace);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [selectedProviders, setSelectedProviders] = useState<string[]>([SUPPORTED_PROVIDERS[0].key]);
+  const [defaultProvider, setDefaultProvider] = useState<string | null>(SUPPORTED_PROVIDERS[0].key);
+  const [defaultModel, setDefaultModel] = useState<string | null>(null);
+  const [providerConfig, setProviderConfig] = useState<Record<string, ProviderConfig>>({});
   const [visibility, setVisibility] = useState<AgentVisibility>("private");
   const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (!workspace) return;
+    api.getProviderConfig(workspace.id)
+      .then((config) => setProviderConfig(normalizeProviderConfig(config.providers)))
+      .catch(() => setProviderConfig({}));
+  }, [workspace]);
+
+  const defaultProviderModels = defaultProvider
+    ? providerConfig[defaultProvider]?.supported_models ?? []
+    : [];
+  const catalogDefaultModel = defaultProvider
+    ? providerConfig[defaultProvider]?.default_model ?? ""
+    : "";
 
   const handleSubmit = async () => {
     if (!name.trim() || selectedProviders.length === 0) return;
@@ -142,6 +180,8 @@ function CreateAgentDialog({
         name: name.trim(),
         description: description.trim(),
         providers: selectedProviders,
+        default_provider: defaultProvider,
+        default_model: defaultModel,
         visibility,
         triggers: [
           { id: generateId(), type: "on_assign", enabled: true, config: {} },
@@ -199,13 +239,17 @@ function CreateAgentDialog({
                   <button
                     key={p.key}
                     type="button"
-                    onClick={() =>
-                      setSelectedProviders((prev) =>
-                        selected
-                          ? prev.filter((k) => k !== p.key)
-                          : [...prev, p.key],
-                      )
-                    }
+                    onClick={() => {
+                      const next = selected
+                        ? selectedProviders.filter((k) => k !== p.key)
+                        : [...selectedProviders, p.key];
+                      if (next.length === 0) return;
+                      setSelectedProviders(next);
+                      if (defaultProvider && !next.includes(defaultProvider)) {
+                        setDefaultProvider(next[0] ?? null);
+                        setDefaultModel(null);
+                      }
+                    }}
                     className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
                       selected
                         ? "border-primary bg-primary/5"
@@ -221,6 +265,62 @@ function CreateAgentDialog({
               Select one or more providers. Tasks will be dispatched to any online environment.
             </p>
           </div>
+
+          <div>
+            <Label className="text-xs text-muted-foreground">Default Provider</Label>
+            <div className="mt-1.5 flex gap-2 flex-wrap">
+              {selectedProviders.map((provider) => (
+                <button
+                  key={provider}
+                  type="button"
+                  onClick={() => {
+                    setDefaultProvider(provider);
+                    setDefaultModel(null);
+                  }}
+                  className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                    defaultProvider === provider
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:bg-muted"
+                  }`}
+                >
+                  <span className="font-medium">{providerLabel(provider)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {defaultProvider && defaultProviderModels.length > 0 && (
+            <div>
+              <Label className="text-xs text-muted-foreground">Default Model</Label>
+              <div className="mt-1.5 flex gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setDefaultModel(null)}
+                  className={`rounded-lg border px-3 py-2 font-mono text-xs transition-colors ${
+                    defaultModel === null
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:bg-muted"
+                  }`}
+                >
+                  {catalogDefaultModel ? `Tested default (${catalogDefaultModel})` : "Provider default"}
+                </button>
+                {defaultProviderModels.map((model) => (
+                  <button
+                    key={model}
+                    type="button"
+                    onClick={() => setDefaultModel(model)}
+                    className={`rounded-lg border px-3 py-2 font-mono text-xs transition-colors ${
+                      defaultModel === model
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div>
             <Label className="text-xs text-muted-foreground">Visibility</Label>
@@ -1283,8 +1383,10 @@ function SettingsTab({
   const [codeAccess, setCodeAccess] = useState(agent.github_code_access ?? "read");
   const [providers, setProviders] = useState<string[]>(agent.providers ?? []);
   const [defaultProvider, setDefaultProvider] = useState<string | null>(agent.default_provider ?? null);
+  const [defaultModel, setDefaultModel] = useState<string | null>(agent.default_model ?? null);
   const [defaultDaemonId, setDefaultDaemonId] = useState<string | null>(agent.default_daemon_id ?? null);
   const [maxConcurrentTasks, setMaxConcurrentTasks] = useState<string>(String(agent.max_concurrent_tasks ?? 6));
+  const [providerConfig, setProviderConfig] = useState<Record<string, ProviderConfig>>({});
   const [saving, setSaving] = useState(false);
   const { upload, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1294,6 +1396,20 @@ function SettingsTab({
   useEffect(() => {
     if (workspace) fetchAllRuntimes();
   }, [workspace, fetchAllRuntimes]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    api.getProviderConfig(workspace.id)
+      .then((config) => setProviderConfig(normalizeProviderConfig(config.providers)))
+      .catch(() => setProviderConfig({}));
+  }, [workspace]);
+
+  const defaultProviderModels = defaultProvider
+    ? providerConfig[defaultProvider]?.supported_models ?? []
+    : [];
+  const catalogDefaultModel = defaultProvider
+    ? providerConfig[defaultProvider]?.default_model ?? ""
+    : "";
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1318,6 +1434,7 @@ function SettingsTab({
     codeAccess !== (agent.github_code_access ?? "read") ||
     JSON.stringify(providers) !== JSON.stringify(agent.providers ?? []) ||
     defaultProvider !== (agent.default_provider ?? null) ||
+    defaultModel !== (agent.default_model ?? null) ||
     defaultDaemonId !== (agent.default_daemon_id ?? null) ||
     parsedMaxConcurrentTasks !== (agent.max_concurrent_tasks ?? 6);
 
@@ -1332,7 +1449,7 @@ function SettingsTab({
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_provider: defaultProvider, default_daemon_id: defaultDaemonId, max_concurrent_tasks: parsedMaxConcurrentTasks });
+      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_provider: defaultProvider, default_model: defaultModel, default_daemon_id: defaultDaemonId, max_concurrent_tasks: parsedMaxConcurrentTasks });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1476,6 +1593,7 @@ function SettingsTab({
                   if (next.length === 0) return;
                   if (defaultProvider && !next.includes(defaultProvider)) {
                     setDefaultProvider(null);
+                    setDefaultModel(null);
                   }
                   setProviders(next);
                 }}
@@ -1505,7 +1623,10 @@ function SettingsTab({
             <button
               key={provider}
               type="button"
-              onClick={() => setDefaultProvider(provider)}
+              onClick={() => {
+                setDefaultProvider(provider);
+                setDefaultModel(null);
+              }}
               className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
                 defaultProvider === provider
                   ? "border-primary bg-primary/5"
@@ -1518,7 +1639,10 @@ function SettingsTab({
           {defaultProvider && (
             <button
               type="button"
-              onClick={() => setDefaultProvider(null)}
+              onClick={() => {
+                setDefaultProvider(null);
+                setDefaultModel(null);
+              }}
               className="flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-muted transition-colors"
             >
               Clear
@@ -1526,6 +1650,42 @@ function SettingsTab({
           )}
         </div>
       </div>
+
+      {defaultProvider && defaultProviderModels.length > 0 && (
+        <div>
+          <Label className="text-xs text-muted-foreground">Default Model</Label>
+          <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+            Tasks use this model when dispatched through the default provider.
+          </p>
+          <div className="mt-1.5 flex gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setDefaultModel(null)}
+              className={`rounded-lg border px-3 py-2 font-mono text-xs transition-colors ${
+                defaultModel === null
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:bg-muted"
+              }`}
+            >
+              {catalogDefaultModel ? `Tested default (${catalogDefaultModel})` : "Provider default"}
+            </button>
+            {defaultProviderModels.map((model) => (
+              <button
+                key={model}
+                type="button"
+                onClick={() => setDefaultModel(model)}
+                className={`rounded-lg border px-3 py-2 font-mono text-xs transition-colors ${
+                  defaultModel === model
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:bg-muted"
+                }`}
+              >
+                {model}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div>
         <Label className="text-xs text-muted-foreground">Default Environment</Label>
@@ -1666,6 +1826,11 @@ function AgentDetail({
             {agent.providers?.length > 0 && (
               <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
                 {agent.providers.join(", ")}
+              </span>
+            )}
+            {agent.default_model && (
+              <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground">
+                {agent.default_model}
               </span>
             )}
             {(!agent.default_provider || !agent.default_daemon_id) && (

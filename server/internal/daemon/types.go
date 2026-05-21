@@ -34,9 +34,11 @@ type Task struct {
 	PriorSessionID   string         `json:"prior_session_id,omitempty"`   // Claude session ID from a previous task on this issue
 	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`     // work_dir from a previous task on this issue
 	TriggerCommentID string         `json:"trigger_comment_id,omitempty"` // comment that triggered this task
-	GitHubToken      string `json:"github_token,omitempty"`
-	GitHubCodeAccess string `json:"github_code_access,omitempty"`
-	ProviderAPIKey   string `json:"provider_api_key,omitempty"` // workspace-level API key
+	GitHubToken      string         `json:"github_token,omitempty"`
+	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
+	ProviderAPIKey   string         `json:"provider_api_key,omitempty"` // workspace-level API key
+	RequestedModel   string         `json:"requested_model,omitempty"`
+	ObservedModel    string         `json:"observed_model,omitempty"`
 }
 
 // AgentData holds agent details returned by the claim endpoint.
@@ -62,11 +64,13 @@ type SkillFileData struct {
 
 // TaskResult is the outcome of executing a task.
 type TaskResult struct {
-	Status     string `json:"status"`
-	Comment    string `json:"comment"`
-	PRURL      string `json:"pr_url,omitempty"`
-	BranchName string `json:"branch_name,omitempty"`
-	EnvType    string `json:"env_type,omitempty"`
-	SessionID  string `json:"session_id,omitempty"` // Claude session ID for future resumption
-	WorkDir    string `json:"work_dir,omitempty"`   // working directory used during execution
+	Status         string `json:"status"`
+	Comment        string `json:"comment"`
+	PRURL          string `json:"pr_url,omitempty"`
+	BranchName     string `json:"branch_name,omitempty"`
+	EnvType        string `json:"env_type,omitempty"`
+	SessionID      string `json:"session_id,omitempty"` // Claude session ID for future resumption
+	WorkDir        string `json:"work_dir,omitempty"`   // working directory used during execution
+	RequestedModel string `json:"requested_model,omitempty"`
+	ObservedModel  string `json:"observed_model,omitempty"`
 }

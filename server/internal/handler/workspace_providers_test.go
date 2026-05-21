@@ -27,6 +27,13 @@ func TestRedactProviderSettingsReturnsRepoVersions(t *testing.T) {
 	if codex.TargetVersion != want {
 		t.Fatalf("expected codex target_version %q, got %q", want, codex.TargetVersion)
 	}
+	catalog, _ := codeagent.Catalog("codex")
+	if codex.DefaultModel != catalog.DefaultModel {
+		t.Fatalf("expected codex default_model %q, got %q", catalog.DefaultModel, codex.DefaultModel)
+	}
+	if len(codex.SupportedModels) == 0 {
+		t.Fatal("expected codex supported_models")
+	}
 
 	claude := out.Providers["claude"]
 	want, _ = codeagent.Version("claude")
@@ -45,6 +52,23 @@ func TestRejectConfiguredTargetVersions(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected target_version to be rejected")
+	}
+}
+
+func TestRejectConfiguredProviderCatalogFields(t *testing.T) {
+	t.Parallel()
+
+	err := rejectConfiguredTargetVersions(WorkspaceProviderSettings{
+		Providers: map[string]ProviderConfig{
+			"codex": {
+				Enabled:         true,
+				DefaultModel:    "gpt-5.2-codex",
+				SupportedModels: []string{"gpt-5.2-codex"},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected model catalog fields to be rejected")
 	}
 }
 

@@ -8,6 +8,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     workspace_id: "ws-1",
     providers: ["claude"],
     default_provider: null,
+    default_model: null,
     name: "Agent",
     description: "",
     instructions: "",

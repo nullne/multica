@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/nullne/multica/server/internal/codeagent"
 	gh "github.com/nullne/multica/server/internal/github"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/internal/service"
@@ -20,6 +21,7 @@ type AgentResponse struct {
 	WorkspaceID        string          `json:"workspace_id"`
 	Providers          []string        `json:"providers"`
 	DefaultProvider    *string         `json:"default_provider"`
+	DefaultModel       *string         `json:"default_model"`
 	Name               string          `json:"name"`
 	Description        string          `json:"description"`
 	Instructions       string          `json:"instructions"`
@@ -66,6 +68,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		WorkspaceID:        uuidToString(a.WorkspaceID),
 		Providers:          providers,
 		DefaultProvider:    textToPtr(a.DefaultProvider),
+		DefaultModel:       textToPtr(a.DefaultModel),
 		Name:               a.Name,
 		Description:        a.Description,
 		Instructions:       a.Instructions,
@@ -113,9 +116,11 @@ type AgentTaskResponse struct {
 	PriorSessionID   string         `json:"prior_session_id,omitempty"`   // session ID from a previous task on same issue
 	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`     // work_dir from a previous task on same issue
 	TriggerCommentID *string        `json:"trigger_comment_id,omitempty"` // comment that triggered this task
-	GitHubToken      string `json:"github_token,omitempty"`
-	GitHubCodeAccess string `json:"github_code_access,omitempty"`
-	ProviderAPIKey   string `json:"provider_api_key,omitempty"` // workspace-level API key for the provider
+	GitHubToken      string         `json:"github_token,omitempty"`
+	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
+	ProviderAPIKey   string         `json:"provider_api_key,omitempty"` // workspace-level API key for the provider
+	RequestedModel   string         `json:"requested_model,omitempty"`
+	ObservedModel    string         `json:"observed_model,omitempty"`
 }
 
 // TaskAgentData holds agent info included in claim responses so the daemon
@@ -136,7 +141,7 @@ func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 	if t.Context != nil {
 		json.Unmarshal(t.Context, &contextData)
 	}
-	return AgentTaskResponse{
+	resp := AgentTaskResponse{
 		ID:               uuidToString(t.ID),
 		AgentID:          uuidToString(t.AgentID),
 		RuntimeID:        uuidToString(t.RuntimeID),
@@ -152,6 +157,13 @@ func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 		CreatedAt:        timestampToString(t.CreatedAt),
 		TriggerCommentID: uuidToPtr(t.TriggerCommentID),
 	}
+	if t.RequestedModel.Valid {
+		resp.RequestedModel = t.RequestedModel.String
+	}
+	if t.ObservedModel.Valid {
+		resp.ObservedModel = t.ObservedModel.String
+	}
+	return resp
 }
 
 func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
@@ -230,6 +242,7 @@ type CreateAgentRequest struct {
 	Providers          []string `json:"providers"`
 	Provider           string   `json:"provider"` // deprecated: single provider, use providers
 	DefaultProvider    *string  `json:"default_provider"`
+	DefaultModel       *string  `json:"default_model"`
 	Visibility         string   `json:"visibility"`
 	Tools              any      `json:"tools"`
 	Triggers           any      `json:"triggers"`
@@ -267,6 +280,10 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.DefaultProvider != nil && *req.DefaultProvider != "" && !containsString(providers, *req.DefaultProvider) {
 		writeError(w, http.StatusBadRequest, "default_provider must be one of providers")
+		return
+	}
+	defaultModel, ok := validateDefaultModel(w, req.DefaultProvider, req.DefaultModel)
+	if !ok {
 		return
 	}
 
@@ -309,6 +326,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Triggers:           triggers,
 		GithubCodeAccess:   req.GitHubCodeAccess,
 		DefaultProvider:    ptrToText(req.DefaultProvider),
+		DefaultModel:       defaultModel,
 		DefaultDaemonID:    parseOptionalUUID(req.DefaultDaemonID),
 		MaxConcurrentTasks: maxConcurrentTasks,
 	})
@@ -335,6 +353,7 @@ type UpdateAgentRequest struct {
 	AvatarURL          *string  `json:"avatar_url"`
 	Providers          []string `json:"providers"`
 	DefaultProvider    *string  `json:"default_provider"`
+	DefaultModel       *string  `json:"default_model"`
 	Visibility         *string  `json:"visibility"`
 	Status             *string  `json:"status"`
 	Tools              any      `json:"tools"`
@@ -390,6 +409,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	params := db.UpdateAgentParams{
 		ID:              parseUUID(id),
 		DefaultProvider: agent.DefaultProvider,
+		DefaultModel:    agent.DefaultModel,
 		DefaultDaemonID: agent.DefaultDaemonID,
 	}
 	if req.Name != nil {
@@ -408,11 +428,14 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 		params.Providers = req.Providers
 	}
 	effectiveProviders := agent.Providers
+	effectiveDefaultProvider := agent.DefaultProvider
 	if len(req.Providers) > 0 {
 		effectiveProviders = req.Providers
 		if params.DefaultProvider.Valid && !containsString(effectiveProviders, params.DefaultProvider.String) {
 			params.DefaultProvider = pgtype.Text{Valid: false}
+			params.DefaultModel = pgtype.Text{Valid: false}
 		}
+		effectiveDefaultProvider = params.DefaultProvider
 	}
 	if req.Visibility != nil {
 		params.Visibility = pgtype.Text{String: *req.Visibility, Valid: true}
@@ -442,8 +465,22 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			params.DefaultProvider = pgtype.Text{String: *req.DefaultProvider, Valid: true}
+			effectiveDefaultProvider = params.DefaultProvider
 		} else {
 			params.DefaultProvider = pgtype.Text{Valid: false}
+			params.DefaultModel = pgtype.Text{Valid: false}
+			effectiveDefaultProvider = params.DefaultProvider
+		}
+	}
+	if _, ok := rawFields["default_model"]; ok {
+		validated, valid := validateDefaultModel(w, textToPtr(effectiveDefaultProvider), req.DefaultModel)
+		if !valid {
+			return
+		}
+		params.DefaultModel = validated
+	} else if params.DefaultModel.Valid {
+		if !effectiveDefaultProvider.Valid || !codeagent.SupportsModel(effectiveDefaultProvider.String, params.DefaultModel.String) {
+			params.DefaultModel = pgtype.Text{Valid: false}
 		}
 	}
 	if _, ok := rawFields["default_daemon_id"]; ok {
@@ -551,6 +588,21 @@ func containsString(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func validateDefaultModel(w http.ResponseWriter, defaultProvider, defaultModel *string) (pgtype.Text, bool) {
+	if defaultModel == nil || *defaultModel == "" {
+		return pgtype.Text{Valid: false}, true
+	}
+	if defaultProvider == nil || *defaultProvider == "" {
+		writeError(w, http.StatusBadRequest, "default_model requires default_provider")
+		return pgtype.Text{}, false
+	}
+	if !codeagent.SupportsModel(*defaultProvider, *defaultModel) {
+		writeError(w, http.StatusBadRequest, "default_model must be supported by default_provider")
+		return pgtype.Text{}, false
+	}
+	return pgtype.Text{String: *defaultModel, Valid: true}, true
 }
 
 func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
