@@ -53,6 +53,14 @@ interface CommentCardProps {
   onToggleReaction: (commentId: string, emoji: string) => void;
   /** ID of the comment to highlight (flash animation). */
   highlightedCommentId?: string | null;
+  /**
+   * Run trace nodes to embed inside this thread, keyed by the reply comment
+   * id they belong to. The trace renders between the header and the content
+   * body of whichever entry matches — parent or any nested reply. Used to
+   * surface "how did the agent arrive at this reply" right under the reply
+   * itself instead of as a sibling card.
+   */
+  runTraces?: Map<string, React.ReactNode>;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +120,7 @@ function CommentRow({
   onEdit,
   onDelete,
   onToggleReaction,
+  runTrace,
 }: {
   issueId: string;
   entry: TimelineEntry;
@@ -119,6 +128,7 @@ function CommentRow({
   onEdit: (commentId: string, content: string) => Promise<void>;
   onDelete: (commentId: string) => void;
   onToggleReaction: (commentId: string, emoji: string) => void;
+  runTrace?: React.ReactNode;
 }) {
   const { getActorName } = useActorName();
   const [editing, setEditing] = useState(false);
@@ -231,6 +241,12 @@ function CommentRow({
         )}
       </div>
 
+      {runTrace && (
+        <div className="mt-2 pl-8 animate-in fade-in slide-in-from-top-1 duration-300">
+          {runTrace}
+        </div>
+      )}
+
       {editing ? (
         <div
           className="mt-1.5 pl-8"
@@ -297,6 +313,7 @@ function CommentCard({
   onDelete,
   onToggleReaction,
   highlightedCommentId,
+  runTraces,
 }: CommentCardProps) {
   const { getActorName } = useActorName();
   const { uploadWithToast } = useFileUpload();
@@ -471,7 +488,12 @@ function CommentCard({
               </div>
             ) : (
               <>
-                <div className="pl-10 text-sm leading-relaxed text-foreground/85">
+                {runTraces?.get(entry.id) && (
+                  <div className="mt-2 pl-10 animate-in fade-in slide-in-from-top-1 duration-300">
+                    {runTraces.get(entry.id)}
+                  </div>
+                )}
+                <div className={cn("pl-10 text-sm leading-relaxed text-foreground/85", runTraces?.get(entry.id) && "mt-2")}>
                   <ReadonlyEditor content={entry.content ?? ""} />
                 </div>
                 {(entry.attachments?.length ?? 0) > 0 && (
@@ -502,6 +524,7 @@ function CommentCard({
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onToggleReaction={onToggleReaction}
+                runTrace={runTraces?.get(reply.id)}
               />
             </div>
           ))}

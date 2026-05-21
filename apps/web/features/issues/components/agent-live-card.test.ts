@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { AgentTask } from "@/shared/types/agent";
-import { groupTaskRunsByTrigger, isActiveTask } from "./agent-live-card";
+import {
+  groupTaskRunsByTrigger,
+  isActiveTask,
+  partitionTaskRunsByResultComment,
+} from "./agent-live-card";
 
 function makeTask(overrides: Partial<AgentTask>): AgentTask {
   return {
@@ -66,5 +70,50 @@ describe("isActiveTask", () => {
     expect(isActiveTask(makeTask({ status: "completed" }))).toBe(false);
     expect(isActiveTask(makeTask({ status: "failed" }))).toBe(false);
     expect(isActiveTask(makeTask({ status: "cancelled" }))).toBe(false);
+  });
+});
+
+describe("partitionTaskRunsByResultComment", () => {
+  it("sends tasks without a result_comment_id to the standalone bucket", () => {
+    const tasks = [
+      makeTask({ id: "running", status: "running", result_comment_id: null }),
+      makeTask({ id: "no-reply", status: "completed", result_comment_id: undefined }),
+      makeTask({ id: "failed", status: "failed", result_comment_id: null }),
+    ];
+    const { embedded, standalone } = partitionTaskRunsByResultComment(tasks);
+    expect(embedded.size).toBe(0);
+    expect(standalone.map((t) => t.id)).toEqual(["running", "no-reply", "failed"]);
+  });
+
+  it("embeds tasks with a result_comment_id under that comment id", () => {
+    const tasks = [
+      makeTask({ id: "t1", status: "completed", result_comment_id: "reply-a" }),
+      makeTask({ id: "t2", status: "completed", result_comment_id: "reply-b" }),
+    ];
+    const { embedded, standalone } = partitionTaskRunsByResultComment(tasks);
+    expect(standalone).toHaveLength(0);
+    expect(embedded.get("reply-a")?.map((t) => t.id)).toEqual(["t1"]);
+    expect(embedded.get("reply-b")?.map((t) => t.id)).toEqual(["t2"]);
+  });
+
+  it("groups multiple runs that share one reply chronologically", () => {
+    const tasks = [
+      makeTask({ id: "third", created_at: "2026-05-03T00:00:00Z", result_comment_id: "reply-x" }),
+      makeTask({ id: "first", created_at: "2026-05-01T00:00:00Z", result_comment_id: "reply-x" }),
+      makeTask({ id: "second", created_at: "2026-05-02T00:00:00Z", result_comment_id: "reply-x" }),
+    ];
+    const { embedded } = partitionTaskRunsByResultComment(tasks);
+    expect(embedded.get("reply-x")?.map((t) => t.id)).toEqual(["first", "second", "third"]);
+  });
+
+  it("mixes the two buckets cleanly when some runs have a reply and others don't", () => {
+    const tasks = [
+      makeTask({ id: "active", status: "running", result_comment_id: null }),
+      makeTask({ id: "done", status: "completed", result_comment_id: "reply-y" }),
+      makeTask({ id: "orphan", status: "failed", result_comment_id: null }),
+    ];
+    const { embedded, standalone } = partitionTaskRunsByResultComment(tasks);
+    expect(embedded.get("reply-y")?.map((t) => t.id)).toEqual(["done"]);
+    expect(standalone.map((t) => t.id).sort()).toEqual(["active", "orphan"]);
   });
 });
