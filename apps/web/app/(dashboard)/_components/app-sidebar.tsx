@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Inbox,
   ListTodo,
@@ -89,11 +89,13 @@ function DraftDot() {
 function RecentIssueRow({
   issue,
   pinned,
+  isActive,
   onSelect,
   onTogglePin,
 }: {
   issue: Issue;
   pinned: boolean;
+  isActive: boolean;
   onSelect: () => void;
   onTogglePin: () => void;
 }) {
@@ -102,7 +104,12 @@ function RecentIssueRow({
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton size="sm" onClick={onSelect}>
+            <SidebarMenuButton
+              size="sm"
+              isActive={isActive}
+              aria-current={isActive ? "page" : undefined}
+              onClick={onSelect}
+            >
               <RunningIndicatorRing issueId={issue.id} className="size-4">
                 <StatusIcon status={issue.status} className="size-4" />
               </RunningIndicatorRing>
@@ -131,6 +138,11 @@ function RecentIssueRow({
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Drive the active highlight straight from the URL — on /home the
+  // ?issue=<id> param is updated synchronously when a row is clicked, so
+  // Recents reflects the change in the same render as the detail view.
+  const activeIssueId = searchParams.get("issue");
   const user = useAuthStore((s) => s.user);
   const authLogout = useAuthStore((s) => s.logout);
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -357,6 +369,7 @@ export function AppSidebar() {
                           key={issue.id}
                           issue={issue}
                           pinned
+                          isActive={issue.id === activeIssueId}
                           onSelect={() => {
                             router.push(`/home?issue=${issue.id}`);
                             if (issue.workspace_id !== workspace?.id) {
@@ -427,6 +440,7 @@ export function AppSidebar() {
                               key={issue.id}
                               issue={issue}
                               pinned={false}
+                              isActive={issue.id === activeIssueId}
                               onSelect={() => {
                                 // Update the URL first so the detail view
                                 // swaps in immediately; any cross-workspace
