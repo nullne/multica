@@ -18,9 +18,11 @@ import (
 
 // ProviderConfig holds the configuration for a single code agent provider.
 type ProviderConfig struct {
-	Enabled       bool   `json:"enabled"`
-	APIKey        string `json:"api_key,omitempty"`
-	TargetVersion string `json:"target_version,omitempty"`
+	Enabled         bool     `json:"enabled"`
+	APIKey          string   `json:"api_key,omitempty"`
+	TargetVersion   string   `json:"target_version,omitempty"`
+	DefaultModel    string   `json:"default_model,omitempty"`
+	SupportedModels []string `json:"supported_models,omitempty"`
 }
 
 // WorkspaceProviderSettings is the providers section of workspace.settings.
@@ -109,7 +111,10 @@ func redactProviderSettings(ps WorkspaceProviderSettings) WorkspaceProviderSetti
 			cfg = ps.Providers[provider]
 		}
 		cfg.APIKey = redactAPIKey(cfg.APIKey)
-		cfg.TargetVersion = codeagent.MustVersion(provider)
+		catalog := codeagent.MustCatalog(provider)
+		cfg.TargetVersion = catalog.Version
+		cfg.DefaultModel = catalog.DefaultModel
+		cfg.SupportedModels = catalog.SupportedModels
 		out.Providers[provider] = cfg
 	}
 	return out
@@ -122,6 +127,9 @@ func rejectConfiguredTargetVersions(ps WorkspaceProviderSettings) error {
 	for provider, cfg := range ps.Providers {
 		if cfg.TargetVersion != "" {
 			return fmt.Errorf("provider %s target_version is repository-owned", provider)
+		}
+		if cfg.DefaultModel != "" || len(cfg.SupportedModels) > 0 {
+			return fmt.Errorf("provider %s model catalog is repository-owned", provider)
 		}
 	}
 	return nil

@@ -23,6 +23,8 @@ const emptyConfig = (): ProviderConfig => ({
   enabled: false,
   api_key: "",
   target_version: "",
+  default_model: "",
+  supported_models: [],
 });
 
 function normalizeProviders(raw: Record<string, ProviderConfig> | undefined): Record<string, ProviderConfig> {
@@ -33,6 +35,8 @@ function normalizeProviders(raw: Record<string, ProviderConfig> | undefined): Re
       enabled: v.enabled ?? false,
       api_key: v.api_key ?? "",
       target_version: v.target_version ?? "",
+      default_model: v.default_model ?? "",
+      supported_models: v.supported_models ?? [],
     };
   }
   return out;
@@ -192,6 +196,29 @@ export function ProvidersTab() {
                         {config.target_version || "Not managed"}
                       </p>
                     </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Default Model</Label>
+                      <p className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
+                        {config.default_model || "Provider default"}
+                      </p>
+                    </div>
+
+                    {config.supported_models && config.supported_models.length > 0 && (
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Supported Models</Label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {config.supported_models.map((model) => (
+                            <span
+                              key={model}
+                              className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground"
+                            >
+                              {model}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </CardContent>

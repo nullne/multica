@@ -14,7 +14,7 @@ import (
 const archiveAgent = `-- name: ArchiveAgent :one
 UPDATE agent SET archived_at = now(), archived_by = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider
+RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model
 `
 
 type ArchiveAgentParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) ArchiveAgent(ctx context.Context, arg ArchiveAgentParams) (Age
 		&i.DefaultDaemonID,
 		&i.MaxConcurrentTasks,
 		&i.DefaultProvider,
+		&i.DefaultModel,
 	)
 	return i, err
 }
@@ -54,7 +55,7 @@ const cancelAgentTask = `-- name: CancelAgentTask :one
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()
 WHERE id = $1 AND status IN ('queued', 'dispatched', 'running')
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model
 `
 
 func (q *Queries) CancelAgentTask(ctx context.Context, id pgtype.UUID) (AgentTaskQueue, error) {
@@ -77,6 +78,8 @@ func (q *Queries) CancelAgentTask(ctx context.Context, id pgtype.UUID) (AgentTas
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
+		&i.RequestedModel,
+		&i.ObservedModel,
 	)
 	return i, err
 }
@@ -123,7 +126,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model
 `
 
 // Claims the next queued task for an agent, enforcing per-issue serialization and
@@ -150,22 +153,28 @@ func (q *Queries) ClaimAgentTask(ctx context.Context, agentID pgtype.UUID) (Agen
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
+		&i.RequestedModel,
+		&i.ObservedModel,
 	)
 	return i, err
 }
 
 const completeAgentTask = `-- name: CompleteAgentTask :one
 UPDATE agent_task_queue
-SET status = 'completed', completed_at = now(), result = $2, session_id = $3, work_dir = $4
+SET status = 'completed', completed_at = now(), result = $2, session_id = $3, work_dir = $4,
+    requested_model = COALESCE($5, requested_model),
+    observed_model = $6
 WHERE id = $1 AND status = 'running'
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model
 `
 
 type CompleteAgentTaskParams struct {
-	ID        pgtype.UUID `json:"id"`
-	Result    []byte      `json:"result"`
-	SessionID pgtype.Text `json:"session_id"`
-	WorkDir   pgtype.Text `json:"work_dir"`
+	ID             pgtype.UUID `json:"id"`
+	Result         []byte      `json:"result"`
+	SessionID      pgtype.Text `json:"session_id"`
+	WorkDir        pgtype.Text `json:"work_dir"`
+	RequestedModel pgtype.Text `json:"requested_model"`
+	ObservedModel  pgtype.Text `json:"observed_model"`
 }
 
 func (q *Queries) CompleteAgentTask(ctx context.Context, arg CompleteAgentTaskParams) (AgentTaskQueue, error) {
@@ -174,6 +183,8 @@ func (q *Queries) CompleteAgentTask(ctx context.Context, arg CompleteAgentTaskPa
 		arg.Result,
 		arg.SessionID,
 		arg.WorkDir,
+		arg.RequestedModel,
+		arg.ObservedModel,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -193,6 +204,8 @@ func (q *Queries) CompleteAgentTask(ctx context.Context, arg CompleteAgentTaskPa
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
+		&i.RequestedModel,
+		&i.ObservedModel,
 	)
 	return i, err
 }
@@ -212,9 +225,9 @@ func (q *Queries) CountRunningTasks(ctx context.Context, agentID pgtype.UUID) (i
 const createAgent = `-- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, providers, visibility, owner_id,
-    tools, triggers, instructions, github_code_access, default_provider, default_daemon_id, max_concurrent_tasks
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider
+	tools, triggers, instructions, github_code_access, default_provider, default_model, default_daemon_id, max_concurrent_tasks
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model
 `
 
 type CreateAgentParams struct {
@@ -230,6 +243,7 @@ type CreateAgentParams struct {
 	Instructions       string      `json:"instructions"`
 	GithubCodeAccess   string      `json:"github_code_access"`
 	DefaultProvider    pgtype.Text `json:"default_provider"`
+	DefaultModel       pgtype.Text `json:"default_model"`
 	DefaultDaemonID    pgtype.UUID `json:"default_daemon_id"`
 	MaxConcurrentTasks int32       `json:"max_concurrent_tasks"`
 }
@@ -248,6 +262,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		arg.Instructions,
 		arg.GithubCodeAccess,
 		arg.DefaultProvider,
+		arg.DefaultModel,
 		arg.DefaultDaemonID,
 		arg.MaxConcurrentTasks,
 	)
@@ -273,14 +288,15 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.DefaultDaemonID,
 		&i.MaxConcurrentTasks,
 		&i.DefaultProvider,
+		&i.DefaultModel,
 	)
 	return i, err
 }
 
 const createAgentTask = `-- name: CreateAgentTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id, context)
-VALUES ($1, $2, $3, 'queued', $4, $5, $6)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id, context, requested_model)
+VALUES ($1, $2, $3, 'queued', $4, $5, $6, $7)
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model
 `
 
 type CreateAgentTaskParams struct {
@@ -290,6 +306,7 @@ type CreateAgentTaskParams struct {
 	Priority         int32       `json:"priority"`
 	TriggerCommentID pgtype.UUID `json:"trigger_comment_id"`
 	Context          []byte      `json:"context"`
+	RequestedModel   pgtype.Text `json:"requested_model"`
 }
 
 func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams) (AgentTaskQueue, error) {
@@ -300,6 +317,7 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 		arg.Priority,
 		arg.TriggerCommentID,
 		arg.Context,
+		arg.RequestedModel,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -319,6 +337,8 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
+		&i.RequestedModel,
+		&i.ObservedModel,
 	)
 	return i, err
 }
@@ -327,7 +347,7 @@ const failAgentTask = `-- name: FailAgentTask :one
 UPDATE agent_task_queue
 SET status = 'failed', completed_at = now(), error = $2
 WHERE id = $1 AND status IN ('dispatched', 'running')
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model
 `
 
 type FailAgentTaskParams struct {
@@ -355,6 +375,8 @@ func (q *Queries) FailAgentTask(ctx context.Context, arg FailAgentTaskParams) (A
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
+		&i.RequestedModel,
+		&i.ObservedModel,
 	)
 	return i, err
 }
@@ -402,7 +424,7 @@ func (q *Queries) FailStaleTasks(ctx context.Context, arg FailStaleTasksParams) 
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider FROM agent
+SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model FROM agent
 WHERE id = $1
 `
 
@@ -430,12 +452,13 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.DefaultDaemonID,
 		&i.MaxConcurrentTasks,
 		&i.DefaultProvider,
+		&i.DefaultModel,
 	)
 	return i, err
 }
 
 const getAgentInWorkspace = `-- name: GetAgentInWorkspace :one
-SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider FROM agent
+SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model FROM agent
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -468,12 +491,13 @@ func (q *Queries) GetAgentInWorkspace(ctx context.Context, arg GetAgentInWorkspa
 		&i.DefaultDaemonID,
 		&i.MaxConcurrentTasks,
 		&i.DefaultProvider,
+		&i.DefaultModel,
 	)
 	return i, err
 }
 
 const getAgentTask = `-- name: GetAgentTask :one
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id FROM agent_task_queue
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model FROM agent_task_queue
 WHERE id = $1
 `
 
@@ -497,6 +521,8 @@ func (q *Queries) GetAgentTask(ctx context.Context, id pgtype.UUID) (AgentTaskQu
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
+		&i.RequestedModel,
+		&i.ObservedModel,
 	)
 	return i, err
 }
@@ -576,7 +602,7 @@ func (q *Queries) HasPendingTaskForIssueAndAgent(ctx context.Context, arg HasPen
 }
 
 const listActiveTasksByIssue = `-- name: ListActiveTasksByIssue :many
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id FROM agent_task_queue
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model FROM agent_task_queue
 WHERE issue_id = $1 AND status IN ('dispatched', 'running')
 ORDER BY created_at DESC
 `
@@ -607,6 +633,8 @@ func (q *Queries) ListActiveTasksByIssue(ctx context.Context, issueID pgtype.UUI
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
+			&i.RequestedModel,
+			&i.ObservedModel,
 		); err != nil {
 			return nil, err
 		}
@@ -619,7 +647,7 @@ func (q *Queries) ListActiveTasksByIssue(ctx context.Context, issueID pgtype.UUI
 }
 
 const listActiveTasksByWorkspace = `-- name: ListActiveTasksByWorkspace :many
-SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.priority, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.created_at, atq.context, atq.runtime_id, atq.session_id, atq.work_dir, atq.trigger_comment_id FROM agent_task_queue atq
+SELECT atq.id, atq.agent_id, atq.issue_id, atq.status, atq.priority, atq.dispatched_at, atq.started_at, atq.completed_at, atq.result, atq.error, atq.created_at, atq.context, atq.runtime_id, atq.session_id, atq.work_dir, atq.trigger_comment_id, atq.requested_model, atq.observed_model FROM agent_task_queue atq
 JOIN issue i ON atq.issue_id = i.id
 WHERE i.workspace_id = $1 AND atq.status IN ('queued', 'dispatched', 'running')
 ORDER BY atq.created_at DESC
@@ -651,6 +679,8 @@ func (q *Queries) ListActiveTasksByWorkspace(ctx context.Context, workspaceID pg
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
+			&i.RequestedModel,
+			&i.ObservedModel,
 		); err != nil {
 			return nil, err
 		}
@@ -663,7 +693,7 @@ func (q *Queries) ListActiveTasksByWorkspace(ctx context.Context, workspaceID pg
 }
 
 const listAgentTasks = `-- name: ListAgentTasks :many
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id FROM agent_task_queue
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model FROM agent_task_queue
 WHERE agent_id = $1
 ORDER BY created_at DESC
 `
@@ -694,6 +724,8 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
+			&i.RequestedModel,
+			&i.ObservedModel,
 		); err != nil {
 			return nil, err
 		}
@@ -706,7 +738,7 @@ func (q *Queries) ListAgentTasks(ctx context.Context, agentID pgtype.UUID) ([]Ag
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider FROM agent
+SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model FROM agent
 WHERE workspace_id = $1 AND archived_at IS NULL
 ORDER BY created_at ASC
 `
@@ -741,6 +773,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 			&i.DefaultDaemonID,
 			&i.MaxConcurrentTasks,
 			&i.DefaultProvider,
+			&i.DefaultModel,
 		); err != nil {
 			return nil, err
 		}
@@ -753,7 +786,7 @@ func (q *Queries) ListAgents(ctx context.Context, workspaceID pgtype.UUID) ([]Ag
 }
 
 const listAllAgents = `-- name: ListAllAgents :many
-SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider FROM agent
+SELECT id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model FROM agent
 WHERE workspace_id = $1
 ORDER BY created_at ASC
 `
@@ -788,6 +821,7 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 			&i.DefaultDaemonID,
 			&i.MaxConcurrentTasks,
 			&i.DefaultProvider,
+			&i.DefaultModel,
 		); err != nil {
 			return nil, err
 		}
@@ -800,7 +834,7 @@ func (q *Queries) ListAllAgents(ctx context.Context, workspaceID pgtype.UUID) ([
 }
 
 const listPendingTasksByRuntime = `-- name: ListPendingTasksByRuntime :many
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id FROM agent_task_queue
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model FROM agent_task_queue
 WHERE runtime_id = $1 AND status IN ('queued', 'dispatched')
 ORDER BY priority DESC, created_at ASC
 `
@@ -831,6 +865,8 @@ func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtyp
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
+			&i.RequestedModel,
+			&i.ObservedModel,
 		); err != nil {
 			return nil, err
 		}
@@ -843,7 +879,7 @@ func (q *Queries) ListPendingTasksByRuntime(ctx context.Context, runtimeID pgtyp
 }
 
 const listTasksByIssue = `-- name: ListTasksByIssue :many
-SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id FROM agent_task_queue
+SELECT id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model FROM agent_task_queue
 WHERE issue_id = $1
 ORDER BY created_at DESC
 `
@@ -874,6 +910,8 @@ func (q *Queries) ListTasksByIssue(ctx context.Context, issueID pgtype.UUID) ([]
 			&i.SessionID,
 			&i.WorkDir,
 			&i.TriggerCommentID,
+			&i.RequestedModel,
+			&i.ObservedModel,
 		); err != nil {
 			return nil, err
 		}
@@ -888,7 +926,7 @@ func (q *Queries) ListTasksByIssue(ctx context.Context, issueID pgtype.UUID) ([]
 const restoreAgent = `-- name: RestoreAgent :one
 UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider
+RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model
 `
 
 func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -915,6 +953,7 @@ func (q *Queries) RestoreAgent(ctx context.Context, id pgtype.UUID) (Agent, erro
 		&i.DefaultDaemonID,
 		&i.MaxConcurrentTasks,
 		&i.DefaultProvider,
+		&i.DefaultModel,
 	)
 	return i, err
 }
@@ -923,7 +962,7 @@ const startAgentTask = `-- name: StartAgentTask :one
 UPDATE agent_task_queue
 SET status = 'running', started_at = now()
 WHERE id = $1 AND status = 'dispatched'
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, requested_model, observed_model
 `
 
 func (q *Queries) StartAgentTask(ctx context.Context, id pgtype.UUID) (AgentTaskQueue, error) {
@@ -946,6 +985,8 @@ func (q *Queries) StartAgentTask(ctx context.Context, id pgtype.UUID) (AgentTask
 		&i.SessionID,
 		&i.WorkDir,
 		&i.TriggerCommentID,
+		&i.RequestedModel,
+		&i.ObservedModel,
 	)
 	return i, err
 }
@@ -963,11 +1004,12 @@ UPDATE agent SET
     instructions = COALESCE($10, instructions),
     github_code_access = COALESCE($11, github_code_access),
     default_provider = $12,
-    default_daemon_id = $13,
-    max_concurrent_tasks = COALESCE($14, max_concurrent_tasks),
+	default_model = $13,
+    default_daemon_id = $14,
+    max_concurrent_tasks = COALESCE($15, max_concurrent_tasks),
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider
+RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model
 `
 
 type UpdateAgentParams struct {
@@ -983,6 +1025,7 @@ type UpdateAgentParams struct {
 	Instructions       pgtype.Text `json:"instructions"`
 	GithubCodeAccess   pgtype.Text `json:"github_code_access"`
 	DefaultProvider    pgtype.Text `json:"default_provider"`
+	DefaultModel       pgtype.Text `json:"default_model"`
 	DefaultDaemonID    pgtype.UUID `json:"default_daemon_id"`
 	MaxConcurrentTasks pgtype.Int4 `json:"max_concurrent_tasks"`
 }
@@ -1001,6 +1044,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		arg.Instructions,
 		arg.GithubCodeAccess,
 		arg.DefaultProvider,
+		arg.DefaultModel,
 		arg.DefaultDaemonID,
 		arg.MaxConcurrentTasks,
 	)
@@ -1026,6 +1070,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.DefaultDaemonID,
 		&i.MaxConcurrentTasks,
 		&i.DefaultProvider,
+		&i.DefaultModel,
 	)
 	return i, err
 }
@@ -1033,7 +1078,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agent SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider
+RETURNING id, workspace_id, name, avatar_url, visibility, status, owner_id, created_at, updated_at, description, tools, triggers, instructions, archived_at, archived_by, github_code_access, providers, default_daemon_id, max_concurrent_tasks, default_provider, default_model
 `
 
 type UpdateAgentStatusParams struct {
@@ -1065,6 +1110,7 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.DefaultDaemonID,
 		&i.MaxConcurrentTasks,
 		&i.DefaultProvider,
+		&i.DefaultModel,
 	)
 	return i, err
 }

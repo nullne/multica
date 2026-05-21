@@ -85,6 +85,8 @@ export interface AgentTask {
   result: unknown;
   error: string | null;
   created_at: string;
+  requested_model?: string;
+  observed_model?: string;
   /** Comment that triggered this run; absent/null when triggered by the issue itself. */
   trigger_comment_id?: string | null;
 }
@@ -94,6 +96,7 @@ export interface Agent {
   workspace_id: string;
   providers: string[];
   default_provider: string | null;
+  default_model: string | null;
   name: string;
   description: string;
   instructions: string;
@@ -120,6 +123,7 @@ export interface CreateAgentRequest {
   avatar_url?: string;
   providers: string[];
   default_provider?: string | null;
+  default_model?: string | null;
   visibility?: AgentVisibility;
   tools?: AgentTool[];
   triggers?: AgentTrigger[];
@@ -135,6 +139,7 @@ export interface UpdateAgentRequest {
   avatar_url?: string;
   providers?: string[];
   default_provider?: string | null;
+  default_model?: string | null;
   visibility?: AgentVisibility;
   status?: AgentStatus;
   tools?: AgentTool[];

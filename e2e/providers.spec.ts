@@ -122,17 +122,26 @@ test.describe("Workspace Providers", () => {
     expect(updated.providers?.codex?.api_key).toContain("****");
     expect(updated.providers?.codex?.api_key).toContain("1234");
     expect(updated.providers?.codex?.target_version).toBeTruthy();
+    expect(updated.providers?.codex?.default_model).toBeTruthy();
+    expect(updated.providers?.codex?.supported_models ?? []).toContain(updated.providers?.codex?.default_model);
 
     // GET should return same redacted config
     const fetched = await api.getProviderConfig();
     expect(fetched.providers?.codex?.enabled).toBe(true);
     expect(fetched.providers?.codex?.target_version).toBe(updated.providers?.codex?.target_version);
+    expect(fetched.providers?.codex?.default_model).toBe(updated.providers?.codex?.default_model);
   });
 
-  test("provider config API: rejects configured target version", async () => {
+  test("provider config API: rejects repository-owned catalog fields", async () => {
     const res = await api.updateProviderConfig({
       providers: {
-        codex: { enabled: true, api_key: "sk-codex-test-key-1234", target_version: "0.1.0" },
+        codex: {
+          enabled: true,
+          api_key: "sk-codex-test-key-1234",
+          target_version: "0.1.0",
+          default_model: "gpt-5.2-codex",
+          supported_models: ["gpt-5.2-codex"],
+        },
       },
     });
     expect((res as Record<string, unknown>).error).toBeDefined();

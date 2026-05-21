@@ -40,6 +40,7 @@ type Agent struct {
 	DefaultDaemonID    pgtype.UUID        `json:"default_daemon_id"`
 	MaxConcurrentTasks int32              `json:"max_concurrent_tasks"`
 	DefaultProvider    pgtype.Text        `json:"default_provider"`
+	DefaultModel       pgtype.Text        `json:"default_model"`
 }
 
 type AgentRuntime struct {
@@ -82,6 +83,8 @@ type AgentTaskQueue struct {
 	SessionID        pgtype.Text        `json:"session_id"`
 	WorkDir          pgtype.Text        `json:"work_dir"`
 	TriggerCommentID pgtype.UUID        `json:"trigger_comment_id"`
+	RequestedModel   pgtype.Text        `json:"requested_model"`
+	ObservedModel    pgtype.Text        `json:"observed_model"`
 }
 
 type Attachment struct {

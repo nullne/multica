@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/nullne/multica/server/internal/codeagent"
 	"github.com/nullne/multica/server/internal/events"
 	"github.com/nullne/multica/server/internal/mention"
 	"github.com/nullne/multica/server/internal/realtime"
@@ -216,6 +217,17 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 	}
 
 	runtimeID := runtime.ID
+	requestedModel := pgtype.Text{}
+	if agent.DefaultProvider.Valid && agent.DefaultProvider.String == runtime.Provider {
+		switch {
+		case agent.DefaultModel.Valid && codeagent.SupportsModel(runtime.Provider, agent.DefaultModel.String):
+			requestedModel = agent.DefaultModel
+		case !agent.DefaultModel.Valid:
+			if catalog, ok := codeagent.Catalog(runtime.Provider); ok && catalog.DefaultModel != "" {
+				requestedModel = pgtype.Text{String: catalog.DefaultModel, Valid: true}
+			}
+		}
+	}
 
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:          agentID,
@@ -224,6 +236,7 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 		Priority:         priorityToInt(issue.Priority),
 		TriggerCommentID: triggerCommentID,
 		Context:          contextData,
+		RequestedModel:   requestedModel,
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -323,12 +336,14 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 
 // CompleteTask marks a task as completed.
 // Issue status is NOT changed here — the agent manages it via the CLI.
-func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir, requestedModel, observedModel string) (*db.AgentTaskQueue, error) {
 	task, err := s.Queries.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
-		ID:        taskID,
-		Result:    result,
-		SessionID: pgtype.Text{String: sessionID, Valid: sessionID != ""},
-		WorkDir:   pgtype.Text{String: workDir, Valid: workDir != ""},
+		ID:             taskID,
+		Result:         result,
+		SessionID:      pgtype.Text{String: sessionID, Valid: sessionID != ""},
+		WorkDir:        pgtype.Text{String: workDir, Valid: workDir != ""},
+		RequestedModel: pgtype.Text{String: requestedModel, Valid: requestedModel != ""},
+		ObservedModel:  pgtype.Text{String: observedModel, Valid: observedModel != ""},
 	})
 	if err != nil {
 		// Log the current task state to help debug why the update matched no rows.

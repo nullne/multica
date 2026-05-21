@@ -19,8 +19,8 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, providers, visibility, owner_id,
-    tools, triggers, instructions, github_code_access, default_provider, default_daemon_id, max_concurrent_tasks
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(default_provider), sqlc.narg(default_daemon_id), @max_concurrent_tasks)
+	tools, triggers, instructions, github_code_access, default_provider, default_model, default_daemon_id, max_concurrent_tasks
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(default_provider), sqlc.narg(default_model), sqlc.narg(default_daemon_id), @max_concurrent_tasks)
 RETURNING *;
 
 -- name: UpdateAgent :one
@@ -36,6 +36,7 @@ UPDATE agent SET
     instructions = COALESCE(sqlc.narg('instructions'), instructions),
     github_code_access = COALESCE(sqlc.narg('github_code_access'), github_code_access),
     default_provider = sqlc.narg('default_provider'),
+	default_model = sqlc.narg('default_model'),
     default_daemon_id = sqlc.narg('default_daemon_id'),
     max_concurrent_tasks = COALESCE(sqlc.narg('max_concurrent_tasks'), max_concurrent_tasks),
     updated_at = now()
@@ -58,8 +59,8 @@ WHERE agent_id = $1
 ORDER BY created_at DESC;
 
 -- name: CreateAgentTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id, context)
-VALUES ($1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id), sqlc.narg(context))
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id, context, requested_model)
+VALUES ($1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id), sqlc.narg(context), sqlc.narg(requested_model))
 RETURNING *;
 
 -- name: CancelAgentTasksByIssue :exec
@@ -110,7 +111,9 @@ RETURNING *;
 
 -- name: CompleteAgentTask :one
 UPDATE agent_task_queue
-SET status = 'completed', completed_at = now(), result = $2, session_id = $3, work_dir = $4
+SET status = 'completed', completed_at = now(), result = $2, session_id = $3, work_dir = $4,
+    requested_model = COALESCE(sqlc.narg('requested_model'), requested_model),
+    observed_model = sqlc.narg('observed_model')
 WHERE id = $1 AND status = 'running'
 RETURNING *;
 
