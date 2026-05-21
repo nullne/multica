@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -94,16 +97,53 @@ func appBaseURL(r *http.Request) string {
 		scheme = "https"
 	}
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
+		scheme = firstForwardedValue(proto)
 	}
 	host := r.Host
 	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-		host = fwd
+		host = firstForwardedValue(fwd)
 	}
 	if host == "" {
 		return ""
 	}
+	if scheme == "http" && os.Getenv("APP_ENV") == "production" && !isLocalHost(host) {
+		scheme = "https"
+	}
 	return scheme + "://" + host
+}
+
+func firstForwardedValue(value string) string {
+	if i := strings.IndexByte(value, ','); i >= 0 {
+		value = value[:i]
+	}
+	return strings.TrimSpace(value)
+}
+
+func isLocalHost(host string) bool {
+	host = strings.ToLower(host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func attachmentObjectKey(workspaceID, userID, filename, randomHex string, now time.Time) string {
+	now = now.UTC()
+	parts := []string{}
+	if workspaceID != "" {
+		parts = append(parts, "workspaces", workspaceID)
+	}
+	if userID != "" {
+		parts = append(parts, "users", userID)
+	}
+	parts = append(parts,
+		"attachments",
+		fmt.Sprintf("%04d", now.Year()),
+		fmt.Sprintf("%02d", int(now.Month())),
+		randomHex+path.Ext(filename),
+	)
+	return path.Join(parts...)
 }
 
 // groupAttachments loads attachments for multiple comments and groups them by comment ID.
@@ -182,7 +222,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	key := hex.EncodeToString(b) + path.Ext(header.Filename)
+	key := attachmentObjectKey(workspaceID, userID, header.Filename, hex.EncodeToString(b), time.Now())
 
 	link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
 	if err != nil {
