@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { IssueDetail } from "@/features/issues/components";
 import { useWorkspaceStore } from "@/features/workspace";
 import { MulticaIcon } from "@/components/multica-icon";
@@ -15,17 +15,32 @@ export default function WorkspaceIssueDetailPage({
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
 
+  // Prevent re-running the URL-based workspace sync after the initial load.
+  // Without this guard, a user-initiated workspace switch would be undone
+  // because the stale URL slug would trigger another switchWorkspace call.
+  const syncInitiated = useRef(false);
+  const [ready, setReady] = useState(false);
+
   useEffect(() => {
+    if (syncInitiated.current) return;
     if (!workspace || workspaces.length === 0) return;
-    if (workspace.slug === workspaceSlug) return;
+
+    syncInitiated.current = true;
+
+    if (workspace.slug === workspaceSlug) {
+      setReady(true);
+      return;
+    }
 
     const target = workspaces.find((w) => w.slug === workspaceSlug);
     if (target) {
-      void switchWorkspace(target.id);
+      void switchWorkspace(target.id).then(() => setReady(true));
+    } else {
+      setReady(true);
     }
   }, [workspace, workspaces, workspaceSlug, switchWorkspace]);
 
-  if (!workspace || workspace.slug !== workspaceSlug) {
+  if (!ready) {
     return (
       <div className="flex h-full items-center justify-center">
         <MulticaIcon className="size-6 animate-pulse" />
