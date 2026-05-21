@@ -58,6 +58,27 @@ describe("useFileUpload", () => {
     expect(result.current.uploading).toBe(false);
   });
 
+  it("returns the authenticated download URL instead of the raw storage URL", async () => {
+    uploadFileMock.mockResolvedValue({
+      id: "1",
+      filename: "a.pdf",
+      url: "https://storage.googleapis.com/bucket/a.pdf",
+      download_url: "https://multica.example/api/attachments/1/download",
+    });
+
+    const { result } = renderHook(() => useFileUpload());
+    let value: Awaited<ReturnType<typeof result.current.upload>> | null = null;
+    await act(async () => {
+      value = await result.current.upload(new File(["x"], "a.pdf"));
+    });
+
+    expect(value).toEqual({
+      id: "1",
+      filename: "a.pdf",
+      link: "https://multica.example/api/attachments/1/download",
+    });
+  });
+
   it("keeps uploading=true until the last of multiple concurrent uploads completes", async () => {
     const first = deferred<{ id: string; filename: string; url: string }>();
     const second = deferred<{ id: string; filename: string; url: string }>();

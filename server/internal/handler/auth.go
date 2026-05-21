@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/auth"
 	"github.com/nullne/multica/server/internal/logger"
+	"github.com/nullne/multica/server/internal/middleware"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -59,6 +60,18 @@ func devAuthBypassEnabled() bool {
 		return true
 	}
 	return false
+}
+
+func setAuthCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     middleware.AuthCookieName,
+		Value:    token,
+		Path:     "/api/attachments/",
+		MaxAge:   int((72 * time.Hour).Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") || os.Getenv("APP_ENV") == "production",
+	})
 }
 
 func defaultWorkspaceName(user db.User) string {
@@ -304,6 +317,7 @@ func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
 			http.SetCookie(w, cookie)
 		}
 	}
+	setAuthCookie(w, r, tokenString)
 
 	slog.Info("user logged in", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
@@ -352,6 +366,7 @@ func (h *Handler) LoginDev(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setAuthCookie(w, r, tokenString)
 	slog.Info("dev login", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,

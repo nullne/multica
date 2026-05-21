@@ -34,7 +34,7 @@ export function AttachmentList({
           {images.map((att) => (
             <a
               key={att.id}
-              href={att.url}
+              href={att.download_url}
               target="_blank"
               rel="noopener noreferrer"
               className="block overflow-hidden rounded-md border border-border hover:opacity-90 transition-opacity"
@@ -42,7 +42,7 @@ export function AttachmentList({
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={att.url}
+                src={att.download_url}
                 alt={att.filename}
                 className="max-h-48 max-w-xs object-contain"
                 loading="lazy"

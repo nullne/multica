@@ -13,6 +13,8 @@ import (
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
+const AuthCookieName = "multica_token"
+
 func uuidToString(u pgtype.UUID) string { return util.UUIDToString(u) }
 
 // Auth middleware validates JWT tokens or Personal Access Tokens from the Authorization header.
@@ -20,17 +22,15 @@ func uuidToString(u pgtype.UUID) string { return util.UUIDToString(u) }
 func Auth(queries *db.Queries) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				slog.Debug("auth: missing authorization header", "path", r.URL.Path)
-				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
-				return
-			}
-
-			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-			if tokenString == authHeader {
+			tokenString, invalidFormat, ok := bearerToken(r)
+			if invalidFormat {
 				slog.Debug("auth: invalid format", "path", r.URL.Path)
 				http.Error(w, `{"error":"invalid authorization format"}`, http.StatusUnauthorized)
+				return
+			}
+			if !ok {
+				slog.Debug("auth: missing authorization header", "path", r.URL.Path)
+				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
 				return
 			}
 
@@ -91,4 +91,20 @@ func Auth(queries *db.Queries) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func bearerToken(r *http.Request) (token string, invalidFormat bool, ok bool) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokenString == authHeader {
+			return "", true, false
+		}
+		return tokenString, false, true
+	}
+	cookie, err := r.Cookie(AuthCookieName)
+	if err != nil || strings.TrimSpace(cookie.Value) == "" {
+		return "", false, false
+	}
+	return strings.TrimSpace(cookie.Value), false, true
 }

@@ -160,6 +160,32 @@ func TestAuth_ValidToken(t *testing.T) {
 	}
 }
 
+func TestAuth_ValidCookieToken(t *testing.T) {
+	var gotUserID, gotEmail string
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserID = r.Header.Get("X-User-ID")
+		gotEmail = r.Header.Get("X-User-Email")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	token := generateToken(validClaims(), auth.JWTSecret())
+
+	req := httptest.NewRequest("GET", "/api/attachments/att-1/download", nil)
+	req.AddCookie(&http.Cookie{Name: AuthCookieName, Value: token})
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if gotUserID != "test-user-id" {
+		t.Fatalf("expected X-User-ID 'test-user-id', got '%s'", gotUserID)
+	}
+	if gotEmail != "test@multica.ai" {
+		t.Fatalf("expected X-User-Email 'test@multica.ai', got '%s'", gotEmail)
+	}
+}
+
 func TestAuth_MissingClaims(t *testing.T) {
 	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not be called")

@@ -53,6 +53,34 @@ func TestAttachmentDownloadURLUsesProxyPath(t *testing.T) {
 	}
 }
 
+func TestAttachmentDownloadURLUsesHTTPSInProductionBehindProxy(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	ctx := context.Background()
+
+	att, err := testHandler.Queries.CreateAttachment(ctx, db.CreateAttachmentParams{
+		WorkspaceID:  parseUUID(testWorkspaceID),
+		UploaderType: "member",
+		UploaderID:   parseUUID(testUserID),
+		Filename:     "report.pdf",
+		Url:          "https://storage.googleapis.com/test-bucket/abc.pdf",
+		ContentType:  "application/pdf",
+		SizeBytes:    1024,
+	})
+	if err != nil {
+		t.Fatalf("create attachment: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM attachment WHERE id = $1`, att.ID)
+	})
+
+	req := httptest.NewRequest("GET", "http://multica.example/api/issues", nil)
+	resp := testHandler.attachmentToResponse(req, att)
+
+	if !strings.HasPrefix(resp.DownloadURL, "https://multica.example/") {
+		t.Fatalf("download_url should use https in production, got %q", resp.DownloadURL)
+	}
+}
+
 // TestDownloadAttachmentNotFound verifies the endpoint returns 404 for an
 // unknown attachment ID rather than leaking storage errors.
 func TestDownloadAttachmentNotFound(t *testing.T) {
