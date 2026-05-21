@@ -128,6 +128,24 @@ func isLocalHost(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
+func attachmentObjectKey(workspaceID, userID, filename, randomHex string, now time.Time) string {
+	now = now.UTC()
+	parts := []string{}
+	if workspaceID != "" {
+		parts = append(parts, "workspaces", workspaceID)
+	}
+	if userID != "" {
+		parts = append(parts, "users", userID)
+	}
+	parts = append(parts,
+		"attachments",
+		fmt.Sprintf("%04d", now.Year()),
+		fmt.Sprintf("%02d", int(now.Month())),
+		randomHex+path.Ext(filename),
+	)
+	return path.Join(parts...)
+}
+
 // groupAttachments loads attachments for multiple comments and groups them by comment ID.
 func (h *Handler) groupAttachments(r *http.Request, commentIDs []pgtype.UUID) map[string][]AttachmentResponse {
 	if len(commentIDs) == 0 {
@@ -204,7 +222,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	key := hex.EncodeToString(b) + path.Ext(header.Filename)
+	key := attachmentObjectKey(workspaceID, userID, header.Filename, hex.EncodeToString(b), time.Now())
 
 	link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
 	if err != nil {

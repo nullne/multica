@@ -8,10 +8,26 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
+
+func TestAttachmentObjectKeyIncludesWorkspaceUserAndMonthPrefix(t *testing.T) {
+	key := attachmentObjectKey(
+		"workspace-123",
+		"user-456",
+		"Design Notes.PDF",
+		"abcdef0123456789",
+		time.Date(2026, 5, 21, 10, 30, 0, 0, time.FixedZone("CST", 8*60*60)),
+	)
+
+	want := "workspaces/workspace-123/users/user-456/attachments/2026/05/abcdef0123456789.PDF"
+	if key != want {
+		t.Fatalf("attachmentObjectKey() = %q, want %q", key, want)
+	}
+}
 
 // TestAttachmentDownloadURLUsesProxyPath verifies that the attachment payload
 // exposes a download_url pointing at the in-app proxy (/api/attachments/{id}/download)
