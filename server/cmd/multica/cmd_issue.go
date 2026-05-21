@@ -680,6 +680,11 @@ func runIssueCommentAdd(cmd *cobra.Command, args []string) error {
 	if len(attachmentIDs) > 0 {
 		body["attachment_ids"] = attachmentIDs
 	}
+	// When invoked by the daemon during task execution, link this reply back
+	// to its originating task so the UI can embed the run trace under it.
+	if taskID := os.Getenv("MULTICA_TASK_ID"); taskID != "" {
+		body["task_id"] = taskID
+	}
 	var result map[string]any
 	if err := client.PostJSON(ctx, "/api/issues/"+issueID+"/comments", body, &result); err != nil {
 		return fmt.Errorf("add comment: %w", err)

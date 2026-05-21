@@ -69,8 +69,10 @@ import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import {
   TaskRunCard,
+  RunTraceGroup,
   useIssueTaskRuns,
   groupTaskRunsByTrigger,
+  partitionTaskRunsByResultComment,
   isActiveTask,
   scrollToTaskRun,
 } from "./agent-live-card";
@@ -730,10 +732,21 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
     subscribers, loading: subscribersLoading, isSubscribed, toggleSubscribe: handleToggleSubscribe, toggleSubscriber,
   } = useIssueSubscribers(id, user?.id);
 
-  // Agent task runs for this issue — used to render run cards inline at
-  // the point that triggered them (issue or comment).
+  // Agent task runs for this issue. Split into two buckets:
+  // - Tasks with a `result_comment_id` embed inside the corresponding agent
+  //   reply (via CommentCard.runTraces). This is the new primary path.
+  // - Tasks without a `result_comment_id` (active, or finished-without-reply)
+  //   fall back to the legacy standalone rendering: at the top of the
+  //   activity feed (issue-triggered) or under the triggering comment
+  //   thread (comment-triggered), grouped by `trigger_comment_id`.
   const taskRuns = useIssueTaskRuns(id);
-  const taskRunBuckets = useMemo(() => groupTaskRunsByTrigger(taskRuns), [taskRuns]);
+  const { embeddedTaskRuns, standaloneBuckets } = useMemo(() => {
+    const { embedded, standalone } = partitionTaskRunsByResultComment(taskRuns);
+    return {
+      embeddedTaskRuns: embedded,
+      standaloneBuckets: groupTaskRunsByTrigger(standalone),
+    };
+  }, [taskRuns]);
   const activeTaskRun = useMemo(() => taskRuns.find(isActiveTask) ?? null, [taskRuns]);
 
   const loading = issueLoading;
@@ -1441,13 +1454,42 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   if (topId) topLevelOf.set(e.id, topId);
                 }
 
-                // Bucket comment-triggered task runs by their top-level
-                // comment id. Orphans (comment not in the loaded timeline)
-                // fall through to the issue-level bucket so they remain
-                // visible.
+                const fallbackAgentName =
+                  issue.assignee_type === "agent" && issue.assignee_id
+                    ? getActorName("agent", issue.assignee_id)
+                    : undefined;
+
+                // Build runTraces (commentId → React node) for tasks that
+                // have produced a reply. Tasks whose result_comment_id is
+                // not present in the loaded timeline fall through to the
+                // standalone path so the run never silently disappears.
+                const runTracesByCommentId = new Map<string, React.ReactNode>();
+                const demotedToStandalone: AgentTask[] = [];
+                for (const [commentId, runs] of embeddedTaskRuns) {
+                  if (!topLevelOf.has(commentId)) {
+                    demotedToStandalone.push(...runs);
+                    continue;
+                  }
+                  const node =
+                    runs.length === 1 ? (
+                      <TaskRunCard
+                        key={runs[0]!.id}
+                        task={runs[0]!}
+                        fallbackAgentName={fallbackAgentName}
+                      />
+                    ) : (
+                      <RunTraceGroup tasks={runs} fallbackAgentName={fallbackAgentName} />
+                    );
+                  runTracesByCommentId.set(commentId, node);
+                }
+
+                // Bucket *standalone* comment-triggered tasks by their
+                // top-level comment id (legacy fallback rendering — for
+                // active runs that haven't produced a reply yet, and
+                // failed runs that never wrote one).
                 const runsByTopLevel = new Map<string, AgentTask[]>();
                 const orphanRuns: AgentTask[] = [];
-                for (const [commentId, runs] of taskRunBuckets.byCommentId) {
+                for (const [commentId, runs] of standaloneBuckets.byCommentId) {
                   const topId = topLevelOf.get(commentId);
                   if (!topId) {
                     orphanRuns.push(...runs);
@@ -1463,14 +1505,17 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   );
                 }
 
-                const issueLevelRuns = [...taskRunBuckets.issueTriggered, ...orphanRuns].sort(
+                // Issue-level standalone runs include three sources:
+                // explicitly issue-triggered, orphans (comment-triggered
+                // but trigger comment not loaded), and demoted runs
+                // (result_comment_id present but reply not loaded).
+                const issueLevelRuns = [
+                  ...standaloneBuckets.issueTriggered,
+                  ...orphanRuns,
+                  ...demotedToStandalone,
+                ].sort(
                   (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
                 );
-
-                const fallbackAgentName =
-                  issue.assignee_type === "agent" && issue.assignee_id
-                    ? getActorName("agent", issue.assignee_id)
-                    : undefined;
 
                 // Coalesce: same actor + same action within 2 min → keep last only
                 const COALESCE_MS = 2 * 60 * 1000;
@@ -1525,6 +1570,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                             onDelete={deleteComment}
                             onToggleReaction={handleToggleReaction}
                             highlightedCommentId={highlightedId}
+                            runTraces={runTracesByCommentId}
                           />
                         </div>
                         {triggeredRuns.length > 0 && (

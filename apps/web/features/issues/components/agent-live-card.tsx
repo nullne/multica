@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   XCircle,
   Square,
+  Layers,
 } from "lucide-react";
 import { api } from "@/shared/api";
 import { useWSEvent } from "@/features/realtime";
@@ -634,6 +635,188 @@ export function groupTaskRunsByTrigger(tasks: AgentTask[]): {
   }
 
   return { issueTriggered, byCommentId };
+}
+
+/**
+ * Partition tasks into the two rendering buckets:
+ * - `embedded`: tasks with a `result_comment_id` — render inside the
+ *   corresponding agent reply comment. Tasks targeting the same comment
+ *   are grouped together (oldest first).
+ * - `standalone`: tasks without a `result_comment_id` — render as their
+ *   own card in the activity timeline (current behavior; preserves
+ *   active-run visibility and orphan tasks that never produced a reply).
+ */
+export function partitionTaskRunsByResultComment(tasks: AgentTask[]): {
+  embedded: Map<string, AgentTask[]>;
+  standalone: AgentTask[];
+} {
+  const embedded = new Map<string, AgentTask[]>();
+  const standalone: AgentTask[] = [];
+
+  const sorted = [...tasks].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+  );
+
+  for (const t of sorted) {
+    if (t.result_comment_id) {
+      const list = embedded.get(t.result_comment_id) ?? [];
+      list.push(t);
+      embedded.set(t.result_comment_id, list);
+    } else {
+      standalone.push(t);
+    }
+  }
+
+  return { embedded, standalone };
+}
+
+// ─── RunTraceGroup — multiple runs sharing one reply ───────────────────────
+
+interface RunTraceGroupProps {
+  tasks: AgentTask[];
+  fallbackAgentName?: string;
+}
+
+type GroupStatus = "active" | "all_completed" | "has_failed" | "cancelled" | "mixed";
+
+function resolveGroupStatus(tasks: AgentTask[]): GroupStatus {
+  if (tasks.some(isActiveTask)) return "active";
+  if (tasks.every((t) => t.status === "completed")) return "all_completed";
+  const failed = tasks.filter((t) => t.status === "failed").length;
+  const cancelled = tasks.filter((t) => t.status === "cancelled").length;
+  if (failed > 0) return "has_failed";
+  if (cancelled > 0 && cancelled === tasks.length) return "cancelled";
+  return "mixed";
+}
+
+function sumDurationMs(tasks: AgentTask[]): number {
+  let total = 0;
+  for (const t of tasks) {
+    if (t.started_at && t.completed_at) {
+      total += new Date(t.completed_at).getTime() - new Date(t.started_at).getTime();
+    }
+  }
+  return total;
+}
+
+function formatDurationMs(ms: number): string {
+  if (ms <= 0) return "—";
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${minutes}m ${secs}s`;
+}
+
+/**
+ * RunTraceGroup wraps N≥2 task runs that share a single agent reply.
+ * Collapsed: a single summary strip (count, total duration, status badge).
+ * Expanded: each task renders as its own TaskRunCard, individually
+ * collapsible. When N=1 the caller should render a bare TaskRunCard
+ * instead — this component does not special-case the singleton path so
+ * the wrapper stays predictable.
+ */
+export function RunTraceGroup({ tasks, fallbackAgentName }: RunTraceGroupProps) {
+  const [open, setOpen] = useState(false);
+  const status = resolveGroupStatus(tasks);
+  const totalMs = sumDurationMs(tasks);
+  const runtimes = useRuntimeStore((s) => s.runtimes);
+  const daemons = useRuntimeStore((s) => s.daemons);
+
+  // Show runtime label only when every task in the group shares one — a
+  // mixed-runtime group hides it to avoid lying.
+  const runtimeIds = new Set(tasks.map((t) => t.runtime_id));
+  let runtimeLabel = "";
+  if (runtimeIds.size === 1) {
+    const runtime = runtimes.find((r) => r.id === tasks[0]!.runtime_id);
+    const daemon = runtime?.daemon_ref ? daemons.find((d) => d.id === runtime.daemon_ref) : null;
+    runtimeLabel = [daemon?.device_name || daemon?.daemon_id, runtime?.provider]
+      .filter(Boolean)
+      .join(" / ");
+  }
+
+  const failedCount = tasks.filter((t) => t.status === "failed").length;
+  const activeCount = tasks.filter(isActiveTask).length;
+
+  return (
+    <div
+      data-testid="run-trace-group"
+      data-run-count={tasks.length}
+      data-run-status={status}
+      className={cn(
+        "rounded-md border bg-muted/30",
+        status === "active" && "border-info/20 bg-info/5",
+      )}
+    >
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left">
+          <ChevronRight
+            className={cn(
+              "h-3 w-3 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-90",
+            )}
+          />
+          <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="text-xs font-medium shrink-0">{tasks.length} runs</span>
+          {totalMs > 0 && (
+            <span className="text-xs text-muted-foreground shrink-0">
+              · {formatDurationMs(totalMs)} total
+            </span>
+          )}
+          {runtimeLabel && (
+            <span className="text-xs text-muted-foreground shrink-0 truncate">
+              · {runtimeLabel}
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-1 shrink-0 text-xs">
+            {status === "active" && (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin text-info" />
+                <span className="text-info font-medium">{activeCount} running</span>
+              </>
+            )}
+            {status === "all_completed" && (
+              <>
+                <CheckCircle2 className="h-3.5 w-3.5 text-success" />
+                <span className="text-success font-medium">All completed</span>
+              </>
+            )}
+            {status === "has_failed" && (
+              <>
+                <XCircle className="h-3.5 w-3.5 text-destructive" />
+                <span className="text-destructive font-medium">{failedCount} failed</span>
+              </>
+            )}
+            {status === "cancelled" && (
+              <span className="text-muted-foreground font-medium">Cancelled</span>
+            )}
+            {status === "mixed" && (
+              <span className="text-muted-foreground font-medium">Mixed</span>
+            )}
+          </span>
+        </CollapsibleTrigger>
+
+        <CollapsibleContent>
+          <div className="flex flex-col gap-1.5 border-t border-border/50 p-2">
+            {tasks.map((task, idx) => (
+              <div
+                key={task.id}
+                className="flex items-center gap-1.5"
+                data-testid="run-trace-group-item"
+              >
+                <span className="shrink-0 w-10 text-[10px] uppercase tracking-wide text-muted-foreground tabular-nums">
+                  Run {idx + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <TaskRunCard task={task} fallbackAgentName={fallbackAgentName} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  );
 }
 
 /** Programmatic helper: scroll to and expand a task run card. */

@@ -421,7 +421,8 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 	// Comment-triggered tasks: the agent replies via CLI with --parent, so
 	// posting here would create a duplicate.
 	if !handledByVerificationFlow && !task.TriggerCommentID.Valid && output != "" {
-		s.createAgentComment(ctx, task.IssueID, task.AgentID, output, "comment", task.TriggerCommentID)
+		reply := s.createAgentComment(ctx, task.IssueID, task.AgentID, output, "comment", task.TriggerCommentID)
+		s.linkResultComment(ctx, task.ID, reply)
 	}
 
 	// Reconcile agent status
@@ -459,7 +460,8 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 		if comment == "" {
 			comment = "验收标准已起草，等待确认。"
 		}
-		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), "comment", task.TriggerCommentID)
+		reply := s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(comment), "comment", task.TriggerCommentID)
+		s.linkResultComment(ctx, task.ID, reply)
 		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text("验收标准已生成，请在 issue 详情页确认后继续。"), "system", task.TriggerCommentID)
 
 		s.broadcastIssueUpdated(issue)
@@ -471,7 +473,8 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 			return fmt.Errorf("load issue: %w", err)
 		}
 		if output != "" {
-			s.createAgentComment(ctx, task.IssueID, task.AgentID, output, "comment", task.TriggerCommentID)
+			reply := s.createAgentComment(ctx, task.IssueID, task.AgentID, output, "comment", task.TriggerCommentID)
+			s.linkResultComment(ctx, task.ID, reply)
 		}
 
 		if !issue.VerifierAgentID.Valid || !issue.AssigneeID.Valid ||
@@ -512,7 +515,8 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 			if humanOutput == "" {
 				humanOutput = "验收通过。"
 			}
-			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(humanOutput), "comment", task.TriggerCommentID)
+			reply := s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(humanOutput), "comment", task.TriggerCommentID)
+			s.linkResultComment(ctx, task.ID, reply)
 			if issue.Status == "in_review" {
 				if updated, err := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{ID: issue.ID, Status: "done"}); err == nil {
 					s.broadcastIssueUpdated(updated)
@@ -534,7 +538,8 @@ func (s *TaskService) handleVerificationCompletion(ctx context.Context, task db.
 			if !strings.Contains(feedback, "mention://agent/"+util.UUIDToString(issue.AssigneeID)) {
 				feedback += "\n\n请修复后再次提交：" + assigneeMention
 			}
-			s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(feedback), "comment", task.TriggerCommentID)
+			reply := s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(feedback), "comment", task.TriggerCommentID)
+			s.linkResultComment(ctx, task.ID, reply)
 
 			round := maxRound(taskCtx.Round)
 			maxRounds := defaultVerificationRounds
@@ -871,14 +876,18 @@ func (s *TaskService) getIssuePrefix(workspaceID pgtype.UUID) string {
 	return ws.IssuePrefix
 }
 
-func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID pgtype.UUID, content, commentType string, parentID pgtype.UUID) {
+// createAgentComment creates an agent-authored comment, broadcasts the WS event,
+// and returns the created comment so callers can link it back to a task as
+// result_comment_id. Returns the zero value comment when content is empty or
+// the create call fails (the caller will see a zero ID and skip linking).
+func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID pgtype.UUID, content, commentType string, parentID pgtype.UUID) db.Comment {
 	if content == "" {
-		return
+		return db.Comment{}
 	}
 	// Look up issue to get workspace ID for mention expansion and broadcasting.
 	issue, err := s.Queries.GetIssue(ctx, issueID)
 	if err != nil {
-		return
+		return db.Comment{}
 	}
 	// Expand bare issue identifiers (e.g. MUL-117) into mention links.
 	content = mention.ExpandIssueIdentifiers(ctx, s.Queries, issue.WorkspaceID, content)
@@ -891,7 +900,7 @@ func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID p
 		ParentID:   parentID,
 	})
 	if err != nil {
-		return
+		return db.Comment{}
 	}
 	s.Bus.Publish(events.Event{
 		Type:        protocol.EventCommentCreated,
@@ -913,6 +922,32 @@ func (s *TaskService) createAgentComment(ctx context.Context, issueID, agentID p
 			"issue_status": issue.Status,
 		},
 	})
+	return comment
+}
+
+// linkResultComment associates a task with the reply comment it produced.
+// Safe to call when comment.ID is zero (no-op). Only the first non-zero
+// comment per task wins — the SQL guard prevents accidental overwrites.
+func (s *TaskService) linkResultComment(ctx context.Context, taskID pgtype.UUID, comment db.Comment) {
+	if !comment.ID.Valid {
+		return
+	}
+	if _, err := s.Queries.SetAgentTaskResultComment(ctx, db.SetAgentTaskResultCommentParams{
+		ID:              taskID,
+		ResultCommentID: comment.ID,
+	}); err != nil {
+		// Not finding a row to update means another path already linked a
+		// reply for this task — that's the expected race for verification
+		// flows that create multiple comments. Anything else is logged but
+		// non-fatal: the run still completes, it just won't render embedded.
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("link result comment failed",
+				"task_id", util.UUIDToString(taskID),
+				"comment_id", util.UUIDToString(comment.ID),
+				"error", err,
+			)
+		}
+	}
 }
 
 func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
