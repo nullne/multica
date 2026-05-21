@@ -541,6 +541,78 @@ describe("AppSidebar grouped recents", () => {
   });
 });
 
+describe("AppSidebar recents active highlight", () => {
+  beforeEach(() => {
+    mockPathname = "/home";
+  });
+
+  function activeRow() {
+    return document.querySelector('[aria-current="page"]');
+  }
+
+  it("highlights the recents row matching the ?issue=<id> URL param", async () => {
+    mockSearchParams = new URLSearchParams("issue=issue-2");
+    renderSidebar();
+
+    const row = await screen.findByRole("button", {
+      name: "Other workspace issue",
+    });
+    expect(row).toHaveAttribute("aria-current", "page");
+    // base-ui renders the active state as a value-less `data-active` attribute.
+    expect(row).toHaveAttribute("data-active");
+
+    const otherRow = await screen.findByRole("button", { name: "Recent issue" });
+    expect(otherRow).not.toHaveAttribute("aria-current");
+    expect(otherRow).not.toHaveAttribute("data-active");
+  });
+
+  it("leaves all rows unhighlighted when no issue is in the URL", async () => {
+    mockSearchParams = new URLSearchParams();
+    renderSidebar();
+
+    await screen.findByText("Recent issue");
+    expect(activeRow()).toBeNull();
+  });
+
+  it("moves the highlight to a row when its URL becomes active", async () => {
+    mockSearchParams = new URLSearchParams("issue=issue-1");
+    const { rerender } = renderSidebar();
+
+    await screen.findByText("Other workspace issue");
+    await waitFor(() => {
+      expect(activeRow()?.textContent).toContain("Recent issue");
+    });
+
+    mockSearchParams = new URLSearchParams("issue=issue-2");
+    rerender(
+      <SidebarProvider>
+        <AppSidebar />
+      </SidebarProvider>,
+    );
+
+    await waitFor(() => {
+      expect(activeRow()?.textContent).toContain("Other workspace issue");
+    });
+    const otherRow = screen.getByRole("button", { name: "Recent issue" });
+    expect(otherRow).not.toHaveAttribute("aria-current");
+  });
+
+  it("highlights a pinned row when the URL targets it", async () => {
+    mockSearchParams = new URLSearchParams("issue=issue-2");
+    useRecentsPrefsStore.setState({ pinnedIssueIds: ["issue-2"] });
+    renderSidebar();
+
+    const pinnedSection = await screen.findByTestId("recents-pinned-section");
+    // The unpin action button shares "Other workspace issue" in its aria-label,
+    // so match the row's menu button by its exact visible text instead.
+    const pinnedRow = within(pinnedSection).getByRole("button", {
+      name: "Other workspace issue",
+    });
+    expect(pinnedRow).toHaveAttribute("aria-current", "page");
+    expect(pinnedRow).toHaveAttribute("data-active");
+  });
+});
+
 describe("AppSidebar pinned issues", () => {
   beforeEach(() => {
     mockPathname = "/home";
