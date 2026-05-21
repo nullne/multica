@@ -409,6 +409,7 @@ type WebhookAction struct {
 type WebhookEventLog struct {
 	ID           pgtype.UUID        `json:"id"`
 	WebhookID    pgtype.UUID        `json:"webhook_id"`
+	ActionID     pgtype.UUID        `json:"action_id"`
 	DedupKey     string             `json:"dedup_key"`
 	Payload      []byte             `json:"payload"`
 	Status       string             `json:"status"`

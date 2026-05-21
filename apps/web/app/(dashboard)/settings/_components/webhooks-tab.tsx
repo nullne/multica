@@ -566,6 +566,7 @@ function WebhookCard({
                 key={a.id}
                 action={a}
                 index={idx}
+                webhookId={webhook.id}
                 agentName={agentName}
                 memberName={memberName}
                 envName={envName}
@@ -590,16 +591,31 @@ function WebhookCard({
 function ActionSummary({
   action,
   index,
+  webhookId,
   agentName,
   memberName,
   envName,
 }: {
   action: WebhookAction;
   index: number;
+  webhookId: string;
   agentName: (id: string) => string;
   memberName: (id: string) => string;
   envName: (id: string) => string;
 }) {
+  const [eventsExpanded, setEventsExpanded] = useState(false);
+  const [events, setEvents] = useState<WebhookEvent[] | null>(null);
+  const [eventsLoading, setEventsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!eventsExpanded || events !== null) return;
+    setEventsLoading(true);
+    api.listWebhookActionEvents(webhookId, action.id)
+      .then(setEvents)
+      .catch(() => setEvents([]))
+      .finally(() => setEventsLoading(false));
+  }, [eventsExpanded, events, webhookId, action.id]);
+
   return (
     <div className="border-t pt-2 mt-1">
       <span className="text-[10px] font-semibold uppercase tracking-wide">
@@ -647,6 +663,12 @@ function ActionSummary({
           </div>
         );
       })()}
+      <ActionEventsPanel
+        events={events}
+        loading={eventsLoading}
+        expanded={eventsExpanded}
+        onToggle={() => setEventsExpanded((v) => !v)}
+      />
     </div>
   );
 }
@@ -1604,6 +1626,61 @@ function payloadSummary(payload: unknown): string {
   const title = p.title ?? p.alertname ?? (p.labels && typeof p.labels === "object" ? (p.labels as Record<string, unknown>).alertname : undefined);
   if (title) return String(title).slice(0, 80);
   return "";
+}
+
+// ----------------------------------------------------------------------------
+// Per-action events panel (shown inside each ActionSummary)
+// ----------------------------------------------------------------------------
+
+function ActionEventsPanel({
+  events,
+  loading,
+  expanded,
+  onToggle,
+}: {
+  events: WebhookEvent[] | null;
+  loading: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const displayEvents = events?.slice(0, 10) ?? [];
+
+  return (
+    <div className="mt-2 space-y-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <History className="h-3 w-3" />
+        Recent events
+        {events !== null && events.length > 0 && (
+          <span className="ml-1 text-[9px] rounded bg-muted px-1">{events.length}</span>
+        )}
+      </button>
+      {expanded && (
+        <>
+          {loading && (
+            <div className="text-[10px] text-muted-foreground/70 italic pl-4">Loading…</div>
+          )}
+          {!loading && events !== null && displayEvents.length === 0 && (
+            <div className="text-[10px] italic text-muted-foreground/70 pl-4">No events for this action yet</div>
+          )}
+          {!loading && displayEvents.map((evt) => (
+            <div key={evt.id} className="pl-4">
+              <WebhookEventRow event={evt} />
+            </div>
+          ))}
+          {!loading && events !== null && events.length > 10 && (
+            <div className="text-[10px] text-muted-foreground/70 italic pl-4">
+              Showing 10 of {events.length} events
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 // ----------------------------------------------------------------------------

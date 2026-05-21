@@ -113,6 +113,7 @@ export type WebhookEventStatus = "processed" | "filtered" | "deduped" | "error";
 export interface WebhookEvent {
   id: string;
   webhook_id: string;
+  action_id: string | null;
   dedup_key: string;
   payload: unknown;
   status: WebhookEventStatus;
