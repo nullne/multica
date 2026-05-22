@@ -54,6 +54,14 @@ func (a *githubAdapter) Parse(payload json.RawMessage, headers http.Header) ([]E
 		data = parseGitHubIssues(payload)
 	case "issue_comment":
 		data = parseGitHubIssueComment(payload)
+	case "check_run":
+		data = parseGitHubCheckRun(payload)
+	case "check_suite":
+		data = parseGitHubCheckSuite(payload)
+	case "status":
+		data = parseGitHubStatus(payload)
+	case "workflow_run":
+		data = parseGitHubWorkflowRun(payload)
 	default:
 		return nil, nil
 	}
@@ -109,6 +117,10 @@ func isRelevantGitHubAction(eventType, action string) bool {
 		return false
 	case "issue_comment":
 		return action == "created"
+	case "check_run", "check_suite", "workflow_run":
+		return action == "completed"
+	case "status":
+		return true
 	default:
 		return false
 	}
@@ -384,6 +396,154 @@ func parseGitHubIssueComment(body []byte) map[string]string {
 	}
 }
 
+func parseGitHubCheckRun(body []byte) map[string]string {
+	var ev struct {
+		Action   string `json:"action"`
+		CheckRun struct {
+			Name         string `json:"name"`
+			Status       string `json:"status"`
+			Conclusion   string `json:"conclusion"`
+			HTMLURL      string `json:"html_url"`
+			HeadSha      string `json:"head_sha"`
+			PullRequests []struct {
+				HTMLURL string `json:"html_url"`
+			} `json:"pull_requests"`
+		} `json:"check_run"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	sourceURL := ev.CheckRun.HTMLURL
+	sourceKind := "commit"
+	if len(ev.CheckRun.PullRequests) > 0 && ev.CheckRun.PullRequests[0].HTMLURL != "" {
+		sourceURL = ev.CheckRun.PullRequests[0].HTMLURL
+		sourceKind = "pr"
+	}
+	return map[string]string{
+		"action":      ev.Action,
+		"repo":        ev.Repository.FullName,
+		"check_name":  ev.CheckRun.Name,
+		"status":      ev.CheckRun.Status,
+		"conclusion":  ev.CheckRun.Conclusion,
+		"html_url":    ev.CheckRun.HTMLURL,
+		"sha":         ev.CheckRun.HeadSha,
+		"source_url":  sourceURL,
+		"source_kind": sourceKind,
+		"external_id": ev.Repository.FullName + "@" + ev.CheckRun.HeadSha,
+		"title":       fmt.Sprintf("Check run %s: %s", ev.CheckRun.Name, ev.CheckRun.Conclusion),
+		"body":        fmt.Sprintf("**Check run:** %s\n**Status:** %s\n**Conclusion:** %s\n**Commit:** `%s`\n**Details:** %s", ev.CheckRun.Name, ev.CheckRun.Status, ev.CheckRun.Conclusion, ev.CheckRun.HeadSha, ev.CheckRun.HTMLURL),
+	}
+}
+
+func parseGitHubCheckSuite(body []byte) map[string]string {
+	var ev struct {
+		Action     string `json:"action"`
+		CheckSuite struct {
+			Status       string `json:"status"`
+			Conclusion   string `json:"conclusion"`
+			HeadSha      string `json:"head_sha"`
+			PullRequests []struct {
+				HTMLURL string `json:"html_url"`
+			} `json:"pull_requests"`
+		} `json:"check_suite"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	sourceURL := ""
+	sourceKind := "commit"
+	if len(ev.CheckSuite.PullRequests) > 0 && ev.CheckSuite.PullRequests[0].HTMLURL != "" {
+		sourceURL = ev.CheckSuite.PullRequests[0].HTMLURL
+		sourceKind = "pr"
+	}
+	return map[string]string{
+		"action":      ev.Action,
+		"repo":        ev.Repository.FullName,
+		"check_name":  "check suite",
+		"status":      ev.CheckSuite.Status,
+		"conclusion":  ev.CheckSuite.Conclusion,
+		"sha":         ev.CheckSuite.HeadSha,
+		"source_url":  sourceURL,
+		"source_kind": sourceKind,
+		"external_id": ev.Repository.FullName + "@" + ev.CheckSuite.HeadSha,
+		"title":       fmt.Sprintf("Check suite: %s", ev.CheckSuite.Conclusion),
+		"body":        fmt.Sprintf("**Check suite status:** %s\n**Conclusion:** %s\n**Commit:** `%s`", ev.CheckSuite.Status, ev.CheckSuite.Conclusion, ev.CheckSuite.HeadSha),
+	}
+}
+
+func parseGitHubStatus(body []byte) map[string]string {
+	var ev struct {
+		State       string `json:"state"`
+		Context     string `json:"context"`
+		Description string `json:"description"`
+		TargetURL   string `json:"target_url"`
+		Sha         string `json:"sha"`
+		Repository  struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	return map[string]string{
+		"action":      ev.State,
+		"repo":        ev.Repository.FullName,
+		"check_name":  ev.Context,
+		"status":      ev.State,
+		"conclusion":  ev.State,
+		"html_url":    ev.TargetURL,
+		"sha":         ev.Sha,
+		"source_url":  ev.TargetURL,
+		"source_kind": "commit",
+		"external_id": ev.Repository.FullName + "@" + ev.Sha,
+		"title":       fmt.Sprintf("Status %s: %s", ev.Context, ev.State),
+		"body":        fmt.Sprintf("**Status:** %s\n**Context:** %s\n**Description:** %s\n**Commit:** `%s`\n**Details:** %s", ev.State, ev.Context, ev.Description, ev.Sha, ev.TargetURL),
+	}
+}
+
+func parseGitHubWorkflowRun(body []byte) map[string]string {
+	var ev struct {
+		Action      string `json:"action"`
+		WorkflowRun struct {
+			Name         string `json:"name"`
+			Status       string `json:"status"`
+			Conclusion   string `json:"conclusion"`
+			HTMLURL      string `json:"html_url"`
+			HeadSha      string `json:"head_sha"`
+			HeadBranch   string `json:"head_branch"`
+			PullRequests []struct {
+				URL    string `json:"url"`
+				Number int    `json:"number"`
+			} `json:"pull_requests"`
+		} `json:"workflow_run"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	sourceURL := ev.WorkflowRun.HTMLURL
+	sourceKind := "commit"
+	if len(ev.WorkflowRun.PullRequests) > 0 && ev.WorkflowRun.PullRequests[0].Number > 0 {
+		sourceURL = fmt.Sprintf("https://github.com/%s/pull/%d", ev.Repository.FullName, ev.WorkflowRun.PullRequests[0].Number)
+		sourceKind = "pr"
+	}
+	return map[string]string{
+		"action":      ev.Action,
+		"repo":        ev.Repository.FullName,
+		"check_name":  ev.WorkflowRun.Name,
+		"status":      ev.WorkflowRun.Status,
+		"conclusion":  ev.WorkflowRun.Conclusion,
+		"html_url":    ev.WorkflowRun.HTMLURL,
+		"sha":         ev.WorkflowRun.HeadSha,
+		"branch":      ev.WorkflowRun.HeadBranch,
+		"source_url":  sourceURL,
+		"source_kind": sourceKind,
+		"external_id": ev.Repository.FullName + "@" + ev.WorkflowRun.HeadSha,
+		"title":       fmt.Sprintf("Workflow %s: %s", ev.WorkflowRun.Name, ev.WorkflowRun.Conclusion),
+		"body":        fmt.Sprintf("**Workflow:** %s\n**Status:** %s\n**Conclusion:** %s\n**Branch:** `%s`\n**Commit:** `%s`\n**Details:** %s", ev.WorkflowRun.Name, ev.WorkflowRun.Status, ev.WorkflowRun.Conclusion, ev.WorkflowRun.HeadBranch, ev.WorkflowRun.HeadSha, ev.WorkflowRun.HTMLURL),
+	}
+}
+
 func (a *githubAdapter) Keys() []AdapterKey {
 	return []AdapterKey{
 		{Key: "title", Description: "Default event title (push/PR/issue/comment summary)", Required: true},
@@ -403,6 +563,10 @@ func (a *githubAdapter) Keys() []AdapterKey {
 		{Key: "external_id", Description: "Compact id like 'owner/repo#123'", Required: false},
 		{Key: "comment_body", Description: "Full comment body (issue_comment only)", Required: false},
 		{Key: "commits", Description: "Markdown list of commits (push only)", Required: false},
+		{Key: "check_name", Description: "Check/status/workflow name (CI events only)", Required: false},
+		{Key: "status", Description: "Check/status/workflow status (CI events only)", Required: false},
+		{Key: "conclusion", Description: "Check/status/workflow conclusion (CI events only)", Required: false},
+		{Key: "sha", Description: "Commit SHA (CI events only)", Required: false},
 	}
 }
 

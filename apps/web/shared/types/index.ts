@@ -41,6 +41,19 @@ export type { NotificationChannel, NotificationChannelType, UpsertTelegramChanne
 export type { WorkspaceTelegramSettings, UpsertWorkspaceTelegramRequest } from "./workspace_telegram";
 export type { RecurringTemplate, CreateRecurringTemplateRequest, UpdateRecurringTemplateRequest } from "./recurring_template";
 export type {
+  Routine,
+  RoutineTrigger,
+  RoutineTriggerType,
+  RoutineAction,
+  RoutineActionType,
+  RoutineRun,
+  RoutineRunStatus,
+  CreateRoutineRequest,
+  UpdateRoutineRequest,
+  RoutineTriggerRequest,
+  RoutineActionRequest,
+} from "./routine";
+export type {
   Webhook,
   WebhookAction,
   WebhookActionType,

@@ -219,6 +219,45 @@ func TestGitHubAdapter_IssueCommentOnIssue(t *testing.T) {
 	}
 }
 
+func TestGitHubAdapter_CheckRunCompletedOnPR(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "completed",
+		"check_run": {
+			"name": "CI",
+			"status": "completed",
+			"conclusion": "failure",
+			"html_url": "https://github.com/org/repo/runs/123",
+			"head_sha": "abc123",
+			"pull_requests": [{"html_url": "https://github.com/org/repo/pull/42"}]
+		},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "check_run")
+
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event")
+	}
+	ev := events[0]
+	if ev.Type != "github.check_run.completed" {
+		t.Errorf("type = %q", ev.Type)
+	}
+	if ev.Data["source_url"] != "https://github.com/org/repo/pull/42" {
+		t.Errorf("source_url = %q", ev.Data["source_url"])
+	}
+	if ev.Data["source_kind"] != "pr" {
+		t.Errorf("source_kind = %q", ev.Data["source_kind"])
+	}
+	if ev.Data["check_name"] != "CI" || ev.Data["conclusion"] != "failure" {
+		t.Errorf("check data = name %q conclusion %q", ev.Data["check_name"], ev.Data["conclusion"])
+	}
+}
+
 func TestGitHubAdapter_FiltersIrrelevantActions(t *testing.T) {
 	a := &githubAdapter{}
 	// "assigned" is one of the actions we still drop; label-add is now passed

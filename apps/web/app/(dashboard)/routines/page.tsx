@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Bell,
@@ -12,13 +13,14 @@ import {
   GitBranch as Github,
   Plus,
   Save,
+  Sparkles,
   Tag,
   Users,
   X,
 } from "lucide-react";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -40,7 +42,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { AssigneePicker } from "@/features/issues/components/pickers";
 import { useLabelStore } from "@/features/labels";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
-import type { IssueAssigneeType, IssuePriority, UpdateIssueRequest } from "@/shared/types";
+import { api } from "@/shared/api";
+import type { CreateRoutineRequest, IssueAssigneeType, IssuePriority, Routine, RoutineTriggerRequest, UpdateIssueRequest } from "@/shared/types";
+import { toast } from "sonner";
 
 type TriggerType = "schedule" | "github" | "api";
 type ScheduleMode = "once" | "hourly" | "daily" | "weekdays" | "weekly" | "custom";
@@ -188,6 +192,94 @@ function EmptyHint({ children }: { children: React.ReactNode }) {
 }
 
 export default function RoutinesPage() {
+  const searchParams = useSearchParams();
+  const editRoutineID = searchParams.get("id");
+  const mode = searchParams.get("new") === "1" ? "new" : "list";
+
+  if (mode === "new") {
+    return <RoutineCreatePage routineID={editRoutineID} />;
+  }
+  return <RoutineListPage />;
+}
+
+function RoutineListPage() {
+  const [routines, setRoutines] = useState<Routine[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api.listRoutines()
+      .then((result) => {
+        if (!cancelled) setRoutines(result);
+      })
+      .catch((error) => {
+        if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routines");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <main className="h-full min-h-0 overflow-y-auto bg-background">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-6 py-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Routines</h1>
+            <p className="text-sm text-muted-foreground">
+              Automate recurring work, GitHub events, and API-triggered issue creation.
+            </p>
+          </div>
+          <a href="/routines?new=1" className={buttonVariants()}>
+            <Plus className="size-4" />
+            New routine
+          </a>
+        </div>
+
+        {loading ? (
+          <div className="rounded-xl border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
+            Loading routines...
+          </div>
+        ) : routines.length === 0 ? (
+          <div className="rounded-xl border bg-muted/20 p-8 text-center">
+            <div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+              <Sparkles className="size-5" />
+            </div>
+            <h2 className="text-sm font-medium">No routines yet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Create your first routine to schedule work or react to external events.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {routines.map((routine) => (
+              <a
+                key={routine.id}
+                href={`/routines/${routine.id}`}
+                className="flex items-center justify-between rounded-xl border px-4 py-3 transition-colors hover:bg-accent/50"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{routine.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {routine.triggers.length} trigger{routine.triggers.length === 1 ? "" : "s"}
+                    {" · "}
+                    {routine.enabled ? "Enabled" : "Paused"}
+                  </span>
+                </span>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
+
+function RoutineCreatePage({ routineID }: { routineID: string | null }) {
   const members = useWorkspaceStore((s) => s.members);
   const labels = useLabelStore((s) => s.labels);
   const { getActorName } = useActorName();
@@ -213,6 +305,8 @@ export default function RoutinesPage() {
   const [cronExpression, setCronExpression] = useState("0 9 * * 1");
   const [githubEventValues, setGithubEventValues] = useState<string[]>(["github.pull_request.opened"]);
   const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [loadingRoutine, setLoadingRoutine] = useState(Boolean(routineID));
 
   const assigneeLabel =
     assigneeType && assigneeId ? getActorName(assigneeType, assigneeId) : "Unassigned";
@@ -241,6 +335,12 @@ export default function RoutinesPage() {
     () => buildGitHubEventSummary(githubEventValues),
     [githubEventValues],
   );
+  const canSubmitRoutine =
+    name.trim() !== "" &&
+    instructions.trim() !== "" &&
+    assigneeType !== null &&
+    assigneeId !== null &&
+    selectedTriggerTypes.length > 0;
 
   const toggleSubscriber = (id: string) => {
     setSelectedSubscriberIds((current) =>
@@ -273,12 +373,119 @@ export default function RoutinesPage() {
     setOpenTriggerType((current) => (current === type ? null : current));
   };
 
+  useEffect(() => {
+    if (!routineID) return;
+    let cancelled = false;
+    setLoadingRoutine(true);
+    api.getRoutine(routineID)
+      .then((routine) => {
+        if (cancelled) return;
+        setName(routine.name);
+        setInstructions(routine.instructions ?? "");
+        setPriority(routine.priority);
+        setAssigneeType(routine.assignee_type ?? null);
+        setAssigneeId(routine.assignee_id ?? null);
+        setDispatchProvider(routine.dispatch_provider ?? null);
+        setDispatchDaemonId(routine.dispatch_daemon_id ?? null);
+        setDispatchDaemonLabel(routine.dispatch_daemon_label ?? null);
+        setSelectedSubscriberIds(routine.subscriber_ids ?? []);
+        setSelectedLabelIds(routine.label_ids ?? []);
+        setEnabled(routine.enabled);
+        const triggerTypes = routine.triggers.map((trigger) => trigger.trigger_type as TriggerType);
+        setSelectedTriggerTypes(triggerTypes);
+        setOpenTriggerType(triggerTypes[0] ?? null);
+        const scheduleTrigger = routine.triggers.find((trigger) => trigger.trigger_type === "schedule");
+        if (scheduleTrigger?.schedule) {
+          setScheduleMode("custom");
+          setCronExpression(scheduleTrigger.schedule);
+        }
+        const githubTrigger = routine.triggers.find((trigger) => trigger.trigger_type === "github");
+        const eventTypes = githubTrigger?.config?.event_types;
+        if (Array.isArray(eventTypes)) {
+          setGithubEventValues(eventTypes.filter((event): event is string => typeof event === "string"));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routine");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRoutine(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [routineID]);
+
+  const handleCreateRoutine = async () => {
+    if (!name.trim()) {
+      toast.error("Routine name is required");
+      return;
+    }
+    if (!canSubmitRoutine) {
+      toast.error("Name, instructions, assignee, and at least one trigger are required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = buildRoutinePayload({
+        name,
+        instructions,
+        priority,
+        assigneeType,
+        assigneeId,
+        dispatchProvider,
+        dispatchDaemonId,
+        dispatchDaemonLabel,
+        enabled,
+        selectedSubscriberIds,
+        selectedLabelIds,
+        selectedTriggerTypes,
+        scheduleMode,
+        runAt,
+        hourlyMinute,
+        timeOfDay,
+        weeklyDay,
+        cronExpression,
+        githubEventValues,
+      });
+      if (routineID) {
+        await api.updateRoutine(routineID, payload);
+        toast.success("Routine updated");
+        window.location.href = `/routines/${routineID}`;
+      } else {
+        await api.createRoutine(payload);
+        toast.success("Routine created");
+        window.location.href = "/routines";
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create routine");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <main
       data-testid="routines-page-scroll"
       className="h-full min-h-0 overflow-y-auto bg-background"
     >
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-6 py-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Sparkles className="size-4" />
+            <a href="/routines" className="hover:text-foreground">Routines</a>
+            <span>/</span>
+            <span>New routine</span>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">{routineID ? "Edit routine" : "New routine"}</h1>
+        </div>
+
+        {loadingRoutine ? (
+          <div className="rounded-xl border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
+            Loading routine...
+          </div>
+        ) : (
+        <>
         <section className="space-y-4">
             <section className="grid gap-2">
               <Label htmlFor="routine-name">
@@ -553,11 +760,13 @@ export default function RoutinesPage() {
             <Switch checked={enabled} onCheckedChange={setEnabled} aria-label="Routine enabled" />
             <span className="text-xs font-medium">{enabled ? "Enabled" : "Paused"}</span>
           </div>
-          <Button disabled>
+          <Button disabled={saving || loadingRoutine || !canSubmitRoutine} onClick={handleCreateRoutine}>
             <Save className="size-4" />
-            Create routine
+            {saving ? (routineID ? "Updating..." : "Creating...") : (routineID ? "Update routine" : "Create routine")}
           </Button>
         </div>
+        </>
+        )}
       </div>
     </main>
   );
@@ -997,6 +1206,158 @@ function buildGitHubEventSummary(selectedEvents: string[]) {
       .join(", ");
   }
   return `${selectedEvents.length} events selected`;
+}
+
+function buildRoutinePayload({
+  name,
+  instructions,
+  priority,
+  assigneeType,
+  assigneeId,
+  dispatchProvider,
+  dispatchDaemonId,
+  dispatchDaemonLabel,
+  enabled,
+  selectedSubscriberIds,
+  selectedLabelIds,
+  selectedTriggerTypes,
+  scheduleMode,
+  runAt,
+  hourlyMinute,
+  timeOfDay,
+  weeklyDay,
+  cronExpression,
+  githubEventValues,
+}: {
+  name: string;
+  instructions: string;
+  priority: IssuePriority;
+  assigneeType: IssueAssigneeType | null;
+  assigneeId: string | null;
+  dispatchProvider: string | null;
+  dispatchDaemonId: string | null;
+  dispatchDaemonLabel: string | null;
+  enabled: boolean;
+  selectedSubscriberIds: string[];
+  selectedLabelIds: string[];
+  selectedTriggerTypes: TriggerType[];
+  scheduleMode: ScheduleMode;
+  runAt: string;
+  hourlyMinute: string;
+  timeOfDay: string;
+  weeklyDay: string;
+  cronExpression: string;
+  githubEventValues: string[];
+}): CreateRoutineRequest {
+  return {
+    name: name.trim(),
+    instructions: instructions.trim() || null,
+    priority,
+    assignee_type: assigneeType,
+    assignee_id: assigneeId,
+    dispatch_provider: dispatchProvider,
+    dispatch_daemon_id: dispatchDaemonId,
+    dispatch_daemon_label: dispatchDaemonLabel,
+    enabled,
+    subscriber_ids: selectedSubscriberIds,
+    label_ids: selectedLabelIds,
+    triggers: selectedTriggerTypes.map((triggerType) =>
+      buildRoutineTrigger({
+        triggerType,
+        scheduleMode,
+        runAt,
+        hourlyMinute,
+        timeOfDay,
+        weeklyDay,
+        cronExpression,
+        githubEventValues,
+      }),
+    ),
+    actions: [
+      {
+        action_type: "create_issue",
+        config: {},
+        enabled: true,
+        position: 0,
+      },
+    ],
+  };
+}
+
+function buildRoutineTrigger({
+  triggerType,
+  scheduleMode,
+  runAt,
+  hourlyMinute,
+  timeOfDay,
+  weeklyDay,
+  cronExpression,
+  githubEventValues,
+}: {
+  triggerType: TriggerType;
+  scheduleMode: ScheduleMode;
+  runAt: string;
+  hourlyMinute: string;
+  timeOfDay: string;
+  weeklyDay: string;
+  cronExpression: string;
+  githubEventValues: string[];
+}): RoutineTriggerRequest {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  if (triggerType === "schedule") {
+    const trigger: RoutineTriggerRequest = {
+      trigger_type: "schedule",
+      timezone,
+      config: { mode: scheduleMode },
+      enabled: true,
+    };
+    if (scheduleMode === "once") {
+      trigger.run_at = parseLocalDateTime(runAt)?.toISOString() ?? null;
+      return trigger;
+    }
+    trigger.schedule = scheduleToCron(scheduleMode, hourlyMinute, timeOfDay, weeklyDay, cronExpression);
+    return trigger;
+  }
+  if (triggerType === "github") {
+    return {
+      trigger_type: "github",
+      config: { event_types: githubEventValues },
+      enabled: true,
+    };
+  }
+  return {
+    trigger_type: "api",
+    source_type: "standard",
+    config: {},
+    enabled: true,
+  };
+}
+
+function scheduleToCron(mode: ScheduleMode, hourlyMinute: string, timeOfDay: string, weeklyDay: string, cronExpression: string) {
+  if (mode === "custom") return cronExpression.trim();
+  const [hour = "9", minute = "0"] = timeOfDay.split(":");
+  if (mode === "hourly") return `${normalizeCronNumber(hourlyMinute, "0")} * * * *`;
+  if (mode === "daily") return `${normalizeCronNumber(minute, "0")} ${normalizeCronNumber(hour, "9")} * * *`;
+  if (mode === "weekdays") return `${normalizeCronNumber(minute, "0")} ${normalizeCronNumber(hour, "9")} * * 1-5`;
+  if (mode === "weekly") return `${normalizeCronNumber(minute, "0")} ${normalizeCronNumber(hour, "9")} * * ${weekDayToCron(weeklyDay)}`;
+  return cronExpression.trim();
+}
+
+function normalizeCronNumber(value: string, fallback: string) {
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? trimmed : fallback;
+}
+
+function weekDayToCron(day: string) {
+  const index = weekDays.indexOf(day);
+  return index < 0 ? "1" : String(index + 1);
+}
+
+function parseLocalDateTime(value: string) {
+  const match = value.match(/^(\d{4})\/(\d{2})\/(\d{2}),\s*(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
 }
 
 function GitHubFilterRow({

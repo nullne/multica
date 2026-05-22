@@ -81,6 +81,7 @@ func main() {
 	schedCtx, schedCancel := context.WithCancel(context.Background())
 	taskSvc := service.NewTaskService(queries, hub, bus)
 	go runRecurringScheduler(schedCtx, pool, queries, taskSvc, bus)
+	go runRoutineScheduler(schedCtx, pool, queries, taskSvc)
 
 	// Graceful shutdown
 	go func() {
