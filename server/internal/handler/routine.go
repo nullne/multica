@@ -90,6 +90,11 @@ type RoutineRunResponse struct {
 	Issue        *IssueResponse `json:"issue,omitempty"`
 }
 
+type RoutineTriggerTokenResponse struct {
+	Trigger RoutineTriggerResponse `json:"trigger"`
+	Token   string                 `json:"token"`
+}
+
 type CreateRoutineRequest struct {
 	Name                string                  `json:"name"`
 	Instructions        *string                 `json:"instructions"`
@@ -328,6 +333,132 @@ func (h *Handler) DeleteRoutine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) TriggerRoutine(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	id := parseUUID(chi.URLParam(r, "id"))
+	routine, err := h.Queries.GetRoutineInWorkspace(r.Context(), db.GetRoutineInWorkspaceParams{
+		ID:          id,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "routine not found")
+		return
+	}
+	if !routine.Enabled {
+		writeError(w, http.StatusBadRequest, "routine is paused")
+		return
+	}
+	triggers, err := h.Queries.ListRoutineTriggers(r.Context(), routine.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load routine triggers")
+		return
+	}
+	var trigger db.RoutineTrigger
+	for _, candidate := range triggers {
+		if candidate.Enabled {
+			trigger = candidate
+			break
+		}
+	}
+	if !trigger.ID.Valid {
+		writeError(w, http.StatusBadRequest, "routine has no enabled triggers")
+		return
+	}
+	actions, err := h.Queries.ListEnabledRoutineActions(r.Context(), routine.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load routine actions")
+		return
+	}
+	if len(actions) == 0 {
+		writeError(w, http.StatusBadRequest, "routine has no enabled actions")
+		return
+	}
+	body := ""
+	if routine.Instructions.Valid {
+		body = routine.Instructions.String
+	}
+	payload, _ := json.Marshal(map[string]string{"manual": "true"})
+	evt := service.RoutineEvent{
+		Type:     "manual",
+		DedupKey: "manual:" + uuidToString(routine.ID) + ":" + time.Now().UTC().Format(time.RFC3339Nano),
+		Data: map[string]string{
+			"title": routine.Name,
+			"body":  body,
+		},
+		Payload: payload,
+	}
+	routineSvc := service.NewRoutineService(h.Queries, h.TxStarter, h.TaskService)
+	ran := 0
+	for _, action := range actions {
+		result, err := routineSvc.ExecuteAction(r.Context(), routine, trigger, action, evt)
+		if err != nil {
+			slog.Warn("manual routine trigger action failed", "routine_id", uuidToString(routine.ID), "action_id", uuidToString(action.ID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to trigger routine")
+			return
+		}
+		if result.Ran {
+			ran++
+		}
+	}
+	if ran > 0 {
+		if _, err := h.Queries.IncrementRoutineTriggerSuccess(r.Context(), trigger.ID); err != nil {
+			slog.Warn("manual routine trigger success increment failed", "trigger_id", uuidToString(trigger.ID), "error", err)
+		}
+	}
+	writeJSON(w, http.StatusAccepted, map[string]int{"ran": ran})
+}
+
+func (h *Handler) RegenerateRoutineTriggerToken(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	triggerID := parseUUID(chi.URLParam(r, "triggerId"))
+	trigger, err := h.Queries.GetRoutineTriggerInWorkspace(r.Context(), db.GetRoutineTriggerInWorkspaceParams{
+		ID:          triggerID,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil || uuidToString(trigger.RoutineID) != chi.URLParam(r, "id") {
+		writeError(w, http.StatusNotFound, "routine trigger not found")
+		return
+	}
+	if trigger.TriggerType != "api" {
+		writeError(w, http.StatusBadRequest, "only API routine triggers use tokens")
+		return
+	}
+
+	rawToken, err := wh.GenerateToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+	prefix := rawToken
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+	updated, err := h.Queries.UpdateRoutineTrigger(r.Context(), db.UpdateRoutineTriggerParams{
+		ID:                 trigger.ID,
+		SourceType:         trigger.SourceType,
+		TokenHash:          pgtype.Text{String: auth.HashToken(rawToken), Valid: true},
+		TokenPrefix:        prefix,
+		InstallationID:     trigger.InstallationID,
+		Schedule:           trigger.Schedule,
+		Timezone:           trigger.Timezone,
+		RunAt:              trigger.RunAt,
+		NextRunAt:          trigger.NextRunAt,
+		DedupWindowSeconds: trigger.DedupWindowSeconds,
+		MaxRuns:            trigger.MaxRuns,
+		Config:             trigger.Config,
+		Enabled:            trigger.Enabled,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to regenerate routine trigger token")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, RoutineTriggerTokenResponse{
+		Trigger: routineTriggerToResponse(updated, rawToken),
+		Token:   rawToken,
+	})
 }
 
 func validateRoutineRequest(req CreateRoutineRequest) string {

@@ -962,6 +962,19 @@ export class ApiClient {
     await this.fetch(`/api/routines/${id}`, { method: "DELETE" });
   }
 
+  async triggerRoutine(id: string): Promise<{ ran: number }> {
+    return this.fetch(`/api/routines/${id}/trigger`, { method: "POST" });
+  }
+
+  async regenerateRoutineTriggerToken(
+    routineId: string,
+    triggerId: string,
+  ): Promise<{ trigger: Routine["triggers"][number]; token: string }> {
+    return this.fetch(`/api/routines/${routineId}/triggers/${triggerId}/regenerate-token`, {
+      method: "POST",
+    });
+  }
+
   async listRoutineRuns(id: string): Promise<RoutineRun[]> {
     return this.fetch(`/api/routines/${id}/runs`);
   }

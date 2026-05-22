@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useAuthStore } from "@/features/auth";
+import { useWorkspaceStore } from "@/features/workspace";
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -10,6 +12,8 @@ const mocks = vi.hoisted(() => ({
     getRoutine: vi.fn(),
     listRoutineRuns: vi.fn(),
   },
+  regenerateRoutineTriggerToken: vi.fn(),
+  clipboardWriteText: vi.fn(),
   toast: {
     success: vi.fn(),
     error: vi.fn(),
@@ -47,6 +51,7 @@ vi.mock("@/features/issues/components/pickers", () => ({
 
 vi.mock("@/shared/api", () => ({
   api: mocks.api,
+  regenerateRoutineTriggerToken: mocks.regenerateRoutineTriggerToken,
 }));
 
 vi.mock("sonner", () => ({
@@ -62,12 +67,45 @@ import RoutinesPage from "./page";
 describe("RoutinesPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: mocks.clipboardWriteText.mockResolvedValue(undefined),
+      },
+    });
+    useAuthStore.setState({
+      user: {
+        id: "user-1",
+        name: "Dev User",
+        email: "dev@example.com",
+        avatar_url: null,
+        created_at: "2026-05-22T08:00:00Z",
+        updated_at: "2026-05-22T08:00:00Z",
+      },
+      isLoading: false,
+    });
+    useWorkspaceStore.setState({
+      members: [
+        {
+          id: "member-1",
+          workspace_id: "ws-1",
+          user_id: "user-1",
+          role: "owner",
+          name: "Dev User",
+          email: "dev@example.com",
+          avatar_url: null,
+          kind: "human",
+          created_at: "2026-05-22T08:00:00Z",
+        },
+      ],
+      agents: [],
+    });
     mocks.api.listRoutines.mockResolvedValue([]);
     mocks.api.getRoutine.mockResolvedValue(null);
     mocks.api.listRoutineRuns.mockResolvedValue([]);
     mocks.api.createRoutine.mockResolvedValue({
-        id: "routine-1",
-        workspace_id: "ws-1",
+      id: "routine-1",
+      workspace_id: "ws-1",
       name: "Daily review",
       triggers: [],
       actions: [],
@@ -76,6 +114,101 @@ describe("RoutinesPage", () => {
       enabled: true,
     });
     mocks.api.updateRoutine.mockResolvedValue({});
+    mocks.regenerateRoutineTriggerToken.mockResolvedValue({
+      trigger: {
+        id: "trigger-api",
+        routine_id: "routine-1",
+        trigger_type: "api",
+        source_type: "standard",
+        token_prefix: "sk-new-token",
+        timezone: "UTC",
+        dedup_window_seconds: 600,
+        successful_runs_count: 0,
+        config: {},
+        enabled: true,
+        created_at: "2026-05-22T08:00:00Z",
+        updated_at: "2026-05-22T08:00:00Z",
+      },
+      token: "sk-new-token-full",
+    });
+  });
+
+  it("defaults subscribers to the current user and summarizes selected members", async () => {
+    const user = userEvent.setup();
+    useWorkspaceStore.setState({
+      members: [
+        {
+          id: "member-1",
+          workspace_id: "ws-1",
+          user_id: "user-1",
+          role: "owner",
+          name: "Dev User",
+          email: "dev@example.com",
+          avatar_url: null,
+          kind: "human",
+          created_at: "2026-05-22T08:00:00Z",
+        },
+        {
+          id: "member-2",
+          workspace_id: "ws-1",
+          user_id: "user-2",
+          role: "member",
+          name: "Alex Chen",
+          email: "alex@example.com",
+          avatar_url: null,
+          kind: "human",
+          created_at: "2026-05-22T08:00:00Z",
+        },
+        {
+          id: "member-3",
+          workspace_id: "ws-1",
+          user_id: "user-3",
+          role: "member",
+          name: "Mina Park",
+          email: "mina@example.com",
+          avatar_url: null,
+          kind: "human",
+          created_at: "2026-05-22T08:00:00Z",
+        },
+        {
+          id: "member-4",
+          workspace_id: "ws-1",
+          user_id: "user-4",
+          role: "member",
+          name: "Sam Lee",
+          email: "sam@example.com",
+          avatar_url: null,
+          kind: "human",
+          created_at: "2026-05-22T08:00:00Z",
+        },
+      ],
+    });
+    mocks.searchParams = new URLSearchParams("new=1");
+
+    render(<RoutinesPage />);
+
+    expect(screen.getByRole("button", { name: /Dev User/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Dev User/i }));
+    await user.click(screen.getByRole("button", { name: /Alex Chen/i }));
+    await user.click(screen.getByRole("button", { name: /Mina Park/i }));
+    await user.click(screen.getByRole("button", { name: /Sam Lee/i }));
+
+    expect(screen.getByRole("button", { name: /Dev User, Alex Chen, Mina Park \+1 more/i })).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/Name/), "Daily review");
+    await user.type(screen.getByLabelText("Instructions"), "Review the code every day");
+    await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /API/i }));
+    await user.click(screen.getByRole("button", { name: /Create routine/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRoutine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subscriber_ids: ["user-1", "user-2", "user-3", "user-4"],
+        }),
+      );
+    });
   });
 
   it("renders the routines list by default", () => {
@@ -158,16 +291,17 @@ describe("RoutinesPage", () => {
 
     expect(screen.getByRole("button", { name: /Runs on cron 0 9/ })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByText("Run on a recurring cron schedule or once at a future time")).toBeInTheDocument();
-    expect(screen.getAllByText("PR opened").length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByRole("tab", { name: "PR opened" })).not.toBeInTheDocument();
-    expect(screen.getByText("Pull requests")).toBeInTheDocument();
-    const pullRequestGroup = screen.getByText("Pull requests").parentElement!.parentElement!;
-    expect(within(pullRequestGroup).getByRole("button", { name: "Opened" })).toHaveAttribute("aria-pressed", "true");
-    expect(within(pullRequestGroup).getByRole("button", { name: "Merged" })).toHaveAttribute("aria-pressed", "false");
-    await user.click(within(pullRequestGroup).getByRole("button", { name: "Merged" }));
+    expect(screen.getByText("Event")).toBeInTheDocument();
+    const eventTypeTrigger = screen.getByRole("button", { name: "GitHub event type" });
+    expect(eventTypeTrigger).toBeInTheDocument();
+    await user.click(eventTypeTrigger);
+    const eventSearch = await screen.findByRole("textbox", { name: /Search GitHub events/i });
+    await user.type(eventSearch, "merged");
+    const mergedItem = await screen.findByRole("menuitemcheckbox", { name: "Merged" });
+    expect(mergedItem).toHaveAttribute("aria-checked", "false");
+    await user.click(mergedItem);
+    await user.keyboard("{Escape}");
     expect(screen.getAllByText("PR opened, PR merged").length).toBeGreaterThanOrEqual(1);
-    await user.click(within(pullRequestGroup).getByRole("button", { name: "All" }));
-    expect(screen.getAllByText("6 events selected").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Add a filter condition")).toBeInTheDocument();
     expect(screen.queryByText("GitHub labels")).not.toBeInTheDocument();
 
@@ -175,7 +309,7 @@ describe("RoutinesPage", () => {
 
     expect(screen.getByDisplayValue("Author")).toBeInTheDocument();
     expect(screen.getByText("is one of")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Values")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Comma-separated values")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText(/Name/), "Daily review");
     expect(screen.getByRole("button", { name: /Create routine/i })).toBeDisabled();
@@ -207,6 +341,162 @@ describe("RoutinesPage", () => {
         }),
       );
     });
+  });
+
+  it("searches events and mixes selections across categories", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+    await user.click(screen.getByRole("button", { name: "GitHub event type" }));
+
+    const eventSearch = await screen.findByRole("textbox", { name: /Search GitHub events/i });
+    await user.type(eventSearch, "publish");
+    const published = await screen.findByRole("menuitemcheckbox", { name: "Published" });
+    expect(published).toHaveAttribute("aria-checked", "false");
+    await user.click(published);
+
+    await user.clear(eventSearch);
+    await user.type(eventSearch, "created");
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Created" }));
+    await user.keyboard("{Escape}");
+
+    // Default pull_request.opened + release.published + release.created
+    expect(screen.getAllByText("3 events · 2 categories").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("offers event presets and falls back to Custom for manual selections", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+
+    const presets = screen.getByRole("group", { name: "GitHub event presets" });
+    // Default selection (pull_request.opened) matches the "PR opened" preset
+    expect(within(presets).getByRole("button", { name: "PR opened" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(presets).getByRole("button", { name: "Custom" })).toHaveAttribute("aria-pressed", "false");
+
+    // Picking a preset swaps the selection
+    await user.click(within(presets).getByRole("button", { name: "Release published" }));
+    expect(within(presets).getByRole("button", { name: "Release published" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(presets).getByRole("button", { name: "PR opened" })).toHaveAttribute("aria-pressed", "false");
+
+    // A manual multi-event selection via the dropdown lights up Custom
+    await user.click(screen.getByRole("button", { name: "GitHub event type" }));
+    const eventSearch = await screen.findByRole("textbox", { name: /Search GitHub events/i });
+    await user.type(eventSearch, "merged");
+    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Merged" }));
+    await user.keyboard("{Escape}");
+    expect(within(presets).getByRole("button", { name: "Custom" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows API trigger URL and generated token after create", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+    mocks.api.createRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "API routine",
+      priority: "medium",
+      assignee_id: "agent-1",
+      assignee_type: "agent",
+      triggers: [
+        {
+          id: "trigger-api",
+          routine_id: "routine-1",
+          trigger_type: "api",
+          source_type: "standard",
+          token_prefix: "sk-api-token",
+          token: "sk-api-token-full",
+          timezone: "UTC",
+          dedup_window_seconds: 600,
+          successful_runs_count: 0,
+          config: {},
+          enabled: true,
+          created_at: "2026-05-22T08:00:00Z",
+          updated_at: "2026-05-22T08:00:00Z",
+        },
+      ],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+    });
+
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /API/i }));
+
+    expect(screen.getByText("API URL")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save routine first/i })).toBeDisabled();
+
+    await user.type(screen.getByLabelText(/Name/), "API routine");
+    await user.type(screen.getByLabelText("Instructions"), "Create from API");
+    await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
+    await user.click(screen.getByRole("button", { name: /Create routine/i }));
+
+    expect(await screen.findByDisplayValue(/\/api\/routine-triggers\/trigger-api/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("sk-api-token...")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "API token generated" })).toBeInTheDocument();
+    expect(screen.getByText("sk-api-token-full")).toBeInTheDocument();
+    expect(screen.getByText(/curl -X POST/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy token" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy curl request" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("button", { name: /Regenerate token/i })).not.toBeDisabled();
+  });
+
+  it("shows existing API trigger prefix and regenerates the token in edit mode", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1&id=routine-1");
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Existing API routine",
+      instructions: "Existing instructions",
+      priority: "high",
+      assignee_id: "agent-1",
+      assignee_type: "agent",
+      triggers: [
+        {
+          id: "trigger-api",
+          routine_id: "routine-1",
+          trigger_type: "api",
+          source_type: "standard",
+          token_prefix: "sk-old-token",
+          timezone: "UTC",
+          dedup_window_seconds: 600,
+          successful_runs_count: 0,
+          config: {},
+          enabled: true,
+          created_at: "2026-05-22T08:00:00Z",
+          updated_at: "2026-05-22T08:00:00Z",
+        },
+      ],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+    });
+
+    render(<RoutinesPage />);
+
+    expect(await screen.findByDisplayValue(/\/api\/routine-triggers\/trigger-api/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("sk-old-token...")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Regenerate token/i }));
+
+    await waitFor(() => {
+      expect(mocks.regenerateRoutineTriggerToken).toHaveBeenCalledWith("routine-1", "trigger-api");
+    });
+    expect(screen.getByDisplayValue("sk-new-token...")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "API token generated" })).toBeInTheDocument();
+    expect(screen.getByText("sk-new-token-full")).toBeInTheDocument();
   });
 
   it("loads an existing routine in edit mode and updates it", async () => {

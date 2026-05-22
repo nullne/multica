@@ -170,6 +170,139 @@ func TestRoutineAPITriggerIngestCreatesIssue(t *testing.T) {
 	}
 }
 
+func TestRegenerateRoutineTriggerToken(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine API regenerate",
+		"instructions":  "Created from API",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "api",
+				"source_type":  "standard",
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+	oldPrefix := routine.Triggers[0].TokenPrefix
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "POST", "/api/routines/"+routine.ID+"/triggers/"+routine.Triggers[0].ID+"/regenerate-token", nil)
+	req = withURLParam(req, "id", routine.ID)
+	req = withURLParam(req, "triggerId", routine.Triggers[0].ID)
+	testHandler.RegenerateRoutineTriggerToken(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RegenerateRoutineTriggerToken: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Trigger RoutineTriggerResponse `json:"trigger"`
+		Token   string                 `json:"token"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode regenerate response: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected regenerated token")
+	}
+	if resp.Trigger.TokenPrefix == "" || resp.Trigger.TokenPrefix == oldPrefix {
+		t.Fatalf("expected new token prefix, old=%q new=%q", oldPrefix, resp.Trigger.TokenPrefix)
+	}
+}
+
+func TestManualTriggerRoutineCreatesIssue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine manual trigger",
+		"instructions":  "Created manually",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "schedule",
+				"schedule":     "0 9 * * 1",
+				"timezone":     "UTC",
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "POST", "/api/routines/"+routine.ID+"/trigger", nil)
+	req = withURLParam(req, "id", routine.ID)
+	testHandler.TriggerRoutine(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("TriggerRoutine: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Ran int `json:"ran"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode trigger response: %v", err)
+	}
+	if resp.Ran != 1 {
+		t.Fatalf("expected one action to run, got %d", resp.Ran)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT id::text FROM issue
+		WHERE workspace_id = $1 AND title = 'Routine manual trigger'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID); err != nil {
+		t.Fatalf("query created issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+}
+
 func TestCreateRoutineValidatesRequiredFields(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")

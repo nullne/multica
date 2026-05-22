@@ -260,9 +260,7 @@ func TestGitHubAdapter_CheckRunCompletedOnPR(t *testing.T) {
 
 func TestGitHubAdapter_FiltersIrrelevantActions(t *testing.T) {
 	a := &githubAdapter{}
-	// "assigned" is one of the actions we still drop; label-add is now passed
-	// through so label-filter actions can fire.
-	body := []byte(`{"action": "assigned", "pull_request": {"number": 1}, "repository": {"full_name": "org/repo"}}`)
+	body := []byte(`{"action": "unknown_action", "pull_request": {"number": 1}, "repository": {"full_name": "org/repo"}}`)
 	headers := http.Header{}
 	headers.Set("X-GitHub-Event", "pull_request")
 
@@ -271,7 +269,81 @@ func TestGitHubAdapter_FiltersIrrelevantActions(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	if len(events) != 0 {
-		t.Errorf("expected no events for assigned action, got %d", len(events))
+		t.Errorf("expected no events for unknown action, got %d", len(events))
+	}
+}
+
+func TestGitHubAdapter_OfficialPRAndIssueActions(t *testing.T) {
+	a := &githubAdapter{}
+	cases := []struct {
+		eventType string
+		action    string
+		body      string
+		wantType  string
+	}{
+		{
+			eventType: "pull_request",
+			action:    "ready_for_review",
+			body:      `"pull_request":{"number":1,"title":"T","html_url":"https://github.com/org/repo/pull/1","user":{"login":"u"},"head":{"ref":"h"},"base":{"ref":"main"}}`,
+			wantType:  "github.pull_request.ready_for_review",
+		},
+		{
+			eventType: "issues",
+			action:    "edited",
+			body:      `"issue":{"number":2,"title":"I","html_url":"https://github.com/org/repo/issues/2","user":{"login":"u"},"labels":[]}`,
+			wantType:  "github.issues.edited",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.wantType, func(t *testing.T) {
+			body := []byte(`{"action":"` + tc.action + `",` + tc.body + `,"repository":{"full_name":"org/repo"}}`)
+			headers := http.Header{}
+			headers.Set("X-GitHub-Event", tc.eventType)
+			events, err := a.Parse(body, headers)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if len(events) != 1 {
+				t.Fatalf("expected 1 event, got %d", len(events))
+			}
+			if events[0].Type != tc.wantType {
+				t.Fatalf("type = %q, want %q", events[0].Type, tc.wantType)
+			}
+		})
+	}
+}
+
+func TestGitHubAdapter_ReleasePublished(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "published",
+		"release": {
+			"name": "v1.0.0",
+			"tag_name": "v1.0.0",
+			"body": "Release notes",
+			"html_url": "https://github.com/org/repo/releases/tag/v1.0.0",
+			"author": {"login": "alice"}
+		},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "release")
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ev := events[0]
+	if ev.Type != "github.release.published" {
+		t.Fatalf("type = %q", ev.Type)
+	}
+	if ev.Data["source_url"] != "https://github.com/org/repo/releases/tag/v1.0.0" {
+		t.Fatalf("source_url = %q", ev.Data["source_url"])
+	}
+	if ev.Data["source_kind"] != "release" {
+		t.Fatalf("source_kind = %q", ev.Data["source_kind"])
 	}
 }
 

@@ -338,6 +338,8 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Route("/{id}", func(r chi.Router) {
 					r.Get("/", h.GetRoutine)
 					r.Get("/runs", h.ListRoutineRuns)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/trigger", h.TriggerRoutine)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/triggers/{triggerId}/regenerate-token", h.RegenerateRoutineTriggerToken)
 					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Patch("/", h.UpdateRoutine)
 					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Delete("/", h.DeleteRoutine)
 				})

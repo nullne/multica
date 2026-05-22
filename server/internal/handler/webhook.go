@@ -778,7 +778,14 @@ type CommentIssueActionConfig struct {
 // actions configured before label filtering existed do not start receiving
 // extra triggers when a label is added to a PR/issue.
 func actionMatchesFilters(eventTypes, repos, githubLabels []string, evt wh.Event) bool {
-	if isGitHubLabeledEvent(evt.Type) && len(githubLabels) == 0 {
+	explicitEventTypeMatch := false
+	for _, t := range eventTypes {
+		if t == evt.Type {
+			explicitEventTypeMatch = true
+			break
+		}
+	}
+	if isGitHubLabeledEvent(evt.Type) && len(githubLabels) == 0 && !explicitEventTypeMatch {
 		return false
 	}
 	if len(eventTypes) > 0 {

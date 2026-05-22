@@ -62,6 +62,8 @@ func (a *githubAdapter) Parse(payload json.RawMessage, headers http.Header) ([]E
 		data = parseGitHubStatus(payload)
 	case "workflow_run":
 		data = parseGitHubWorkflowRun(payload)
+	case "release":
+		data = parseGitHubRelease(payload)
 	default:
 		return nil, nil
 	}
@@ -105,13 +107,13 @@ func isRelevantGitHubAction(eventType, action string) bool {
 		return true
 	case "pull_request":
 		switch action {
-		case "opened", "synchronize", "reopened", "closed", "labeled":
+		case "assigned", "auto_merge_disabled", "auto_merge_enabled", "closed", "converted_to_draft", "demilestoned", "dequeued", "edited", "enqueued", "labeled", "locked", "milestoned", "opened", "ready_for_review", "reopened", "review_request_removed", "review_requested", "synchronize", "unassigned", "unlabeled", "unlocked":
 			return true
 		}
 		return false
 	case "issues":
 		switch action {
-		case "opened", "reopened", "closed", "labeled":
+		case "assigned", "closed", "deleted", "demilestoned", "edited", "field_added", "field_removed", "labeled", "locked", "milestoned", "opened", "pinned", "reopened", "transferred", "typed", "unassigned", "unlabeled", "unlocked", "unpinned", "untyped":
 			return true
 		}
 		return false
@@ -121,6 +123,12 @@ func isRelevantGitHubAction(eventType, action string) bool {
 		return action == "completed"
 	case "status":
 		return true
+	case "release":
+		switch action {
+		case "created", "deleted", "edited", "prereleased", "published", "released", "unpublished":
+			return true
+		}
+		return false
 	default:
 		return false
 	}
@@ -541,6 +549,41 @@ func parseGitHubWorkflowRun(body []byte) map[string]string {
 		"external_id": ev.Repository.FullName + "@" + ev.WorkflowRun.HeadSha,
 		"title":       fmt.Sprintf("Workflow %s: %s", ev.WorkflowRun.Name, ev.WorkflowRun.Conclusion),
 		"body":        fmt.Sprintf("**Workflow:** %s\n**Status:** %s\n**Conclusion:** %s\n**Branch:** `%s`\n**Commit:** `%s`\n**Details:** %s", ev.WorkflowRun.Name, ev.WorkflowRun.Status, ev.WorkflowRun.Conclusion, ev.WorkflowRun.HeadBranch, ev.WorkflowRun.HeadSha, ev.WorkflowRun.HTMLURL),
+	}
+}
+
+func parseGitHubRelease(body []byte) map[string]string {
+	var ev struct {
+		Action  string `json:"action"`
+		Release struct {
+			Name    string `json:"name"`
+			TagName string `json:"tag_name"`
+			Body    string `json:"body"`
+			HTMLURL string `json:"html_url"`
+			Author  struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"release"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	title := ev.Release.Name
+	if title == "" {
+		title = ev.Release.TagName
+	}
+	return map[string]string{
+		"action":      ev.Action,
+		"repo":        ev.Repository.FullName,
+		"title":       title,
+		"tag":         ev.Release.TagName,
+		"user":        ev.Release.Author.Login,
+		"html_url":    ev.Release.HTMLURL,
+		"source_url":  ev.Release.HTMLURL,
+		"source_kind": "release",
+		"external_id": ev.Repository.FullName + "@" + ev.Release.TagName,
+		"body":        fmt.Sprintf("**Release [%s](%s)**\n**Tag:** `%s`\n**Author:** %s\n**Action:** %s\n\n%s", title, ev.Release.HTMLURL, ev.Release.TagName, ev.Release.Author.Login, ev.Action, ev.Release.Body),
 	}
 }
 

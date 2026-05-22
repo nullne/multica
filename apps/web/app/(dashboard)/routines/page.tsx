@@ -10,6 +10,7 @@ import {
   ChevronDown,
   Clock,
   Code2,
+  Copy,
   GitBranch as Github,
   Plus,
   Save,
@@ -21,6 +22,26 @@ import {
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
@@ -39,15 +60,28 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { useAuthStore } from "@/features/auth";
+import { PriorityPicker } from "@/features/issues/components/pickers/priority-picker";
 import { AssigneePicker } from "@/features/issues/components/pickers";
 import { useLabelStore } from "@/features/labels";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
-import { api } from "@/shared/api";
+import { api, regenerateRoutineTriggerToken } from "@/shared/api";
 import type { CreateRoutineRequest, IssueAssigneeType, IssuePriority, Routine, RoutineTriggerRequest, UpdateIssueRequest } from "@/shared/types";
 import { toast } from "sonner";
 
 type TriggerType = "schedule" | "github" | "api";
 type ScheduleMode = "once" | "hourly" | "daily" | "weekdays" | "weekly" | "custom";
+
+interface ApiTriggerCredential {
+  id: string;
+  tokenPrefix: string;
+  token?: string;
+}
+
+interface ApiTokenReveal {
+  token: string;
+  url: string;
+}
 
 interface TriggerOption {
   id: TriggerType;
@@ -77,14 +111,6 @@ const triggerOptions: TriggerOption[] = [
   },
 ];
 
-const priorityOptions: { value: IssuePriority; label: string }[] = [
-  { value: "urgent", label: "Urgent" },
-  { value: "high", label: "High" },
-  { value: "medium", label: "Medium" },
-  { value: "low", label: "Low" },
-  { value: "none", label: "None" },
-];
-
 const scheduleModes: { value: ScheduleMode; label: string }[] = [
   { value: "once", label: "Once" },
   { value: "hourly", label: "Hourly" },
@@ -94,42 +120,87 @@ const scheduleModes: { value: ScheduleMode; label: string }[] = [
   { value: "custom", label: "Custom" },
 ];
 
+type GitHubEventCategory = "pull_request" | "issues" | "release";
+
 const githubEventGroups: {
+  id: GitHubEventCategory;
   label: string;
   events: { value: string; label: string; summary: string }[];
 }[] = [
   {
-    label: "Pull requests",
+    id: "pull_request",
+    label: "Pull request",
     events: [
-      { value: "github.pull_request.opened", label: "Opened", summary: "PR opened" },
-      { value: "github.pull_request.synchronize", label: "Synchronize", summary: "PR synchronized" },
-      { value: "github.pull_request.reopened", label: "Reopened", summary: "PR reopened" },
-      { value: "github.pull_request.closed", label: "Closed (unmerged)", summary: "PR closed" },
-      { value: "github.pull_request.merged", label: "Merged", summary: "PR merged" },
+      { value: "github.pull_request.assigned", label: "Assigned", summary: "PR assigned" },
+      { value: "github.pull_request.auto_merge_disabled", label: "Auto merge disabled", summary: "PR auto merge disabled" },
+      { value: "github.pull_request.auto_merge_enabled", label: "Auto merge enabled", summary: "PR auto merge enabled" },
+      { value: "github.pull_request.closed", label: "Closed", summary: "PR closed" },
+      { value: "github.pull_request.converted_to_draft", label: "Converted to draft", summary: "PR converted to draft" },
+      { value: "github.pull_request.demilestoned", label: "Demilestoned", summary: "PR demilestoned" },
+      { value: "github.pull_request.dequeued", label: "Dequeued", summary: "PR dequeued" },
+      { value: "github.pull_request.edited", label: "Edited", summary: "PR edited" },
+      { value: "github.pull_request.enqueued", label: "Enqueued", summary: "PR enqueued" },
       { value: "github.pull_request.labeled", label: "Labeled", summary: "PR labeled" },
+      { value: "github.pull_request.locked", label: "Locked", summary: "PR locked" },
+      { value: "github.pull_request.milestoned", label: "Milestoned", summary: "PR milestoned" },
+      { value: "github.pull_request.opened", label: "Opened", summary: "PR opened" },
+      { value: "github.pull_request.ready_for_review", label: "Ready for review", summary: "PR ready for review" },
+      { value: "github.pull_request.reopened", label: "Reopened", summary: "PR reopened" },
+      { value: "github.pull_request.review_request_removed", label: "Review request removed", summary: "PR review request removed" },
+      { value: "github.pull_request.review_requested", label: "Review requested", summary: "PR review requested" },
+      { value: "github.pull_request.synchronize", label: "Synchronize", summary: "PR synchronized" },
+      { value: "github.pull_request.unassigned", label: "Unassigned", summary: "PR unassigned" },
+      { value: "github.pull_request.unlabeled", label: "Unlabeled", summary: "PR unlabeled" },
+      { value: "github.pull_request.unlocked", label: "Unlocked", summary: "PR unlocked" },
+      { value: "github.pull_request.merged", label: "Merged", summary: "PR merged" },
     ],
   },
   {
-    label: "Issues",
+    id: "issues",
+    label: "Issue",
     events: [
-      { value: "github.issues.opened", label: "Opened", summary: "Issue opened" },
-      { value: "github.issues.reopened", label: "Reopened", summary: "Issue reopened" },
+      { value: "github.issues.assigned", label: "Assigned", summary: "Issue assigned" },
       { value: "github.issues.closed", label: "Closed", summary: "Issue closed" },
+      { value: "github.issues.deleted", label: "Deleted", summary: "Issue deleted" },
+      { value: "github.issues.demilestoned", label: "Demilestoned", summary: "Issue demilestoned" },
+      { value: "github.issues.edited", label: "Edited", summary: "Issue edited" },
+      { value: "github.issues.field_added", label: "Field added", summary: "Issue field added" },
+      { value: "github.issues.field_removed", label: "Field removed", summary: "Issue field removed" },
       { value: "github.issues.labeled", label: "Labeled", summary: "Issue labeled" },
+      { value: "github.issues.locked", label: "Locked", summary: "Issue locked" },
+      { value: "github.issues.milestoned", label: "Milestoned", summary: "Issue milestoned" },
+      { value: "github.issues.opened", label: "Opened", summary: "Issue opened" },
+      { value: "github.issues.pinned", label: "Pinned", summary: "Issue pinned" },
+      { value: "github.issues.reopened", label: "Reopened", summary: "Issue reopened" },
+      { value: "github.issues.transferred", label: "Transferred", summary: "Issue transferred" },
+      { value: "github.issues.typed", label: "Typed", summary: "Issue typed" },
+      { value: "github.issues.unassigned", label: "Unassigned", summary: "Issue unassigned" },
+      { value: "github.issues.unlabeled", label: "Unlabeled", summary: "Issue unlabeled" },
+      { value: "github.issues.unlocked", label: "Unlocked", summary: "Issue unlocked" },
+      { value: "github.issues.unpinned", label: "Unpinned", summary: "Issue unpinned" },
+      { value: "github.issues.untyped", label: "Untyped", summary: "Issue untyped" },
     ],
   },
   {
-    label: "Push",
+    id: "release",
+    label: "Release",
     events: [
-      { value: "github.push", label: "Push", summary: "Push" },
+      { value: "github.release.published", label: "Published", summary: "Release published" },
+      { value: "github.release.created", label: "Created", summary: "Release created" },
+      { value: "github.release.deleted", label: "Deleted", summary: "Release deleted" },
+      { value: "github.release.edited", label: "Edited", summary: "Release edited" },
+      { value: "github.release.prereleased", label: "Prereleased", summary: "Release prereleased" },
+      { value: "github.release.released", label: "Released", summary: "Release released" },
+      { value: "github.release.unpublished", label: "Unpublished", summary: "Release unpublished" },
     ],
   },
-  {
-    label: "Comments",
-    events: [
-      { value: "github.issue_comment.created", label: "Created", summary: "Issue comment created" },
-    ],
-  },
+];
+
+const githubEventPresets: { label: string; events: string[] }[] = [
+  { label: "PR opened", events: ["github.pull_request.opened"] },
+  { label: "PR merged", events: ["github.pull_request.merged"] },
+  { label: "Release published", events: ["github.release.published"] },
+  { label: "Issue opened", events: ["github.issues.opened"] },
 ];
 
 const weekDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -138,20 +209,17 @@ const githubFilterFields = [
   "Author",
   "Title",
   "Body",
-  "Base branch",
-  "Head branch",
+  "State",
   "Labels",
-  "Is draft",
-  "Is merged",
 ] as const;
 
 const githubFilterOperators = [
   "is one of",
   "is not one of",
+  "starts with",
   "contains",
-  "does not contain",
-  "is",
-  "is not",
+  "matches regex (whole string)",
+  "equals",
 ] as const;
 
 interface GitHubFilterCondition {
@@ -280,9 +348,11 @@ function RoutineListPage() {
 }
 
 function RoutineCreatePage({ routineID }: { routineID: string | null }) {
+  const currentUser = useAuthStore((s) => s.user);
   const members = useWorkspaceStore((s) => s.members);
   const labels = useLabelStore((s) => s.labels);
   const { getActorName } = useActorName();
+  const [savedRoutineID, setSavedRoutineID] = useState<string | null>(routineID);
 
   const [name, setName] = useState("");
   const [instructions, setInstructions] = useState("");
@@ -292,7 +362,10 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
   const [dispatchProvider, setDispatchProvider] = useState<string | null>(null);
   const [dispatchDaemonId, setDispatchDaemonId] = useState<string | null>(null);
   const [dispatchDaemonLabel, setDispatchDaemonLabel] = useState<string | null>(null);
-  const [selectedSubscriberIds, setSelectedSubscriberIds] = useState<string[]>([]);
+  const [selectedSubscriberIds, setSelectedSubscriberIds] = useState<string[]>(
+    () => (!routineID && currentUser?.id ? [currentUser.id] : []),
+  );
+  const [defaultedCurrentUserSubscriber, setDefaultedCurrentUserSubscriber] = useState(Boolean(!routineID && currentUser?.id));
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
   const [selectedTriggerTypes, setSelectedTriggerTypes] = useState<TriggerType[]>([]);
   const [openTriggerType, setOpenTriggerType] = useState<TriggerType | null>(null);
@@ -306,10 +379,14 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
   const [githubEventValues, setGithubEventValues] = useState<string[]>(["github.pull_request.opened"]);
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [regeneratingApiToken, setRegeneratingApiToken] = useState(false);
   const [loadingRoutine, setLoadingRoutine] = useState(Boolean(routineID));
+  const [apiTriggerCredential, setApiTriggerCredential] = useState<ApiTriggerCredential | null>(null);
+  const [apiTokenReveal, setApiTokenReveal] = useState<ApiTokenReveal | null>(null);
 
   const assigneeLabel =
     assigneeType && assigneeId ? getActorName(assigneeType, assigneeId) : "Unassigned";
+  const subscriberLabel = summarizeSelectedMembers(selectedSubscriberIds, members, "No subscribers");
 
   const updateAssignee = (patch: Partial<UpdateIssueRequest>) => {
     setAssigneeType(patch.assignee_type ?? null);
@@ -404,6 +481,12 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
         if (Array.isArray(eventTypes)) {
           setGithubEventValues(eventTypes.filter((event): event is string => typeof event === "string"));
         }
+        const apiTrigger = routine.triggers.find((trigger) => trigger.trigger_type === "api");
+        setApiTriggerCredential(apiTrigger ? {
+          id: apiTrigger.id,
+          tokenPrefix: apiTrigger.token_prefix,
+          token: apiTrigger.token,
+        } : null);
       })
       .catch((error) => {
         if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routine");
@@ -415,6 +498,30 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
       cancelled = true;
     };
   }, [routineID]);
+
+  useEffect(() => {
+    if (routineID || defaultedCurrentUserSubscriber || !currentUser?.id) return;
+    setSelectedSubscriberIds([currentUser.id]);
+    setDefaultedCurrentUserSubscriber(true);
+  }, [currentUser?.id, defaultedCurrentUserSubscriber, routineID]);
+
+  const handleRegenerateApiToken = async () => {
+    if (!savedRoutineID || !apiTriggerCredential) return;
+    setRegeneratingApiToken(true);
+    try {
+      const result = await regenerateRoutineTriggerToken(savedRoutineID, apiTriggerCredential.id);
+      setApiTriggerCredential({
+        id: result.trigger.id,
+        tokenPrefix: result.trigger.token_prefix,
+      });
+      setApiTokenReveal({ token: result.token, url: getRoutineTriggerURL(result.trigger.id) });
+      toast.success("API token regenerated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to regenerate API token");
+    } finally {
+      setRegeneratingApiToken(false);
+    }
+  };
 
   const handleCreateRoutine = async () => {
     if (!name.trim()) {
@@ -448,14 +555,27 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
         cronExpression,
         githubEventValues,
       });
-      if (routineID) {
-        await api.updateRoutine(routineID, payload);
+      if (savedRoutineID) {
+        await api.updateRoutine(savedRoutineID, payload);
         toast.success("Routine updated");
-        window.location.href = `/routines/${routineID}`;
+        window.location.href = `/routines/${savedRoutineID}`;
       } else {
-        await api.createRoutine(payload);
+        const created = await api.createRoutine(payload);
         toast.success("Routine created");
-        window.location.href = "/routines";
+        const apiTrigger = created.triggers.find((trigger) => trigger.trigger_type === "api");
+        if (apiTrigger) {
+          setSavedRoutineID(created.id);
+          setApiTriggerCredential({
+            id: apiTrigger.id,
+            tokenPrefix: apiTrigger.token_prefix,
+          });
+          if (apiTrigger.token) {
+            setApiTokenReveal({ token: apiTrigger.token, url: getRoutineTriggerURL(apiTrigger.id) });
+          }
+          window.history.replaceState(null, "", `/routines?new=1&id=${created.id}`);
+        } else {
+          window.location.href = "/routines";
+        }
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create routine");
@@ -477,7 +597,7 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
             <span>/</span>
             <span>New routine</span>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">{routineID ? "Edit routine" : "New routine"}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{savedRoutineID ? "Edit routine" : "New routine"}</h1>
         </div>
 
         {loadingRoutine ? (
@@ -525,18 +645,20 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="grid gap-2">
                   <Label>Priority</Label>
-                  <Select value={priority} onValueChange={(value) => setPriority(value as IssuePriority)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {priorityOptions.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <PriorityPicker
+                    priority={priority}
+                    onUpdate={(updates) => {
+                      if (updates.priority) setPriority(updates.priority);
+                    }}
+                    align="start"
+                    triggerRender={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full justify-start font-normal"
+                      />
+                    }
+                  />
                 </div>
 
                 <div className="grid gap-2">
@@ -578,9 +700,7 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
                       }
                     >
                       <Bell className="size-4 text-muted-foreground" />
-                      {selectedSubscriberIds.length === 0
-                        ? "No subscribers"
-                        : `${selectedSubscriberIds.length} subscribers`}
+                      <span className="truncate">{subscriberLabel}</span>
                     </PopoverTrigger>
                     <PopoverContent align="start" className="w-72 p-2">
                       <div className="mb-2 flex items-center gap-2 px-1 text-xs font-medium text-muted-foreground">
@@ -654,7 +774,7 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
                     }
                     description={
                       option.id === "api"
-                        ? "Token will be generated when you save."
+                        ? "Generate an endpoint token for external calls."
                         : undefined
                     }
                     selected={selected}
@@ -687,10 +807,11 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
                     )}
 
                     {option.id === "api" && (
-                      <PreviewPanel
-                        title="API endpoint"
-                        description="A signed POST endpoint will trigger this routine from CI, scripts, or other internal systems."
-                        action="Generate endpoint after save"
+                      <ApiTriggerPanel
+                        routineID={savedRoutineID}
+                        credential={apiTriggerCredential}
+                        regenerating={regeneratingApiToken}
+                        onRegenerate={handleRegenerateApiToken}
                       />
                     )}
                   </TriggerAccordionItem>
@@ -762,12 +883,16 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
           </div>
           <Button disabled={saving || loadingRoutine || !canSubmitRoutine} onClick={handleCreateRoutine}>
             <Save className="size-4" />
-            {saving ? (routineID ? "Updating..." : "Creating...") : (routineID ? "Update routine" : "Create routine")}
+            {saving ? (savedRoutineID ? "Updating..." : "Creating...") : (savedRoutineID ? "Update routine" : "Create routine")}
           </Button>
         </div>
         </>
         )}
       </div>
+      <ApiTokenRevealDialog
+        reveal={apiTokenReveal}
+        onClose={() => setApiTokenReveal(null)}
+      />
     </main>
   );
 }
@@ -1040,7 +1165,14 @@ function GitHubTriggerEditor({
   onSelectedEventsChange: (events: string[]) => void;
 }) {
   const [filters, setFilters] = useState<GitHubFilterCondition[]>([]);
+  const [query, setQuery] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
   const summary = buildGitHubEventSummary(selectedEvents);
+
+  const matchesPreset = (events: string[]) =>
+    events.length === selectedEvents.length &&
+    events.every((value) => selectedEvents.includes(value));
+  const isCustomSelection = !githubEventPresets.some((preset) => matchesPreset(preset.events));
 
   const toggleEvent = (value: string) => {
     onSelectedEventsChange(
@@ -1050,15 +1182,29 @@ function GitHubTriggerEditor({
     );
   };
 
-  const toggleGroup = (events: { value: string }[]) => {
-    const values = events.map((event) => event.value);
+  const toggleGroupAll = (group: (typeof githubEventGroups)[number]) => {
+    const values = group.events.map((event) => event.value);
     const allSelected = values.every((value) => selectedEvents.includes(value));
     onSelectedEventsChange(
       allSelected
-        ? selectedEvents.filter((value) => !values.includes(value))
+        ? selectedEvents.filter((event) => !values.includes(event))
         : Array.from(new Set([...selectedEvents, ...values])),
     );
   };
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const searchResults = normalizedQuery
+    ? githubEventGroups
+        .map((group) => ({
+          group,
+          events: group.events.filter(
+            (event) =>
+              event.label.toLowerCase().includes(normalizedQuery) ||
+              event.value.toLowerCase().includes(normalizedQuery),
+          ),
+        }))
+        .filter((entry) => entry.events.length > 0)
+    : [];
 
   const addFilter = () => {
     setFilters((current) => [
@@ -1090,42 +1236,123 @@ function GitHubTriggerEditor({
   return (
     <div className="space-y-3 rounded-xl bg-muted/60 p-3">
       <div className="space-y-3">
-        <Label className="text-xs text-muted-foreground">Events</Label>
-        <div className="grid gap-3 md:grid-cols-2">
-          {githubEventGroups.map((group) => (
-            <div key={group.label} className="rounded-lg border bg-background p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-muted-foreground">
-                  {group.label}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.events)}
-                  className="text-xs text-muted-foreground hover:text-foreground"
-                >
-                  {group.events.every((event) => selectedEvents.includes(event.value))
-                    ? "Clear"
-                    : "All"}
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {group.events.map((event) => {
-                  const selected = selectedEvents.includes(event.value);
-                  return (
-                    <button
-                      key={event.value}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => toggleEvent(event.value)}
-                      className="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground"
-                    >
-                      {event.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="GitHub event presets">
+          {githubEventPresets.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              aria-pressed={matchesPreset(preset.events)}
+              onClick={() => onSelectedEventsChange(preset.events)}
+              className="rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-accent aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+            >
+              {preset.label}
+            </button>
           ))}
+          <button
+            type="button"
+            aria-pressed={isCustomSelection}
+            onClick={() => setMenuOpen(true)}
+            className="rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-accent aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground"
+          >
+            Custom
+          </button>
+        </div>
+        <div className="grid gap-2">
+          <Label className="text-xs text-muted-foreground">Event</Label>
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label="GitHub event type"
+                  className="w-72 justify-between bg-background font-normal"
+                />
+              }
+            >
+              <span className="truncate">{summary}</span>
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-72 p-0">
+              <div className="p-1">
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  placeholder="Search events..."
+                  aria-label="Search GitHub events"
+                  className="h-8 bg-background"
+                />
+              </div>
+              <DropdownMenuSeparator className="mx-0 mt-0" />
+              <div className="max-h-80 overflow-y-auto p-1">
+                {normalizedQuery ? (
+                  searchResults.length === 0 ? (
+                    <div className="px-2 py-6 text-center text-sm text-muted-foreground">
+                      No events found
+                    </div>
+                  ) : (
+                    searchResults.map(({ group, events }) => (
+                      <DropdownMenuGroup key={group.id}>
+                        <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
+                        {events.map((event) => (
+                          <DropdownMenuCheckboxItem
+                            key={event.value}
+                            checked={selectedEvents.includes(event.value)}
+                            closeOnClick={false}
+                            onCheckedChange={() => toggleEvent(event.value)}
+                          >
+                            {event.label}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                      </DropdownMenuGroup>
+                    ))
+                  )
+                ) : (
+                  githubEventGroups.map((group) => {
+                    const selectedCount = group.events.filter((event) =>
+                      selectedEvents.includes(event.value),
+                    ).length;
+                    const allSelected = selectedCount === group.events.length;
+                    return (
+                      <DropdownMenuSub key={group.id}>
+                        <DropdownMenuSubTrigger>
+                          <span>{group.label}</span>
+                          {selectedCount > 0 && (
+                            <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">
+                              {selectedCount}
+                            </Badge>
+                          )}
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent className="max-h-80 w-56 overflow-y-auto">
+                          <DropdownMenuCheckboxItem
+                            checked={allSelected}
+                            closeOnClick={false}
+                            onCheckedChange={() => toggleGroupAll(group)}
+                          >
+                            <span className="font-medium">
+                              {allSelected ? "Clear all" : "Select all"}
+                            </span>
+                          </DropdownMenuCheckboxItem>
+                          <DropdownMenuSeparator />
+                          {group.events.map((event) => (
+                            <DropdownMenuCheckboxItem
+                              key={event.value}
+                              checked={selectedEvents.includes(event.value)}
+                              closeOnClick={false}
+                              onCheckedChange={() => toggleEvent(event.value)}
+                            >
+                              {event.label}
+                            </DropdownMenuCheckboxItem>
+                          ))}
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    );
+                  })
+                )}
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -1199,13 +1426,28 @@ function buildScheduleSummary({
 
 function buildGitHubEventSummary(selectedEvents: string[]) {
   const allEvents = githubEventGroups.flatMap((group) => group.events);
-  if (selectedEvents.length === 0) return "GitHub event";
-  if (selectedEvents.length <= 3) {
+  if (selectedEvents.length === 0) return "Select GitHub events";
+  if (selectedEvents.length <= 2) {
     return selectedEvents
       .map((value) => allEvents.find((event) => event.value === value)?.summary ?? value)
       .join(", ");
   }
-  return `${selectedEvents.length} events selected`;
+  const categoryCount = githubEventGroups.filter((group) =>
+    group.events.some((event) => selectedEvents.includes(event.value)),
+  ).length;
+  return `${selectedEvents.length} events · ${categoryCount} ${categoryCount === 1 ? "category" : "categories"}`;
+}
+
+function summarizeSelectedMembers(
+  selectedIds: string[],
+  members: { user_id: string; name: string }[],
+  emptyLabel: string,
+) {
+  if (selectedIds.length === 0) return emptyLabel;
+  const names = selectedIds.map((id) => members.find((member) => member.user_id === id)?.name ?? "Unknown");
+  const visibleNames = names.slice(0, 3).join(", ");
+  const overflowCount = names.length - 3;
+  return overflowCount > 0 ? `${visibleNames} +${overflowCount} more` : visibleNames;
 }
 
 function buildRoutinePayload({
@@ -1406,7 +1648,7 @@ function GitHubFilterRow({
       <Input
         value={filter.value}
         onChange={(event) => onChange({ value: event.target.value })}
-        placeholder="Values"
+        placeholder="Comma-separated values"
         className="mt-2 bg-background"
       />
     </div>
@@ -1445,6 +1687,132 @@ function SelectedTriggerPanel({
   );
 }
 
+function ApiTriggerPanel({
+  routineID,
+  credential,
+  regenerating,
+  onRegenerate,
+}: {
+  routineID: string | null;
+  credential: ApiTriggerCredential | null;
+  regenerating: boolean;
+  onRegenerate: () => void;
+}) {
+  const apiURL = credential
+    ? getRoutineTriggerURL(credential.id)
+    : "Save the routine to generate an API endpoint";
+  const tokenValue = credential
+    ? `${credential.tokenPrefix}...`
+    : "Token will be available after generation";
+
+  return (
+    <div className="space-y-3 rounded-xl border bg-muted/30 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Code2 className="size-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium">API trigger</h3>
+        </div>
+        <Badge variant={credential ? "secondary" : "outline"}>
+          {credential ? "Active" : "Not generated"}
+        </Badge>
+      </div>
+      <div className="grid gap-2">
+        <Label>API URL</Label>
+        <Input value={apiURL} readOnly className="font-mono text-xs" />
+      </div>
+      <div className="grid gap-2">
+        <Label>Token</Label>
+        <div className="flex gap-2">
+          <Input value={tokenValue} readOnly className="font-mono text-xs" />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onRegenerate}
+            disabled={!routineID || !credential || regenerating}
+          >
+            {!routineID || !credential
+              ? "Save routine first"
+              : regenerating
+                ? "Regenerating..."
+                : "Regenerate token"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Regenerating invalidates the previous token. Existing API URL stays the same.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ApiTokenRevealDialog({
+  reveal,
+  onClose,
+}: {
+  reveal: ApiTokenReveal | null;
+  onClose: () => void;
+}) {
+  const curlRequest = reveal ? buildApiTriggerCurl(reveal.url, reveal.token) : "";
+  const copyText = async (value: string) => {
+    await navigator.clipboard.writeText(value);
+    toast.success("Copied");
+  };
+
+  return (
+    <Dialog open={!!reveal} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>API token generated</DialogTitle>
+          <DialogDescription>
+            Copy this token now. After closing, only the token prefix will be shown.
+          </DialogDescription>
+        </DialogHeader>
+        {reveal && (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Token</Label>
+              <div className="flex gap-2">
+                <code className="min-w-0 flex-1 rounded-md border bg-muted/50 px-3 py-2 text-sm break-all select-all">
+                  {reveal.token}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => void copyText(reveal.token)}
+                  aria-label="Copy token"
+                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted"
+                >
+                  <Copy className="size-4" />
+                  Copy
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Example curl request</Label>
+              <div className="flex items-start gap-2">
+                <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap rounded-md border bg-muted/50 p-3 text-xs">
+                  {curlRequest}
+                </pre>
+                <button
+                  type="button"
+                  onClick={() => void copyText(curlRequest)}
+                  aria-label="Copy curl request"
+                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted"
+                >
+                  <Copy className="size-4" />
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button type="button" onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PreviewPanel({
   title,
   description,
@@ -1470,4 +1838,18 @@ function PreviewPanel({
       </div>
     </div>
   );
+}
+
+function getRoutineTriggerURL(triggerID: string) {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || (typeof window !== "undefined" ? window.location.origin : "");
+  return `${baseURL}/api/routine-triggers/${triggerID}`;
+}
+
+function buildApiTriggerCurl(url: string, token: string) {
+  return [
+    `curl -X POST ${url} \\`,
+    `  -H "Authorization: Bearer ${token}" \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{"title":"Routine run","body":"Triggered from API"}'`,
+  ].join("\n");
 }
