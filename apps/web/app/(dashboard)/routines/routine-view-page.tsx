@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RoutineRunList } from "@/features/routines";
+import { useAuthStore } from "@/features/auth";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
 import { MoreHorizontal, Pencil, Play, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/shared/api";
@@ -28,6 +29,7 @@ import type { Routine, RoutineRun } from "@/shared/types";
 import { toast } from "sonner";
 export function RoutineViewPage({ routineID }: { routineID: string }) {
   const router = useRouter();
+  const currentUser = useAuthStore((s) => s.user);
   const { getActorName } = useActorName();
   const members = useWorkspaceStore((s) => s.members);
   const [routine, setRoutine] = useState<Routine | null>(null);
@@ -37,6 +39,8 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const [deleting, setDeleting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const currentMember = members.find((member) => member.user_id === currentUser?.id);
+  const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
 
   useEffect(() => {
     let cancelled = false;
@@ -113,7 +117,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                 <span>{routine?.name ?? "Routine"}</span>
               </div>
             </div>
-            {routine && (
+            {routine && canManageRoutines && (
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Button variant="outline" onClick={handleTrigger} disabled={!routine.enabled || triggering || deleting}>
                   <Play className="size-4" />
@@ -160,21 +164,30 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
             </div>
           ) : (
             <>
+              {!canManageRoutines && (
+                <div className="rounded-xl border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">Read-only</span>
+                  {" · "}
+                  Ask an owner or admin to change or run this routine.
+                </div>
+              )}
               <section className="grid gap-3 rounded-xl border bg-muted/20 p-4 md:grid-cols-3">
                 <OverviewItem
                   label="Status"
                   value={
                     <span className="flex items-center gap-2">
                       <span>{routine.enabled ? "Enabled" : "Paused"}</span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="xs"
-                        onClick={handleToggleStatus}
-                        disabled={updatingStatus}
-                      >
-                        {routine.enabled ? "Pause routine" : "Enable routine"}
-                      </Button>
+                      {canManageRoutines && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={handleToggleStatus}
+                          disabled={updatingStatus}
+                        >
+                          {routine.enabled ? "Pause routine" : "Enable routine"}
+                        </Button>
+                      )}
                     </span>
                   }
                 />

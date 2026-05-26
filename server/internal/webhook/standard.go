@@ -44,6 +44,11 @@ func (a *standardAdapter) Parse(payload json.RawMessage, _ http.Header) ([]Event
 	for k, v := range p.Fields {
 		data["fields."+k] = v
 	}
+	for _, key := range []string{"source_url", "source_kind", "external_id"} {
+		if value := p.Fields[key]; value != "" {
+			data[key] = value
+		}
+	}
 
 	return []Event{{
 		Type:       eventType,

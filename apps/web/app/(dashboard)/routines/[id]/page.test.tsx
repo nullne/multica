@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useAuthStore } from "@/features/auth";
 import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 import type { AgentTask } from "@/shared/types";
 
@@ -34,13 +35,13 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/features/workspace", () => ({
-  useWorkspaceStore: (selector: (state: { members: { user_id: string; name: string }[] }) => unknown) =>
+  useWorkspaceStore: (selector: (state: { members: { user_id: string; name: string; role: string }[] }) => unknown) =>
     selector({
       members: [
-        { user_id: "user-1", name: "Dev User" },
-        { user_id: "user-2", name: "Alex Chen" },
-        { user_id: "user-3", name: "Mina Park" },
-        { user_id: "user-4", name: "Sam Lee" },
+        { user_id: "user-1", name: "Dev User", role: "owner" },
+        { user_id: "user-2", name: "Alex Chen", role: "member" },
+        { user_id: "user-3", name: "Mina Park", role: "member" },
+        { user_id: "user-4", name: "Sam Lee", role: "member" },
       ],
     }),
   useActorName: () => ({
@@ -58,6 +59,17 @@ import { RoutineViewPage } from "../routine-view-page";
 describe("RoutineDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({
+      user: {
+        id: "user-1",
+        name: "Dev User",
+        email: "dev@example.com",
+        avatar_url: null,
+        created_at: "2026-05-22T08:00:00Z",
+        updated_at: "2026-05-22T08:00:00Z",
+      },
+      isLoading: false,
+    });
     useActiveTaskStore.setState({ tasks: new Map() });
     mocks.api.triggerRoutine.mockResolvedValue({ ran: 1 });
     mocks.api.updateRoutine.mockResolvedValue({});
@@ -379,6 +391,43 @@ describe("RoutineDetailPage", () => {
     });
     expect(await screen.findByText("Manual issue")).toBeInTheDocument();
     expect(mocks.toast.success).toHaveBeenCalledWith("Routine triggered");
+  });
+
+  it("renders regular members as read-only", async () => {
+    useAuthStore.setState({
+      user: {
+        id: "user-2",
+        name: "Alex Chen",
+        email: "alex@example.com",
+        avatar_url: null,
+        created_at: "2026-05-22T08:00:00Z",
+        updated_at: "2026-05-22T08:00:00Z",
+      },
+      isLoading: false,
+    });
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Daily code review",
+      priority: "medium",
+      assignee_id: null,
+      assignee_type: null,
+      triggers: [{ id: "trigger-1" }],
+      actions: [],
+      subscriber_ids: ["user-1"],
+      label_ids: [],
+      enabled: true,
+    });
+    mocks.api.listRoutineRuns.mockResolvedValue([]);
+
+    render(<RoutineViewPage routineID="routine-1" />);
+
+    expect(await screen.findByText("Daily code review")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Run now/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Edit routine/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Pause routine/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /More actions/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Read-only")).toBeInTheDocument();
   });
 
   it("deletes a routine after confirmation", async () => {

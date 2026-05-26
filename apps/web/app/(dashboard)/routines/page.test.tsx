@@ -242,6 +242,32 @@ describe("RoutinesPage", () => {
     expect(screen.queryByText("View")).not.toBeInTheDocument();
   });
 
+  it("hides creation entry points for regular members", async () => {
+    mocks.searchParams = new URLSearchParams();
+    useWorkspaceStore.setState({
+      members: [
+        {
+          id: "member-1",
+          workspace_id: "ws-1",
+          user_id: "user-1",
+          role: "member",
+          name: "Dev User",
+          email: "dev@example.com",
+          avatar_url: null,
+          kind: "human",
+          created_at: "2026-05-22T08:00:00Z",
+        },
+      ],
+    });
+    mocks.api.listRoutines.mockResolvedValue([]);
+
+    render(<RoutinesPage />);
+
+    await screen.findByText("No routines yet");
+    expect(screen.queryByRole("link", { name: /New routine/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Ask an owner or admin to create routines for this workspace.")).toBeInTheDocument();
+  });
+
   it("renders the routine issue template and trigger configuration surface", async () => {
     const user = userEvent.setup();
     mocks.searchParams = new URLSearchParams("new=1");

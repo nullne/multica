@@ -271,8 +271,12 @@ export default function RoutinesPage() {
 }
 
 function RoutineListPage() {
+  const currentUser = useAuthStore((s) => s.user);
+  const members = useWorkspaceStore((s) => s.members);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [loading, setLoading] = useState(true);
+  const currentMember = members.find((member) => member.user_id === currentUser?.id);
+  const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
 
   useEffect(() => {
     let cancelled = false;
@@ -302,10 +306,12 @@ function RoutineListPage() {
               Automate recurring work, GitHub events, and API-triggered issue creation.
             </p>
           </div>
-          <a href="/routines?new=1" className={buttonVariants()}>
-            <Plus className="size-4" />
-            New routine
-          </a>
+          {canManageRoutines && (
+            <a href="/routines?new=1" className={buttonVariants()}>
+              <Plus className="size-4" />
+              New routine
+            </a>
+          )}
         </div>
 
         {loading ? (
@@ -319,7 +325,9 @@ function RoutineListPage() {
             </div>
             <h2 className="text-sm font-medium">No routines yet</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Create your first routine to schedule work or react to external events.
+              {canManageRoutines
+                ? "Create your first routine to schedule work or react to external events."
+                : "Ask an owner or admin to create routines for this workspace."}
             </p>
           </div>
         ) : (
@@ -387,6 +395,8 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
   const assigneeLabel =
     assigneeType && assigneeId ? getActorName(assigneeType, assigneeId) : "Unassigned";
   const subscriberLabel = summarizeSelectedMembers(selectedSubscriberIds, members, "No subscribers");
+  const currentMember = members.find((member) => member.user_id === currentUser?.id);
+  const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
 
   const updateAssignee = (patch: Partial<UpdateIssueRequest>) => {
     setAssigneeType(patch.assignee_type ?? null);
@@ -600,7 +610,14 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
           <h1 className="text-2xl font-semibold tracking-tight">{savedRoutineID ? "Edit routine" : "New routine"}</h1>
         </div>
 
-        {loadingRoutine ? (
+        {!canManageRoutines ? (
+          <div className="rounded-xl border bg-muted/20 p-8 text-center">
+            <h2 className="text-sm font-medium">Read-only</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Ask an owner or admin to create or edit routines for this workspace.
+            </p>
+          </div>
+        ) : loadingRoutine ? (
           <div className="rounded-xl border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
             Loading routine...
           </div>
