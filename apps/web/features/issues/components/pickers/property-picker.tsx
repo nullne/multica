@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Check } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import {
   Popover,
   PopoverTrigger,
@@ -115,16 +115,36 @@ export function PickerItem({
 export function PickerSection({
   label,
   children,
+  collapsed = false,
+  onToggle,
 }: {
   label: string;
   children: React.ReactNode;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
+  const isCollapsible = typeof onToggle === "function";
+  const headingClassName =
+    "px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider";
+
   return (
     <div>
-      <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-        {label}
-      </div>
-      {children}
+      {isCollapsible ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={!collapsed}
+          className={`flex w-full items-center gap-1 text-left ${headingClassName} hover:text-foreground transition-colors`}
+        >
+          <ChevronDown
+            className={`h-3 w-3 transition-transform ${collapsed ? "-rotate-90" : ""}`}
+          />
+          <span>{label}</span>
+        </button>
+      ) : (
+        <div className={headingClassName}>{label}</div>
+      )}
+      {!collapsed && children}
     </div>
   );
 }
