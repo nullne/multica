@@ -30,6 +30,7 @@ server/multica
 # Test artifacts
 test-results/
 apps/web/test-results/
+local-artifacts/
 
 # context (agent workspace)
 .context

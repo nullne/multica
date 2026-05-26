@@ -35,8 +35,9 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/features/workspace", () => ({
-  useWorkspaceStore: (selector: (state: { members: { user_id: string; name: string; role: string }[] }) => unknown) =>
+  useWorkspaceStore: (selector: (state: { workspace: { slug: string }; members: { user_id: string; name: string; role: string }[] }) => unknown) =>
     selector({
+      workspace: { slug: "test" },
       members: [
         { user_id: "user-1", name: "Dev User", role: "owner" },
         { user_id: "user-2", name: "Alex Chen", role: "member" },

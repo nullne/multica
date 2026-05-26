@@ -1,7 +1,10 @@
 import { defineConfig } from "@playwright/test";
 
+const evidenceDir = process.env.ROUTINES_EVIDENCE_DIR;
+
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: evidenceDir ? `${evidenceDir}/playwright-output` : "test-results",
   timeout: 60000,
   retries: 0,
   workers: process.env.CI ? 1 : undefined,
@@ -10,6 +13,9 @@ export default defineConfig({
     headless: true,
     navigationTimeout: 30000,
     actionTimeout: 15000,
+    screenshot: evidenceDir ? "on" : "off",
+    video: evidenceDir ? "on" : "off",
+    trace: evidenceDir ? "on" : "off",
     launchOptions: {
       args: process.env.CI ? ["--no-sandbox", "--no-proxy-server"] : [],
     },

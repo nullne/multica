@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { StatusIcon, RunningIndicatorRing } from "@/features/issues/components";
+import { issueUrl } from "@/features/issues/utils/url";
+import { useWorkspaceStore } from "@/features/workspace";
 import type { IssueStatus, RoutineRun } from "@/shared/types";
 
 type RoutineRunFilter = "all" | "scheduled" | "manual" | "api" | "webhook";
@@ -67,6 +69,7 @@ export function RoutineRunList({ runs }: { runs: RoutineRun[] }) {
 
 function RoutineRunRow({ run }: { run: RoutineRun }) {
   const source = getRoutineRunSource(run);
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
   const content = (
     <>
       <span className="flex min-w-0 items-center gap-3">
@@ -91,7 +94,7 @@ function RoutineRunRow({ run }: { run: RoutineRun }) {
   if (run.issue) {
     return (
       <a
-        href={`/issues/${run.issue.id}`}
+        href={issueUrl(run.issue.id, workspaceSlug)}
         className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-4 py-3 transition-colors hover:bg-accent/60"
       >
         {content}
