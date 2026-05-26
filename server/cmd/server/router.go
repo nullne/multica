@@ -315,6 +315,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/events", h.ListWebhookEvents)
 					r.Get("/actions", h.ListWebhookActions)
 					r.Post("/actions", h.CreateWebhookAction)
+					r.Get("/actions/{actionId}/events", h.ListWebhookActionEvents)
 					r.Put("/actions/{actionId}", h.UpdateWebhookAction)
 					r.Delete("/actions/{actionId}", h.DeleteWebhookAction)
 				})

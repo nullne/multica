@@ -70,8 +70,8 @@ RETURNING *;
 DELETE FROM webhook_action WHERE id = $1;
 
 -- name: CreateWebhookEventLog :one
-INSERT INTO webhook_event_log (webhook_id, dedup_key, payload, status, issue_id, error_message)
-VALUES ($1, $2, $3, $4, sqlc.narg(issue_id), sqlc.narg(error_message))
+INSERT INTO webhook_event_log (webhook_id, action_id, dedup_key, payload, status, issue_id, error_message)
+VALUES ($1, sqlc.narg(action_id), $2, $3, $4, sqlc.narg(issue_id), sqlc.narg(error_message))
 RETURNING *;
 
 -- name: ListWebhookEvents :many
@@ -79,6 +79,7 @@ SELECT * FROM webhook_event_log
 WHERE webhook_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
+
 
 -- name: CountWebhookEvents :one
 SELECT count(*) FROM webhook_event_log WHERE webhook_id = $1;
@@ -90,9 +91,15 @@ WHERE webhook_id = $1 AND dedup_key = $2 AND status = 'processed'
 LIMIT 1;
 
 -- name: ListWorkspaceWebhookEvents :many
-SELECT wel.id, wel.webhook_id, wel.dedup_key, wel.payload, wel.status, wel.issue_id, wel.error_message, wel.created_at
+SELECT wel.id, wel.webhook_id, wel.action_id, wel.dedup_key, wel.payload, wel.status, wel.issue_id, wel.error_message, wel.created_at
 FROM webhook_event_log wel
 JOIN webhook w ON w.id = wel.webhook_id
 WHERE w.workspace_id = $1
 ORDER BY wel.created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: ListWebhookActionEvents :many
+SELECT * FROM webhook_event_log
+WHERE action_id = $1
+ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;

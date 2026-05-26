@@ -65,6 +65,7 @@ const mockListBotUsers = vi.fn();
 const mockListWebhookAdapters = vi.fn();
 const mockListWorkspaceWebhookEvents = vi.fn();
 const mockListWebhookEvents = vi.fn();
+const mockListWebhookActionEvents = vi.fn();
 const mockCreateWebhook = vi.fn();
 const mockUpdateWebhook = vi.fn();
 const mockCreateWebhookAction = vi.fn();
@@ -78,6 +79,7 @@ vi.mock("@/shared/api", () => ({
     listWebhookAdapters: (...args: any[]) => mockListWebhookAdapters(...args),
     listWorkspaceWebhookEvents: (...args: any[]) => mockListWorkspaceWebhookEvents(...args),
     listWebhookEvents: (...args: any[]) => mockListWebhookEvents(...args),
+    listWebhookActionEvents: (...args: any[]) => mockListWebhookActionEvents(...args),
     createWebhook: (...args: any[]) => mockCreateWebhook(...args),
     updateWebhook: (...args: any[]) => mockUpdateWebhook(...args),
     createWebhookAction: (...args: any[]) => mockCreateWebhookAction(...args),
@@ -118,6 +120,7 @@ function makeEvent(overrides: Partial<WebhookEvent> = {}): WebhookEvent {
   return {
     id: "evt-1",
     webhook_id: "wh-1",
+    action_id: null,
     dedup_key: "",
     payload: { title: "Test alert" },
     status: "processed",
@@ -166,6 +169,7 @@ describe("WebhooksTab — event history", () => {
     mockListWebhookAdapters.mockResolvedValue([]);
     mockListWorkspaceWebhookEvents.mockResolvedValue([]);
     mockListWebhookEvents.mockResolvedValue([]);
+    mockListWebhookActionEvents.mockResolvedValue([]);
   });
 
   it("does not load workspace events on mount — Event History is collapsed by default", async () => {
@@ -288,6 +292,109 @@ describe("WebhooksTab — event history", () => {
   });
 });
 
+describe("WebhooksTab — per-action event history", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListWebhooks.mockResolvedValue([]);
+    mockListDaemons.mockResolvedValue([]);
+    mockListBotUsers.mockResolvedValue([]);
+    mockListWebhookAdapters.mockResolvedValue([]);
+    mockListWorkspaceWebhookEvents.mockResolvedValue([]);
+    mockListWebhookEvents.mockResolvedValue([]);
+    mockListWebhookActionEvents.mockResolvedValue([]);
+  });
+
+  async function expandWebhookCard() {
+    const nameEl = await screen.findByText("My Webhook");
+    const cardContainer = nameEl.closest("div.flex.items-center.gap-3");
+    const expandBtn = cardContainer?.querySelector("button");
+    if (!expandBtn) throw new Error("Could not find expand button");
+    fireEvent.click(expandBtn);
+  }
+
+  it("shows per-action recent events toggle when webhook card is expanded", async () => {
+    const wh = makeWebhookWithActions();
+    wh.actions = [
+      {
+        id: "action-1",
+        webhook_id: "wh-1",
+        action_type: "create_issue",
+        config: { agent_id: "agent-1", title_template: "", description_template: "", labels: [] },
+        enabled: true,
+        position: 0,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mockListWebhooks.mockResolvedValue([wh]);
+
+    render(<WebhooksTab />);
+    await expandWebhookCard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Recent events")).toBeInTheDocument();
+    });
+  });
+
+  it("loads and displays action events when per-action panel is expanded", async () => {
+    const wh = makeWebhookWithActions();
+    wh.actions = [
+      {
+        id: "action-1",
+        webhook_id: "wh-1",
+        action_type: "create_issue",
+        config: { agent_id: "agent-1", title_template: "", description_template: "", labels: [] },
+        enabled: true,
+        position: 0,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    const actionEvent = makeEvent({ id: "evt-action-1", action_id: "action-1", status: "processed", payload: { title: "Action alert" } });
+    mockListWebhooks.mockResolvedValue([wh]);
+    mockListWebhookActionEvents.mockResolvedValue([actionEvent]);
+
+    render(<WebhooksTab />);
+    await expandWebhookCard();
+
+    const recentEventsBtn = await screen.findByText("Recent events");
+    fireEvent.click(recentEventsBtn);
+
+    await waitFor(() => {
+      expect(mockListWebhookActionEvents).toHaveBeenCalledWith("wh-1", "action-1");
+      expect(screen.getByText("Action alert")).toBeInTheDocument();
+    });
+  });
+
+  it("shows 'No events for this action yet' when action has no events", async () => {
+    const wh = makeWebhookWithActions();
+    wh.actions = [
+      {
+        id: "action-1",
+        webhook_id: "wh-1",
+        action_type: "create_issue",
+        config: { agent_id: "agent-1", title_template: "", description_template: "", labels: [] },
+        enabled: true,
+        position: 0,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    mockListWebhooks.mockResolvedValue([wh]);
+    mockListWebhookActionEvents.mockResolvedValue([]);
+
+    render(<WebhooksTab />);
+    await expandWebhookCard();
+
+    const recentEventsBtn = await screen.findByText("Recent events");
+    fireEvent.click(recentEventsBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("No events for this action yet")).toBeInTheDocument();
+    });
+  });
+});
+
 describe("WebhooksTab — subscriber config display", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -297,6 +404,7 @@ describe("WebhooksTab — subscriber config display", () => {
     mockListWebhookAdapters.mockResolvedValue([]);
     mockListWorkspaceWebhookEvents.mockResolvedValue([]);
     mockListWebhookEvents.mockResolvedValue([]);
+    mockListWebhookActionEvents.mockResolvedValue([]);
   });
 
   it("shows subscriber names in action summary when subscriber_ids are configured", async () => {
@@ -351,6 +459,7 @@ describe("WebhooksTab — confirmed agent dispatch", () => {
     ]);
     mockListWorkspaceWebhookEvents.mockResolvedValue([]);
     mockListWebhookEvents.mockResolvedValue([]);
+    mockListWebhookActionEvents.mockResolvedValue([]);
   });
 
   it("create dialog requires confirming an agent before saving", async () => {

@@ -54,6 +54,7 @@ type WebhookActionResponse struct {
 type WebhookEventResponse struct {
 	ID           string  `json:"id"`
 	WebhookID    string  `json:"webhook_id"`
+	ActionID     *string `json:"action_id"`
 	DedupKey     string  `json:"dedup_key"`
 	Payload      any     `json:"payload"`
 	Status       string  `json:"status"`
@@ -108,6 +109,7 @@ func webhookEventToResponse(e db.WebhookEventLog) WebhookEventResponse {
 	return WebhookEventResponse{
 		ID:           uuidToString(e.ID),
 		WebhookID:    uuidToString(e.WebhookID),
+		ActionID:     uuidToPtr(e.ActionID),
 		DedupKey:     e.DedupKey,
 		Payload:      payload,
 		Status:       e.Status,
@@ -478,6 +480,36 @@ func (h *Handler) ListWorkspaceWebhookEvents(w http.ResponseWriter, r *http.Requ
 		WorkspaceID: parseUUID(workspaceID),
 		Limit:       limit,
 		Offset:      offset,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list events")
+		return
+	}
+
+	resp := make([]WebhookEventResponse, len(events))
+	for i, e := range events {
+		resp[i] = webhookEventToResponse(e)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) ListWebhookActionEvents(w http.ResponseWriter, r *http.Request) {
+	webhookID := chi.URLParam(r, "id")
+	actionID := chi.URLParam(r, "actionId")
+	workspaceID := resolveWorkspaceID(r)
+
+	existing, err := h.Queries.GetWebhook(r.Context(), parseUUID(webhookID))
+	if err != nil || uuidToString(existing.WorkspaceID) != workspaceID {
+		writeError(w, http.StatusNotFound, "webhook not found")
+		return
+	}
+
+	limit := int32(50)
+	offset := int32(0)
+	events, err := h.Queries.ListWebhookActionEvents(r.Context(), db.ListWebhookActionEventsParams{
+		ActionID: parseUUID(actionID),
+		Limit:    limit,
+		Offset:   offset,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list events")
@@ -900,20 +932,21 @@ func (h *Handler) IngestWebhook(w http.ResponseWriter, r *http.Request) {
 //
 // Returns (events parsed, issues/comments created).
 func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, body []byte, headers http.Header) (int, int) {
+	noAction := pgtype.UUID{}
 	if webhook.Status != "active" {
-		h.logWebhookEvent(ctx, webhook, "", body, "filtered", pgtype.UUID{}, "webhook is paused")
+		h.logWebhookEvent(ctx, webhook, noAction, "", body, "filtered", pgtype.UUID{}, "webhook is paused")
 		return 0, 0
 	}
 
 	adapter, err := wh.GetAdapter(webhook.SourceType)
 	if err != nil {
-		h.logWebhookEvent(ctx, webhook, "", body, "error", pgtype.UUID{}, err.Error())
+		h.logWebhookEvent(ctx, webhook, noAction, "", body, "error", pgtype.UUID{}, err.Error())
 		return 0, 0
 	}
 
 	events, err := adapter.Parse(json.RawMessage(body), headers)
 	if err != nil {
-		h.logWebhookEvent(ctx, webhook, "", body, "error", pgtype.UUID{}, "parse failed: "+err.Error())
+		h.logWebhookEvent(ctx, webhook, noAction, "", body, "error", pgtype.UUID{}, "parse failed: "+err.Error())
 		return 0, 0
 	}
 	if len(events) == 0 {
@@ -923,7 +956,7 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 
 	actions, err := h.Queries.ListEnabledWebhookActions(ctx, webhook.ID)
 	if err != nil {
-		h.logWebhookEvent(ctx, webhook, "", body, "error", pgtype.UUID{}, "list actions: "+err.Error())
+		h.logWebhookEvent(ctx, webhook, noAction, "", body, "error", pgtype.UUID{}, "list actions: "+err.Error())
 		return len(events), 0
 	}
 
@@ -939,14 +972,14 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 				WindowSeconds: float64(webhook.DedupWindowSeconds),
 			})
 			if dedupErr == nil {
-				h.logWebhookEvent(ctx, webhook, evt.DedupKey, body, "deduped", pgtype.UUID{}, "")
+				h.logWebhookEvent(ctx, webhook, noAction, evt.DedupKey, body, "deduped", pgtype.UUID{}, "")
 				continue
 			}
 		}
 
 		preexistingLink, hasPreexistingLink, linkErr := h.findIssueLinkForEvent(ctx, webhook.WorkspaceID, evt)
 		if linkErr != nil {
-			h.logWebhookEvent(ctx, webhook, evt.DedupKey, body, "error", pgtype.UUID{}, "lookup issue_link: "+linkErr.Error())
+			h.logWebhookEvent(ctx, webhook, noAction, evt.DedupKey, body, "error", pgtype.UUID{}, "lookup issue_link: "+linkErr.Error())
 			continue
 		}
 
@@ -954,7 +987,7 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 		for _, action := range actions {
 			ranOK, issueID, runErr := h.runWebhookAction(ctx, webhook, action, evt, preexistingLink, hasPreexistingLink)
 			if runErr != nil {
-				h.logWebhookEvent(ctx, webhook, evt.DedupKey, body, "error", pgtype.UUID{}, fmt.Sprintf("%s: %s", action.ActionType, runErr.Error()))
+				h.logWebhookEvent(ctx, webhook, action.ID, evt.DedupKey, body, "error", pgtype.UUID{}, fmt.Sprintf("%s: %s", action.ActionType, runErr.Error()))
 				continue
 			}
 			if !ranOK {
@@ -962,10 +995,10 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 			}
 			processed = true
 			created++
-			h.logWebhookEvent(ctx, webhook, evt.DedupKey, body, "processed", issueID, "")
+			h.logWebhookEvent(ctx, webhook, action.ID, evt.DedupKey, body, "processed", issueID, "")
 		}
 		if !processed {
-			h.logWebhookEvent(ctx, webhook, evt.DedupKey, body, "filtered", pgtype.UUID{}, "no matching action")
+			h.logWebhookEvent(ctx, webhook, noAction, evt.DedupKey, body, "filtered", pgtype.UUID{}, "no matching action")
 		}
 	}
 
@@ -1343,13 +1376,14 @@ func renderTemplate(tmpl string, data map[string]string) string {
 	return result
 }
 
-func (h *Handler) logWebhookEvent(ctx context.Context, webhook db.Webhook, dedupKey string, payload []byte, status string, issueID pgtype.UUID, errMsg string) {
+func (h *Handler) logWebhookEvent(ctx context.Context, webhook db.Webhook, actionID pgtype.UUID, dedupKey string, payload []byte, status string, issueID pgtype.UUID, errMsg string) {
 	var errorMessage pgtype.Text
 	if errMsg != "" {
 		errorMessage = pgtype.Text{String: errMsg, Valid: true}
 	}
 	_, err := h.Queries.CreateWebhookEventLog(ctx, db.CreateWebhookEventLogParams{
 		WebhookID:    webhook.ID,
+		ActionID:     actionID,
 		DedupKey:     dedupKey,
 		Payload:      payload,
 		Status:       status,

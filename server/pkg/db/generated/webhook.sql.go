@@ -135,13 +135,14 @@ func (q *Queries) CreateWebhookAction(ctx context.Context, arg CreateWebhookActi
 }
 
 const createWebhookEventLog = `-- name: CreateWebhookEventLog :one
-INSERT INTO webhook_event_log (webhook_id, dedup_key, payload, status, issue_id, error_message)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, webhook_id, dedup_key, payload, status, issue_id, error_message, created_at
+INSERT INTO webhook_event_log (webhook_id, action_id, dedup_key, payload, status, issue_id, error_message)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, webhook_id, action_id, dedup_key, payload, status, issue_id, error_message, created_at
 `
 
 type CreateWebhookEventLogParams struct {
 	WebhookID    pgtype.UUID `json:"webhook_id"`
+	ActionID     pgtype.UUID `json:"action_id"`
 	DedupKey     string      `json:"dedup_key"`
 	Payload      []byte      `json:"payload"`
 	Status       string      `json:"status"`
@@ -152,6 +153,7 @@ type CreateWebhookEventLogParams struct {
 func (q *Queries) CreateWebhookEventLog(ctx context.Context, arg CreateWebhookEventLogParams) (WebhookEventLog, error) {
 	row := q.db.QueryRow(ctx, createWebhookEventLog,
 		arg.WebhookID,
+		arg.ActionID,
 		arg.DedupKey,
 		arg.Payload,
 		arg.Status,
@@ -162,6 +164,7 @@ func (q *Queries) CreateWebhookEventLog(ctx context.Context, arg CreateWebhookEv
 	err := row.Scan(
 		&i.ID,
 		&i.WebhookID,
+		&i.ActionID,
 		&i.DedupKey,
 		&i.Payload,
 		&i.Status,
@@ -381,7 +384,7 @@ func (q *Queries) ListWebhookActions(ctx context.Context, webhookID pgtype.UUID)
 }
 
 const listWebhookEvents = `-- name: ListWebhookEvents :many
-SELECT id, webhook_id, dedup_key, payload, status, issue_id, error_message, created_at FROM webhook_event_log
+SELECT id, webhook_id, action_id, dedup_key, payload, status, issue_id, error_message, created_at FROM webhook_event_log
 WHERE webhook_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -405,6 +408,50 @@ func (q *Queries) ListWebhookEvents(ctx context.Context, arg ListWebhookEventsPa
 		if err := rows.Scan(
 			&i.ID,
 			&i.WebhookID,
+			&i.ActionID,
+			&i.DedupKey,
+			&i.Payload,
+			&i.Status,
+			&i.IssueID,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWebhookActionEvents = `-- name: ListWebhookActionEvents :many
+SELECT id, webhook_id, action_id, dedup_key, payload, status, issue_id, error_message, created_at FROM webhook_event_log
+WHERE action_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListWebhookActionEventsParams struct {
+	ActionID pgtype.UUID `json:"action_id"`
+	Limit    int32       `json:"limit"`
+	Offset   int32       `json:"offset"`
+}
+
+func (q *Queries) ListWebhookActionEvents(ctx context.Context, arg ListWebhookActionEventsParams) ([]WebhookEventLog, error) {
+	rows, err := q.db.Query(ctx, listWebhookActionEvents, arg.ActionID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []WebhookEventLog{}
+	for rows.Next() {
+		var i WebhookEventLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.WebhookID,
+			&i.ActionID,
 			&i.DedupKey,
 			&i.Payload,
 			&i.Status,
@@ -461,7 +508,7 @@ func (q *Queries) ListWebhooksByWorkspace(ctx context.Context, workspaceID pgtyp
 }
 
 const listWorkspaceWebhookEvents = `-- name: ListWorkspaceWebhookEvents :many
-SELECT wel.id, wel.webhook_id, wel.dedup_key, wel.payload, wel.status, wel.issue_id, wel.error_message, wel.created_at
+SELECT wel.id, wel.webhook_id, wel.action_id, wel.dedup_key, wel.payload, wel.status, wel.issue_id, wel.error_message, wel.created_at
 FROM webhook_event_log wel
 JOIN webhook w ON w.id = wel.webhook_id
 WHERE w.workspace_id = $1
@@ -487,6 +534,7 @@ func (q *Queries) ListWorkspaceWebhookEvents(ctx context.Context, arg ListWorksp
 		if err := rows.Scan(
 			&i.ID,
 			&i.WebhookID,
+			&i.ActionID,
 			&i.DedupKey,
 			&i.Payload,
 			&i.Status,
