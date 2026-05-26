@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Save, Eye, EyeOff } from "lucide-react";
+import { CheckCircle2, CircleAlert, Eye, EyeOff, Loader2, Save } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
-import type { ProviderConfig, WorkspaceProviderSettings } from "@/shared/types";
+import type { ProviderConfig, ProviderValidationResult, WorkspaceProviderSettings } from "@/shared/types";
 
 const PROVIDERS = [
   { key: "claude", label: "Claude Code", envHint: "ANTHROPIC_API_KEY" },
@@ -24,6 +24,13 @@ const emptyConfig = (): ProviderConfig => ({
   api_key: "",
   target_version: "",
 });
+
+const validationTone: Record<ProviderValidationResult["status"], string> = {
+  valid: "text-primary",
+  invalid: "text-destructive",
+  unsupported: "text-muted-foreground",
+  temporarily_unavailable: "text-foreground",
+};
 
 function normalizeProviders(raw: Record<string, ProviderConfig> | undefined): Record<string, ProviderConfig> {
   if (!raw) return {};
@@ -47,6 +54,8 @@ export function ProvidersTab() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set());
+  const [validating, setValidating] = useState<Set<string>>(new Set());
+  const [validationResults, setValidationResults] = useState<Record<string, ProviderValidationResult>>({});
 
   const loadConfig = useCallback(async () => {
     if (!workspace) return;
@@ -72,6 +81,11 @@ export function ProvidersTab() {
       ...prev,
       [key]: { ...emptyConfig(), ...prev[key], ...update },
     }));
+    setValidationResults((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   const toggleKeyVisibility = (key: string) => {
@@ -109,6 +123,24 @@ export function ProvidersTab() {
     }
   };
 
+  const handleValidate = async (key: string) => {
+    if (!workspace) return;
+    const config = getConfig(key);
+    setValidating((prev) => new Set(prev).add(key));
+    try {
+      const result = await api.validateProviderAPIKey(workspace.id, key, config.api_key);
+      setValidationResults((prev) => ({ ...prev, [key]: result }));
+    } catch {
+      toast.error("Failed to validate provider API key");
+    } finally {
+      setValidating((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -134,6 +166,11 @@ export function ProvidersTab() {
         {PROVIDERS.map(({ key, label, envHint }) => {
           const config = getConfig(key);
           const isKeyVisible = visibleKeys.has(key);
+          const isValidating = validating.has(key);
+          const validationResult = validationResults[key];
+          const validationIcon = validationResult?.status === "valid"
+            ? <CheckCircle2 className="h-4 w-4" />
+            : <CircleAlert className="h-4 w-4" />;
           return (
             <Card key={key}>
               <CardContent className="pt-4 space-y-3">
@@ -173,6 +210,7 @@ export function ProvidersTab() {
                           size="icon"
                           onClick={() => toggleKeyVisibility(key)}
                           className="shrink-0"
+                          aria-label={isKeyVisible ? `Hide ${label} API key` : `Show ${label} API key`}
                         >
                           {isKeyVisible ? (
                             <EyeOff className="h-4 w-4" />
@@ -180,7 +218,26 @@ export function ProvidersTab() {
                             <Eye className="h-4 w-4" />
                           )}
                         </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => handleValidate(key)}
+                          disabled={isValidating || !config.api_key.trim()}
+                          className="shrink-0"
+                        >
+                          {isValidating ? (
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="h-4 w-4 mr-1" />
+                          )}
+                          {isValidating ? "Validating..." : "Validate"}
+                        </Button>
                       </div>
+                      {validationResult && (
+                        <p className={`flex items-center gap-1 text-xs ${validationTone[validationResult.status]}`}>
+                          {validationIcon}
+                          <span>{validationResult.message}</span>
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground">
                         Leave empty to use per-user authentication
                       </p>
