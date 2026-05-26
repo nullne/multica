@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -60,5 +62,63 @@ func TestMergeProviderSettingsRemovesMulticaTargetVersion(t *testing.T) {
 	}
 	if strings.Contains(string(merged), "multica_target_version") {
 		t.Fatalf("expected multica_target_version to be removed, got %s", merged)
+	}
+}
+
+func TestValidateProviderAPIKeyMapsStatuses(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		status   int
+		want     ProviderValidationStatus
+	}{
+		{name: "valid", provider: "codex", status: http.StatusOK, want: ProviderValidationValid},
+		{name: "invalid", provider: "codex", status: http.StatusUnauthorized, want: ProviderValidationInvalid},
+		{name: "unavailable", provider: "claude", status: http.StatusTooManyRequests, want: ProviderValidationUnavailable},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.provider == "claude" {
+					if r.Header.Get("x-api-key") != "test-key" {
+						t.Fatalf("expected anthropic API key header")
+					}
+					if r.Header.Get("anthropic-version") == "" {
+						t.Fatalf("expected anthropic-version header")
+					}
+				} else if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+					t.Fatalf("expected bearer token header, got %q", got)
+				}
+				w.WriteHeader(tt.status)
+			}))
+			defer server.Close()
+
+			oldURLs := providerValidationURLs
+			oldClient := providerValidationHTTPClient
+			providerValidationURLs = map[string]string{tt.provider: server.URL}
+			providerValidationHTTPClient = server.Client()
+			defer func() {
+				providerValidationURLs = oldURLs
+				providerValidationHTTPClient = oldClient
+			}()
+
+			got := validateProviderAPIKey(t.Context(), tt.provider, "test-key")
+			if got.Status != tt.want {
+				t.Fatalf("expected status %q, got %q", tt.want, got.Status)
+			}
+		})
+	}
+}
+
+func TestValidateProviderAPIKeyUnsupportedAndEmpty(t *testing.T) {
+	unsupported := validateProviderAPIKey(t.Context(), "cursor", "test-key")
+	if unsupported.Status != ProviderValidationUnsupported {
+		t.Fatalf("expected unsupported status, got %q", unsupported.Status)
+	}
+
+	empty := validateProviderAPIKey(t.Context(), "codex", "")
+	if empty.Status != ProviderValidationInvalid {
+		t.Fatalf("expected invalid status for empty key, got %q", empty.Status)
 	}
 }
