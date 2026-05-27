@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     getRoutine: vi.fn(),
     listRoutineRuns: vi.fn(),
   },
+  generateRoutineTriggerTokenDraft: vi.fn(),
   regenerateRoutineTriggerToken: vi.fn(),
   clipboardWriteText: vi.fn(),
   toast: {
@@ -51,6 +52,7 @@ vi.mock("@/features/issues/components/pickers", () => ({
 
 vi.mock("@/shared/api", () => ({
   api: mocks.api,
+  generateRoutineTriggerTokenDraft: mocks.generateRoutineTriggerTokenDraft,
   regenerateRoutineTriggerToken: mocks.regenerateRoutineTriggerToken,
 }));
 
@@ -114,6 +116,11 @@ describe("RoutinesPage", () => {
       enabled: true,
     });
     mocks.api.updateRoutine.mockResolvedValue({});
+    mocks.generateRoutineTriggerTokenDraft.mockResolvedValue({
+      draft_id: "draft-api",
+      token_prefix: "sk-draft-token",
+      token: "sk-draft-token-full",
+    });
     mocks.regenerateRoutineTriggerToken.mockResolvedValue({
       trigger: {
         id: "trigger-api",
@@ -199,7 +206,7 @@ describe("RoutinesPage", () => {
     await user.type(screen.getByLabelText("Instructions"), "Review the code every day");
     await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
     await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
-    await user.click(screen.getByRole("button", { name: /API/i }));
+    await user.click(screen.getByRole("button", { name: /Schedule/i }));
     await user.click(screen.getByRole("button", { name: /Create routine/i }));
 
     await waitFor(() => {
@@ -284,7 +291,7 @@ describe("RoutinesPage", () => {
     expect(screen.getByRole("heading", { name: "Issue template" })).toBeInTheDocument();
     expect(screen.getByText("Assignee")).toBeInTheDocument();
     expect(screen.getByText("Subscribers")).toBeInTheDocument();
-    expect(screen.getByText("Labels")).toBeInTheDocument();
+    expect(screen.getAllByText("Labels").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByTestId("issue-assignee-picker")).toBeInTheDocument();
     expect(screen.queryByText("Dispatch")).not.toBeInTheDocument();
 
@@ -316,18 +323,16 @@ describe("RoutinesPage", () => {
     await user.click(screen.getByRole("button", { name: /GitHub event/i }));
 
     expect(screen.getByRole("button", { name: /Runs on cron 0 9/ })).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByText("Run on a recurring cron schedule or once at a future time")).toBeInTheDocument();
     expect(screen.getByText("Event")).toBeInTheDocument();
     const eventTypeTrigger = screen.getByRole("button", { name: "GitHub event type" });
     expect(eventTypeTrigger).toBeInTheDocument();
     await user.click(eventTypeTrigger);
     const eventSearch = await screen.findByRole("textbox", { name: /Search GitHub events/i });
-    await user.type(eventSearch, "merged");
-    const mergedItem = await screen.findByRole("menuitemcheckbox", { name: "Merged" });
-    expect(mergedItem).toHaveAttribute("aria-checked", "false");
-    await user.click(mergedItem);
+    await user.type(eventSearch, "pull_request.closed");
+    const closedItem = await screen.findByRole("menuitemradio", { name: "Closed" });
+    await user.click(closedItem);
     await user.keyboard("{Escape}");
-    expect(screen.getAllByText("PR opened, PR merged").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Pull request closed").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Add a filter condition")).toBeInTheDocument();
     expect(screen.queryByText("GitHub labels")).not.toBeInTheDocument();
 
@@ -335,7 +340,10 @@ describe("RoutinesPage", () => {
 
     expect(screen.getByDisplayValue("Author")).toBeInTheDocument();
     expect(screen.getByText("is one of")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Comma-separated values")).toBeInTheDocument();
+    await user.selectOptions(screen.getByDisplayValue("Author"), "base_branch");
+    expect(screen.getByDisplayValue("Base branch")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("main, releases/**")).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("main, releases/**"), "main");
 
     await user.type(screen.getByLabelText(/Name/), "Daily review");
     expect(screen.getByRole("button", { name: /Create routine/i })).toBeDisabled();
@@ -357,10 +365,14 @@ describe("RoutinesPage", () => {
             expect.objectContaining({
               trigger_type: "github",
               config: expect.objectContaining({
-                event_types: expect.arrayContaining([
-                  "github.pull_request.opened",
-                  "github.pull_request.merged",
-                ]),
+                event_types: ["github.pull_request.closed"],
+                filters: [
+                  {
+                    field: "base_branch",
+                    operator: "is one of",
+                    value: "main",
+                  },
+                ],
               }),
             }),
           ]),
@@ -369,7 +381,162 @@ describe("RoutinesPage", () => {
     });
   });
 
-  it("searches events and mixes selections across categories", async () => {
+  it("allows multiple triggers of the same type and saves each instance", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /Schedule/i }));
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /Schedule/i }));
+    expect(screen.getAllByRole("button", { name: /Runs once on/ })).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+    expect(screen.getAllByRole("button", { name: /PR opened/ }).length).toBeGreaterThanOrEqual(2);
+
+    await user.type(screen.getByLabelText(/Name/), "Multi trigger routine");
+    await user.type(screen.getByLabelText("Instructions"), "Create work from multiple sources");
+    await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
+    await user.click(screen.getByRole("button", { name: /Create routine/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRoutine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          triggers: [
+            expect.objectContaining({ trigger_type: "schedule" }),
+            expect.objectContaining({ trigger_type: "schedule" }),
+            expect.objectContaining({
+              trigger_type: "github",
+              config: { event_types: ["github.pull_request.opened"] },
+            }),
+            expect.objectContaining({
+              trigger_type: "github",
+              config: { event_types: ["github.pull_request.opened"] },
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("groups triggers of the same type in the form", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /Schedule/i }));
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+
+    const triggerButtons = screen
+      .getAllByRole("button")
+      .filter((button) =>
+        /Runs once on|PR opened/.test(button.textContent ?? ""),
+      )
+      .map((button) => button.textContent ?? "");
+
+    expect(triggerButtons).toHaveLength(3);
+    expect(triggerButtons[0]).toMatch(/Runs once on/);
+    expect(triggerButtons[1]).toMatch(/PR opened/);
+    expect(triggerButtons[2]).toMatch(/PR opened/);
+  });
+
+  it("uses pull_request.closed plus a merged condition for the PR merged preset", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+    await user.click(screen.getByRole("button", { name: "PR merged" }));
+
+    expect(screen.getAllByText("Pull request closed").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByDisplayValue("Is merged")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("true")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /Search GitHub events/i })).not.toBeInTheDocument();
+    expect(screen.queryByText("PR opened, PR merged")).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/Name/), "Merged PR routine");
+    await user.type(screen.getByLabelText("Instructions"), "Create work when PRs merge");
+    await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
+    await user.click(screen.getByRole("button", { name: /Create routine/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.createRoutine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          triggers: [
+            expect.objectContaining({
+              trigger_type: "github",
+              config: {
+                event_types: ["github.pull_request.closed"],
+                filters: [
+                  {
+                    field: "is_merged",
+                    operator: "equals",
+                    value: "true",
+                  },
+                ],
+              },
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("shows only filters supported by the selected GitHub event", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /GitHub event/i }));
+
+    await user.click(screen.getByRole("button", { name: "Add a filter condition" }));
+    expect(screen.getByDisplayValue("Author")).toBeInTheDocument();
+    expect(screen.getByText("Title")).toBeInTheDocument();
+    expect(screen.getByText("Body")).toBeInTheDocument();
+    expect(screen.getByText("Base branch")).toBeInTheDocument();
+    expect(screen.getByText("Head branch")).toBeInTheDocument();
+    expect(screen.getAllByText("Labels").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Is draft")).toBeInTheDocument();
+    expect(screen.getByText("Is merged")).toBeInTheDocument();
+    expect(screen.queryByText("Changed paths")).not.toBeInTheDocument();
+    expect(screen.queryByText("Tags")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Issue opened" }));
+
+    expect(screen.getByRole("button", { name: "Add a filter condition" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add a filter condition" }));
+    expect(screen.getByDisplayValue("Author")).toBeInTheDocument();
+    expect(screen.getByText("Title")).toBeInTheDocument();
+    expect(screen.getByText("Body")).toBeInTheDocument();
+    expect(screen.getByText("State")).toBeInTheDocument();
+    expect(screen.getAllByText("Labels").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("Base branch")).not.toBeInTheDocument();
+    expect(screen.queryByText("Is merged")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Release published" }));
+
+    expect(screen.getByRole("button", { name: "Add a filter condition" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add a filter condition" }));
+    expect(screen.getByDisplayValue("Tag name")).toBeInTheDocument();
+    expect(screen.getByText("Target branch")).toBeInTheDocument();
+    expect(screen.getByText("Release name")).toBeInTheDocument();
+    expect(screen.getByText("Is draft")).toBeInTheDocument();
+    expect(screen.getByText("Is prerelease")).toBeInTheDocument();
+    expect(screen.queryByText("Author")).not.toBeInTheDocument();
+  });
+
+  it("searches events and replaces the selected GitHub event", async () => {
     const user = userEvent.setup();
     mocks.searchParams = new URLSearchParams("new=1");
     render(<RoutinesPage />);
@@ -380,17 +547,18 @@ describe("RoutinesPage", () => {
 
     const eventSearch = await screen.findByRole("textbox", { name: /Search GitHub events/i });
     await user.type(eventSearch, "publish");
-    const published = await screen.findByRole("menuitemcheckbox", { name: "Published" });
-    expect(published).toHaveAttribute("aria-checked", "false");
+    const published = await screen.findByRole("menuitemradio", { name: "Published" });
     await user.click(published);
 
-    await user.clear(eventSearch);
-    await user.type(eventSearch, "created");
-    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Created" }));
-    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: /Search GitHub events/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "GitHub event type" }));
+    const updatedEventSearch = await screen.findByRole("textbox", { name: /Search GitHub events/i });
+    await user.type(updatedEventSearch, "created");
+    await user.click(await screen.findByRole("menuitemradio", { name: "Created" }));
 
-    // Default pull_request.opened + release.published + release.created
-    expect(screen.getAllByText("3 events · 2 categories").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Release created").length).toBeGreaterThanOrEqual(1);
+    const presets = screen.getByRole("group", { name: "GitHub event presets" });
+    expect(within(presets).getByRole("button", { name: "Release published" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("offers event presets and falls back to Custom for manual selections", async () => {
@@ -411,16 +579,32 @@ describe("RoutinesPage", () => {
     expect(within(presets).getByRole("button", { name: "Release published" })).toHaveAttribute("aria-pressed", "true");
     expect(within(presets).getByRole("button", { name: "PR opened" })).toHaveAttribute("aria-pressed", "false");
 
-    // A manual multi-event selection via the dropdown lights up Custom
+    // A manual non-preset selection via the dropdown lights up Custom
     await user.click(screen.getByRole("button", { name: "GitHub event type" }));
     const eventSearch = await screen.findByRole("textbox", { name: /Search GitHub events/i });
-    await user.type(eventSearch, "merged");
-    await user.click(await screen.findByRole("menuitemcheckbox", { name: "Merged" }));
+    await user.type(eventSearch, "ready");
+    await user.click(await screen.findByRole("menuitemradio", { name: "Ready for review" }));
     await user.keyboard("{Escape}");
     expect(within(presets).getByRole("button", { name: "Custom" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("shows API trigger URL and generated token after create", async () => {
+  it("does not save an API trigger until a token is generated", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1");
+
+    render(<RoutinesPage />);
+
+    await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
+    await user.click(screen.getByRole("button", { name: /API/i }));
+    await user.type(screen.getByLabelText(/Name/), "API routine");
+    await user.type(screen.getByLabelText("Instructions"), "Create from API");
+    await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
+
+    expect(screen.getByRole("button", { name: /Create routine/i })).toBeDisabled();
+    expect(mocks.api.createRoutine).not.toHaveBeenCalled();
+  });
+
+  it("generates an API trigger token before create and saves the generated trigger", async () => {
     const user = userEvent.setup();
     mocks.searchParams = new URLSearchParams("new=1");
     mocks.api.createRoutine.mockResolvedValue({
@@ -437,7 +621,6 @@ describe("RoutinesPage", () => {
           trigger_type: "api",
           source_type: "standard",
           token_prefix: "sk-api-token",
-          token: "sk-api-token-full",
           timezone: "UTC",
           dedup_window_seconds: 600,
           successful_runs_count: 0,
@@ -459,21 +642,32 @@ describe("RoutinesPage", () => {
     await user.click(screen.getByRole("button", { name: /API/i }));
 
     expect(screen.getByText("API URL")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Save routine first/i })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Generate token/i }));
+
+    expect(await screen.findByDisplayValue(/\/api\/routine-triggers\/draft-api/)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("sk-draft-token...")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "API token generated" })).toBeInTheDocument();
+    expect(screen.getByText("sk-draft-token-full")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Done" }));
 
     await user.type(screen.getByLabelText(/Name/), "API routine");
     await user.type(screen.getByLabelText("Instructions"), "Create from API");
     await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
     await user.click(screen.getByRole("button", { name: /Create routine/i }));
 
-    expect(await screen.findByDisplayValue(/\/api\/routine-triggers\/trigger-api/)).toBeInTheDocument();
-    expect(screen.getByDisplayValue("sk-api-token...")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "API token generated" })).toBeInTheDocument();
-    expect(screen.getByText("sk-api-token-full")).toBeInTheDocument();
-    expect(screen.getByText(/curl -X POST/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy token" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy curl request" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => {
+      expect(mocks.api.createRoutine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          triggers: [
+            expect.objectContaining({
+              trigger_type: "api",
+              id: "draft-api",
+              token_draft_id: "draft-api",
+            }),
+          ],
+        }),
+      );
+    });
     expect(screen.getByRole("button", { name: /Regenerate token/i })).not.toBeDisabled();
   });
 

@@ -309,6 +309,7 @@ func parseGitHubIssues(body []byte) map[string]string {
 			Number  int    `json:"number"`
 			Title   string `json:"title"`
 			Body    string `json:"body"`
+			State   string `json:"state"`
 			HTMLURL string `json:"html_url"`
 			User    struct {
 				Login string `json:"login"`
@@ -337,6 +338,7 @@ func parseGitHubIssues(body []byte) map[string]string {
 		"number":      fmt.Sprintf("%d", issue.Number),
 		"title":       issue.Title,
 		"user":        issue.User.Login,
+		"state":       issue.State,
 		"repo":        ev.Repository.FullName,
 		"html_url":    issue.HTMLURL,
 		"labels":      strings.Join(labelNames, ", "),
@@ -556,11 +558,14 @@ func parseGitHubRelease(body []byte) map[string]string {
 	var ev struct {
 		Action  string `json:"action"`
 		Release struct {
-			Name    string `json:"name"`
-			TagName string `json:"tag_name"`
-			Body    string `json:"body"`
-			HTMLURL string `json:"html_url"`
-			Author  struct {
+			Name            string `json:"name"`
+			TagName         string `json:"tag_name"`
+			TargetCommitish string `json:"target_commitish"`
+			Draft           bool   `json:"draft"`
+			Prerelease      bool   `json:"prerelease"`
+			Body            string `json:"body"`
+			HTMLURL         string `json:"html_url"`
+			Author          struct {
 				Login string `json:"login"`
 			} `json:"author"`
 		} `json:"release"`
@@ -574,16 +579,19 @@ func parseGitHubRelease(body []byte) map[string]string {
 		title = ev.Release.TagName
 	}
 	return map[string]string{
-		"action":      ev.Action,
-		"repo":        ev.Repository.FullName,
-		"title":       title,
-		"tag":         ev.Release.TagName,
-		"user":        ev.Release.Author.Login,
-		"html_url":    ev.Release.HTMLURL,
-		"source_url":  ev.Release.HTMLURL,
-		"source_kind": "release",
-		"external_id": ev.Repository.FullName + "@" + ev.Release.TagName,
-		"body":        fmt.Sprintf("**Release [%s](%s)**\n**Tag:** `%s`\n**Author:** %s\n**Action:** %s\n\n%s", title, ev.Release.HTMLURL, ev.Release.TagName, ev.Release.Author.Login, ev.Action, ev.Release.Body),
+		"action":        ev.Action,
+		"repo":          ev.Repository.FullName,
+		"title":         title,
+		"tag":           ev.Release.TagName,
+		"target_branch": ev.Release.TargetCommitish,
+		"is_draft":      fmt.Sprintf("%t", ev.Release.Draft),
+		"is_prerelease": fmt.Sprintf("%t", ev.Release.Prerelease),
+		"user":          ev.Release.Author.Login,
+		"html_url":      ev.Release.HTMLURL,
+		"source_url":    ev.Release.HTMLURL,
+		"source_kind":   "release",
+		"external_id":   ev.Repository.FullName + "@" + ev.Release.TagName,
+		"body":          fmt.Sprintf("**Release [%s](%s)**\n**Tag:** `%s`\n**Author:** %s\n**Action:** %s\n\n%s", title, ev.Release.HTMLURL, ev.Release.TagName, ev.Release.Author.Login, ev.Action, ev.Release.Body),
 	}
 }
 

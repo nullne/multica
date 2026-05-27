@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Bell,
@@ -32,10 +32,11 @@ import {
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
@@ -65,7 +66,7 @@ import { PriorityPicker } from "@/features/issues/components/pickers/priority-pi
 import { AssigneePicker } from "@/features/issues/components/pickers";
 import { useLabelStore } from "@/features/labels";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
-import { api, regenerateRoutineTriggerToken } from "@/shared/api";
+import { api, generateRoutineTriggerTokenDraft, regenerateRoutineTriggerToken } from "@/shared/api";
 import type { CreateRoutineRequest, IssueAssigneeType, IssuePriority, Routine, RoutineTriggerRequest, UpdateIssueRequest } from "@/shared/types";
 import { toast } from "sonner";
 
@@ -75,12 +76,32 @@ type ScheduleMode = "once" | "hourly" | "daily" | "weekdays" | "weekly" | "custo
 interface ApiTriggerCredential {
   id: string;
   tokenPrefix: string;
+  tokenDraftId?: string;
   token?: string;
 }
 
 interface ApiTokenReveal {
   token: string;
   url: string;
+}
+
+interface ScheduleTriggerConfig {
+  mode: ScheduleMode;
+  runAt: string;
+  hourlyMinute: string;
+  timeOfDay: string;
+  weeklyDay: string;
+  cronExpression: string;
+}
+
+interface RoutineTriggerDraft {
+  clientId: string;
+  id?: string;
+  type: TriggerType;
+  schedule: ScheduleTriggerConfig;
+  githubEventValue: string;
+  githubFilters: GitHubFilterCondition[];
+  apiCredential: ApiTriggerCredential | null;
 }
 
 interface TriggerOption {
@@ -134,7 +155,7 @@ const githubEventGroups: {
       { value: "github.pull_request.assigned", label: "Assigned", summary: "PR assigned" },
       { value: "github.pull_request.auto_merge_disabled", label: "Auto merge disabled", summary: "PR auto merge disabled" },
       { value: "github.pull_request.auto_merge_enabled", label: "Auto merge enabled", summary: "PR auto merge enabled" },
-      { value: "github.pull_request.closed", label: "Closed", summary: "PR closed" },
+      { value: "github.pull_request.closed", label: "Closed", summary: "Pull request closed" },
       { value: "github.pull_request.converted_to_draft", label: "Converted to draft", summary: "PR converted to draft" },
       { value: "github.pull_request.demilestoned", label: "Demilestoned", summary: "PR demilestoned" },
       { value: "github.pull_request.dequeued", label: "Dequeued", summary: "PR dequeued" },
@@ -152,7 +173,6 @@ const githubEventGroups: {
       { value: "github.pull_request.unassigned", label: "Unassigned", summary: "PR unassigned" },
       { value: "github.pull_request.unlabeled", label: "Unlabeled", summary: "PR unlabeled" },
       { value: "github.pull_request.unlocked", label: "Unlocked", summary: "PR unlocked" },
-      { value: "github.pull_request.merged", label: "Merged", summary: "PR merged" },
     ],
   },
   {
@@ -185,33 +205,158 @@ const githubEventGroups: {
     id: "release",
     label: "Release",
     events: [
-      { value: "github.release.published", label: "Published", summary: "Release published" },
       { value: "github.release.created", label: "Created", summary: "Release created" },
       { value: "github.release.deleted", label: "Deleted", summary: "Release deleted" },
       { value: "github.release.edited", label: "Edited", summary: "Release edited" },
       { value: "github.release.prereleased", label: "Prereleased", summary: "Release prereleased" },
+      { value: "github.release.published", label: "Published", summary: "Release published" },
       { value: "github.release.released", label: "Released", summary: "Release released" },
       { value: "github.release.unpublished", label: "Unpublished", summary: "Release unpublished" },
     ],
   },
 ];
 
-const githubEventPresets: { label: string; events: string[] }[] = [
-  { label: "PR opened", events: ["github.pull_request.opened"] },
-  { label: "PR merged", events: ["github.pull_request.merged"] },
-  { label: "Release published", events: ["github.release.published"] },
-  { label: "Issue opened", events: ["github.issues.opened"] },
+interface GitHubEventPreset {
+  label: string;
+  event: string;
+  filters?: GitHubFilterCondition[];
+}
+
+const githubEventPresets: GitHubEventPreset[] = [
+  { label: "PR opened", event: "github.pull_request.opened" },
+  {
+    label: "PR merged",
+    event: "github.pull_request.closed",
+    filters: [{
+      id: "filter-pr-merged",
+      field: "is_merged",
+      operator: "equals",
+      value: "true",
+    }],
+  },
+  { label: "Release published", event: "github.release.published" },
+  { label: "Issue opened", event: "github.issues.opened" },
 ];
 
 const weekDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-const githubFilterFields = [
-  "Author",
-  "Title",
-  "Body",
-  "State",
-  "Labels",
-] as const;
+interface GitHubFilterField {
+  value: string;
+  label: string;
+  placeholder: string;
+  defaultOperator?: string;
+  operators?: readonly string[];
+  valueOptions?: readonly string[];
+}
+
+const githubPullRequestAuthorFilter: GitHubFilterField = {
+  value: "user",
+  label: "Author",
+  placeholder: "octocat",
+};
+const githubPullRequestTitleFilter: GitHubFilterField = {
+  value: "title",
+  label: "Title",
+  placeholder: "Fix login, release",
+};
+const githubPullRequestBodyFilter: GitHubFilterField = {
+  value: "body",
+  label: "Body",
+  placeholder: "Closes #123",
+};
+const githubPullRequestBranchesFilter: GitHubFilterField = {
+  value: "base_branch",
+  label: "Base branch",
+  placeholder: "main, releases/**",
+};
+const githubPullRequestHeadBranchesFilter: GitHubFilterField = {
+  value: "head_branch",
+  label: "Head branch",
+  placeholder: "feature/**, dependabot/**",
+};
+const githubPullRequestLabelsFilter: GitHubFilterField = {
+  value: "labels",
+  label: "Labels",
+  placeholder: "bug, urgent",
+};
+const githubPullRequestDraftFilter: GitHubFilterField = {
+  value: "is_draft",
+  label: "Is draft",
+  placeholder: "true",
+  defaultOperator: "equals",
+  operators: ["equals"],
+  valueOptions: ["true", "false"],
+};
+const githubPullRequestMergedFilter: GitHubFilterField = {
+  value: "is_merged",
+  label: "Is merged",
+  placeholder: "true",
+  defaultOperator: "equals",
+  operators: ["equals"],
+  valueOptions: ["true", "false"],
+};
+const githubIssueStateFilter: GitHubFilterField = {
+  value: "state",
+  label: "State",
+  placeholder: "open, closed",
+};
+const githubReleaseTagNameFilter: GitHubFilterField = {
+  value: "tag",
+  label: "Tag name",
+  placeholder: "v1.0.0",
+};
+const githubReleaseTargetBranchFilter: GitHubFilterField = {
+  value: "target_branch",
+  label: "Target branch",
+  placeholder: "main",
+};
+const githubReleaseNameFilter: GitHubFilterField = {
+  value: "title",
+  label: "Release name",
+  placeholder: "Release v1.0.0",
+};
+const githubReleaseDraftFilter: GitHubFilterField = {
+  value: "is_draft",
+  label: "Is draft",
+  placeholder: "true",
+  defaultOperator: "equals",
+  operators: ["equals"],
+  valueOptions: ["true", "false"],
+};
+const githubReleasePrereleaseFilter: GitHubFilterField = {
+  value: "is_prerelease",
+  label: "Is prerelease",
+  placeholder: "true",
+  defaultOperator: "equals",
+  operators: ["equals"],
+  valueOptions: ["true", "false"],
+};
+const githubFilterFieldsByCategory: Record<GitHubEventCategory, GitHubFilterField[]> = {
+  pull_request: [
+    githubPullRequestAuthorFilter,
+    githubPullRequestTitleFilter,
+    githubPullRequestBodyFilter,
+    githubPullRequestBranchesFilter,
+    githubPullRequestHeadBranchesFilter,
+    githubPullRequestLabelsFilter,
+    githubPullRequestDraftFilter,
+    githubPullRequestMergedFilter,
+  ],
+  issues: [
+    githubPullRequestAuthorFilter,
+    githubPullRequestTitleFilter,
+    githubPullRequestBodyFilter,
+    githubIssueStateFilter,
+    githubPullRequestLabelsFilter,
+  ],
+  release: [
+    githubReleaseTagNameFilter,
+    githubReleaseTargetBranchFilter,
+    githubReleaseNameFilter,
+    githubReleaseDraftFilter,
+    githubReleasePrereleaseFilter,
+  ],
+};
 
 const githubFilterOperators = [
   "is one of",
@@ -375,21 +520,13 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
   );
   const [defaultedCurrentUserSubscriber, setDefaultedCurrentUserSubscriber] = useState(Boolean(!routineID && currentUser?.id));
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
-  const [selectedTriggerTypes, setSelectedTriggerTypes] = useState<TriggerType[]>([]);
-  const [openTriggerType, setOpenTriggerType] = useState<TriggerType | null>(null);
+  const [triggerDrafts, setTriggerDrafts] = useState<RoutineTriggerDraft[]>([]);
+  const [openTriggerId, setOpenTriggerId] = useState<string | null>(null);
   const [addingTrigger, setAddingTrigger] = useState(false);
-  const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("once");
-  const [runAt, setRunAt] = useState("2026/05/21, 18:53");
-  const [hourlyMinute, setHourlyMinute] = useState("0");
-  const [timeOfDay, setTimeOfDay] = useState("09:00");
-  const [weeklyDay, setWeeklyDay] = useState("Wednesday");
-  const [cronExpression, setCronExpression] = useState("0 9 * * 1");
-  const [githubEventValues, setGithubEventValues] = useState<string[]>(["github.pull_request.opened"]);
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [regeneratingApiToken, setRegeneratingApiToken] = useState(false);
   const [loadingRoutine, setLoadingRoutine] = useState(Boolean(routineID));
-  const [apiTriggerCredential, setApiTriggerCredential] = useState<ApiTriggerCredential | null>(null);
   const [apiTokenReveal, setApiTokenReveal] = useState<ApiTokenReveal | null>(null);
 
   const assigneeLabel =
@@ -406,28 +543,15 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
     setDispatchDaemonLabel(patch.dispatch_daemon_label ?? null);
   };
 
-  const scheduleSummary = useMemo(
-    () =>
-      buildScheduleSummary({
-        mode: scheduleMode,
-        runAt,
-        hourlyMinute,
-        timeOfDay,
-        weeklyDay,
-        cronExpression,
-      }),
-    [cronExpression, hourlyMinute, runAt, scheduleMode, timeOfDay, weeklyDay],
-  );
-  const githubSummary = useMemo(
-    () => buildGitHubEventSummary(githubEventValues),
-    [githubEventValues],
+  const effectiveTriggerDrafts = triggerDrafts.filter(
+    (trigger) => trigger.type !== "api" || trigger.apiCredential !== null,
   );
   const canSubmitRoutine =
     name.trim() !== "" &&
     instructions.trim() !== "" &&
     assigneeType !== null &&
     assigneeId !== null &&
-    selectedTriggerTypes.length > 0;
+    effectiveTriggerDrafts.length > 0;
 
   const toggleSubscriber = (id: string) => {
     setSelectedSubscriberIds((current) =>
@@ -445,19 +569,38 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
     );
   };
 
-  const toggleTrigger = (type: TriggerType) => {
-    setSelectedTriggerTypes((current) =>
-      current.includes(type) ? current : [...current, type],
-    );
-    setOpenTriggerType((current) => (current === type ? null : type));
+  const addTrigger = (type: TriggerType) => {
+    const trigger = createRoutineTriggerDraft(type);
+    setTriggerDrafts((current) => sortTriggerDrafts([...current, trigger]));
+    setOpenTriggerId(trigger.clientId);
     setAddingTrigger(false);
   };
 
-  const removeTrigger = (type: TriggerType) => {
-    setSelectedTriggerTypes((current) =>
-      current.filter((selectedType) => selectedType !== type),
+  const updateTriggerDraft = (clientId: string, patch: Partial<RoutineTriggerDraft>) => {
+    setTriggerDrafts((current) =>
+      sortTriggerDrafts(
+        current.map((trigger) =>
+          trigger.clientId === clientId ? { ...trigger, ...patch } : trigger,
+        ),
+      ),
     );
-    setOpenTriggerType((current) => (current === type ? null : current));
+  };
+
+  const updateScheduleDraft = (clientId: string, patch: Partial<ScheduleTriggerConfig>) => {
+    setTriggerDrafts((current) =>
+      sortTriggerDrafts(
+        current.map((trigger) =>
+          trigger.clientId === clientId
+            ? { ...trigger, schedule: { ...trigger.schedule, ...patch } }
+            : trigger,
+        ),
+      ),
+    );
+  };
+
+  const removeTrigger = (clientId: string) => {
+    setTriggerDrafts((current) => current.filter((trigger) => trigger.clientId !== clientId));
+    setOpenTriggerId((current) => (current === clientId ? null : current));
   };
 
   useEffect(() => {
@@ -478,25 +621,9 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
         setSelectedSubscriberIds(routine.subscriber_ids ?? []);
         setSelectedLabelIds(routine.label_ids ?? []);
         setEnabled(routine.enabled);
-        const triggerTypes = routine.triggers.map((trigger) => trigger.trigger_type as TriggerType);
-        setSelectedTriggerTypes(triggerTypes);
-        setOpenTriggerType(triggerTypes[0] ?? null);
-        const scheduleTrigger = routine.triggers.find((trigger) => trigger.trigger_type === "schedule");
-        if (scheduleTrigger?.schedule) {
-          setScheduleMode("custom");
-          setCronExpression(scheduleTrigger.schedule);
-        }
-        const githubTrigger = routine.triggers.find((trigger) => trigger.trigger_type === "github");
-        const eventTypes = githubTrigger?.config?.event_types;
-        if (Array.isArray(eventTypes)) {
-          setGithubEventValues(eventTypes.filter((event): event is string => typeof event === "string"));
-        }
-        const apiTrigger = routine.triggers.find((trigger) => trigger.trigger_type === "api");
-        setApiTriggerCredential(apiTrigger ? {
-          id: apiTrigger.id,
-          tokenPrefix: apiTrigger.token_prefix,
-          token: apiTrigger.token,
-        } : null);
+        const drafts = sortTriggerDrafts(routine.triggers.map(routineTriggerToDraft));
+        setTriggerDrafts(drafts);
+        setOpenTriggerId(drafts[0]?.clientId ?? null);
       })
       .catch((error) => {
         if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routine");
@@ -515,19 +642,38 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
     setDefaultedCurrentUserSubscriber(true);
   }, [currentUser?.id, defaultedCurrentUserSubscriber, routineID]);
 
-  const handleRegenerateApiToken = async () => {
-    if (!savedRoutineID || !apiTriggerCredential) return;
+  const handleRegenerateApiToken = async (clientId: string) => {
+    const trigger = triggerDrafts.find((draft) => draft.clientId === clientId);
+    if (!trigger || trigger.type !== "api") return;
+
     setRegeneratingApiToken(true);
     try {
-      const result = await regenerateRoutineTriggerToken(savedRoutineID, apiTriggerCredential.id);
-      setApiTriggerCredential({
+      if (!savedRoutineID || !trigger.apiCredential || trigger.apiCredential.tokenDraftId) {
+        const result = await generateRoutineTriggerTokenDraft();
+        const credential = {
+          id: result.draft_id,
+          tokenDraftId: result.draft_id,
+          tokenPrefix: result.token_prefix,
+        };
+        updateTriggerDraft(clientId, { id: result.draft_id, apiCredential: credential });
+        setApiTokenReveal({ token: result.token, url: getRoutineTriggerURL(result.draft_id) });
+        toast.success("API token generated");
+        return;
+      }
+      const result = await regenerateRoutineTriggerToken(savedRoutineID, trigger.apiCredential.id);
+      updateTriggerDraft(clientId, {
         id: result.trigger.id,
-        tokenPrefix: result.trigger.token_prefix,
+        apiCredential: {
+          ...trigger.apiCredential,
+          id: result.trigger.id,
+          tokenPrefix: result.trigger.token_prefix,
+          tokenDraftId: undefined,
+        },
       });
       setApiTokenReveal({ token: result.token, url: getRoutineTriggerURL(result.trigger.id) });
       toast.success("API token regenerated");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to regenerate API token");
+      toast.error(error instanceof Error ? error.message : "Failed to update API token");
     } finally {
       setRegeneratingApiToken(false);
     }
@@ -556,14 +702,7 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
         enabled,
         selectedSubscriberIds,
         selectedLabelIds,
-        selectedTriggerTypes,
-        scheduleMode,
-        runAt,
-        hourlyMinute,
-        timeOfDay,
-        weeklyDay,
-        cronExpression,
-        githubEventValues,
+        triggers: effectiveTriggerDrafts,
       });
       if (savedRoutineID) {
         await api.updateRoutine(savedRoutineID, payload);
@@ -572,15 +711,30 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
       } else {
         const created = await api.createRoutine(payload);
         toast.success("Routine created");
-        const apiTrigger = created.triggers.find((trigger) => trigger.trigger_type === "api");
-        if (apiTrigger) {
+        const apiTriggers = created.triggers.filter((trigger) => trigger.trigger_type === "api");
+        if (apiTriggers.length > 0) {
           setSavedRoutineID(created.id);
-          setApiTriggerCredential({
-            id: apiTrigger.id,
-            tokenPrefix: apiTrigger.token_prefix,
-          });
-          if (apiTrigger.token) {
-            setApiTokenReveal({ token: apiTrigger.token, url: getRoutineTriggerURL(apiTrigger.id) });
+          setTriggerDrafts((current) =>
+            sortTriggerDrafts(
+              current.map((draft) => {
+                if (draft.type !== "api" || !draft.apiCredential) return draft;
+                const apiTrigger = apiTriggers.find((createdTrigger) => createdTrigger.id === draft.apiCredential?.id);
+                if (!apiTrigger) return draft;
+                return {
+                  ...draft,
+                  id: apiTrigger.id,
+                  apiCredential: {
+                    id: apiTrigger.id,
+                    tokenPrefix: apiTrigger.token_prefix,
+                    token: apiTrigger.token,
+                  },
+                };
+              }),
+            ),
+          );
+          const tokenTrigger = apiTriggers.find((trigger) => trigger.token);
+          if (tokenTrigger?.token) {
+            setApiTokenReveal({ token: tokenTrigger.token, url: getRoutineTriggerURL(tokenTrigger.id) });
           }
           window.history.replaceState(null, "", `/routines?new=1&id=${created.id}`);
         } else {
@@ -773,62 +927,61 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
             </div>
 
             <div className="space-y-2">
-              {triggerOptions
-                .filter((option) => selectedTriggerTypes.includes(option.id))
-                .map((option) => {
-                const selected = selectedTriggerTypes.includes(option.id);
-                const open = openTriggerType === option.id;
+              {triggerDrafts.map((trigger, index) => {
+                const option = getTriggerOption(trigger.type);
+                const open = openTriggerId === trigger.clientId;
                 return (
                   <TriggerAccordionItem
-                    key={option.id}
+                    key={trigger.clientId}
                     option={option}
                     title={
-                      option.id === "schedule"
-                        ? scheduleSummary
-                        : option.id === "github"
-                          ? githubSummary
+                      trigger.type === "schedule"
+                        ? buildScheduleSummary(trigger.schedule)
+                        : trigger.type === "github"
+                          ? buildGitHubEventSummary(trigger.githubEventValue)
                           : "Call via API"
                     }
                     description={
-                      option.id === "api"
+                      trigger.type === "api"
                         ? "Generate an endpoint token for external calls."
-                        : undefined
+                        : `Trigger ${index + 1}`
                     }
-                    selected={selected}
+                    selected={true}
                     open={open}
-                    onToggle={() => toggleTrigger(option.id)}
-                    onRemove={() => removeTrigger(option.id)}
+                    onToggle={() => setOpenTriggerId((current) => (current === trigger.clientId ? null : trigger.clientId))}
+                    onRemove={() => removeTrigger(trigger.clientId)}
                   >
-                    {option.id === "schedule" && (
+                    {trigger.type === "schedule" && (
                       <ScheduleTriggerEditor
-                        mode={scheduleMode}
-                        onModeChange={setScheduleMode}
-                        runAt={runAt}
-                        onRunAtChange={setRunAt}
-                        hourlyMinute={hourlyMinute}
-                        onHourlyMinuteChange={setHourlyMinute}
-                        timeOfDay={timeOfDay}
-                        onTimeOfDayChange={setTimeOfDay}
-                        weeklyDay={weeklyDay}
-                        onWeeklyDayChange={setWeeklyDay}
-                        cronExpression={cronExpression}
-                        onCronExpressionChange={setCronExpression}
+                        mode={trigger.schedule.mode}
+                        onModeChange={(mode) => updateScheduleDraft(trigger.clientId, { mode })}
+                        runAt={trigger.schedule.runAt}
+                        onRunAtChange={(runAt) => updateScheduleDraft(trigger.clientId, { runAt })}
+                        hourlyMinute={trigger.schedule.hourlyMinute}
+                        onHourlyMinuteChange={(hourlyMinute) => updateScheduleDraft(trigger.clientId, { hourlyMinute })}
+                        timeOfDay={trigger.schedule.timeOfDay}
+                        onTimeOfDayChange={(timeOfDay) => updateScheduleDraft(trigger.clientId, { timeOfDay })}
+                        weeklyDay={trigger.schedule.weeklyDay}
+                        onWeeklyDayChange={(weeklyDay) => updateScheduleDraft(trigger.clientId, { weeklyDay })}
+                        cronExpression={trigger.schedule.cronExpression}
+                        onCronExpressionChange={(cronExpression) => updateScheduleDraft(trigger.clientId, { cronExpression })}
                       />
                     )}
 
-                    {option.id === "github" && (
+                    {trigger.type === "github" && (
                       <GitHubTriggerEditor
-                        selectedEvents={githubEventValues}
-                        onSelectedEventsChange={setGithubEventValues}
+                        selectedEvent={trigger.githubEventValue}
+                        filters={trigger.githubFilters}
+                        onSelectedEventChange={(githubEventValue) => updateTriggerDraft(trigger.clientId, { githubEventValue })}
+                        onFiltersChange={(githubFilters) => updateTriggerDraft(trigger.clientId, { githubFilters })}
                       />
                     )}
 
-                    {option.id === "api" && (
+                    {trigger.type === "api" && (
                       <ApiTriggerPanel
-                        routineID={savedRoutineID}
-                        credential={apiTriggerCredential}
+                        credential={trigger.apiCredential}
                         regenerating={regeneratingApiToken}
-                        onRegenerate={handleRegenerateApiToken}
+                        onRegenerate={() => handleRegenerateApiToken(trigger.clientId)}
                       />
                     )}
                   </TriggerAccordionItem>
@@ -838,33 +991,29 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
 
             {addingTrigger && (
               <div className="space-y-2 pl-3">
-                {triggerOptions
-                  .filter((option) => !selectedTriggerTypes.includes(option.id))
-                  .map((option) => (
+                {triggerOptions.map((option) => (
                     <AvailableTriggerRow
                       key={option.id}
                       option={option}
-                      onSelect={() => toggleTrigger(option.id)}
+                      onSelect={() => addTrigger(option.id)}
                     />
-                  ))}
+                ))}
               </div>
             )}
 
-            {selectedTriggerTypes.length < triggerOptions.length && (
-              <button
-                type="button"
-                onClick={() => {
-                  setAddingTrigger((open) => {
-                    const next = !open;
-                    if (next) setOpenTriggerType(null);
-                    return next;
-                  });
-                }}
-                className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-              >
-                {addingTrigger ? "⌄" : "+"} Add another trigger
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setAddingTrigger((open) => {
+                  const next = !open;
+                  if (next) setOpenTriggerId(null);
+                  return next;
+                });
+              }}
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {addingTrigger ? "⌄" : "+"} Add another trigger
+            </button>
 
             <Tabs defaultValue="connectors" className="pt-2">
               <TabsList>
@@ -1174,40 +1323,98 @@ function TimeField({ value, onChange }: { value: string; onChange: (value: strin
   );
 }
 
+function createRoutineTriggerDraft(type: TriggerType): RoutineTriggerDraft {
+  return {
+    clientId: createClientId(),
+    type,
+    schedule: createDefaultScheduleConfig(),
+    githubEventValue: "github.pull_request.opened",
+    githubFilters: [],
+    apiCredential: null,
+  };
+}
+
+function routineTriggerToDraft(trigger: Routine["triggers"][number]): RoutineTriggerDraft {
+  const draft = createRoutineTriggerDraft(trigger.trigger_type as TriggerType);
+  draft.id = trigger.id;
+
+  if (trigger.trigger_type === "schedule") {
+    const mode = getScheduleMode(trigger.config?.mode);
+    draft.schedule = {
+      ...draft.schedule,
+      mode: mode ?? (trigger.run_at ? "once" : "custom"),
+      runAt: trigger.run_at ?? draft.schedule.runAt,
+      cronExpression: trigger.schedule ?? draft.schedule.cronExpression,
+    };
+  }
+
+  if (trigger.trigger_type === "github") {
+    const eventTypes = trigger.config?.event_types;
+    if (Array.isArray(eventTypes)) {
+      const event = eventTypes.find((value): value is string => typeof value === "string");
+      if (event) draft.githubEventValue = event;
+    }
+    draft.githubFilters = parseGitHubFilters(trigger.config?.filters);
+  }
+
+  if (trigger.trigger_type === "api") {
+    draft.apiCredential = {
+      id: trigger.id,
+      tokenPrefix: trigger.token_prefix,
+      token: trigger.token,
+    };
+  }
+
+  return draft;
+}
+
+function createDefaultScheduleConfig(): ScheduleTriggerConfig {
+  return {
+    mode: "once",
+    runAt: "2026/05/21, 18:53",
+    hourlyMinute: "0",
+    timeOfDay: "09:00",
+    weeklyDay: "Wednesday",
+    cronExpression: "0 9 * * 1",
+  };
+}
+
+function getScheduleMode(value: unknown): ScheduleMode | null {
+  return scheduleModes.some((mode) => mode.value === value) ? (value as ScheduleMode) : null;
+}
+
+function getTriggerOption(type: TriggerType) {
+  return triggerOptions.find((option) => option.id === type) ?? triggerOptions[0]!;
+}
+
+function sortTriggerDrafts(triggers: RoutineTriggerDraft[]) {
+  const order = new Map<TriggerType, number>(
+    triggerOptions.map((option, index) => [option.id, index]),
+  );
+  return [...triggers].sort((a, b) => (order.get(a.type) ?? 0) - (order.get(b.type) ?? 0));
+}
+
+function createClientId() {
+  return `trigger-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function GitHubTriggerEditor({
-  selectedEvents,
-  onSelectedEventsChange,
+  selectedEvent,
+  filters,
+  onSelectedEventChange,
+  onFiltersChange,
 }: {
-  selectedEvents: string[];
-  onSelectedEventsChange: (events: string[]) => void;
+  selectedEvent: string;
+  filters: GitHubFilterCondition[];
+  onSelectedEventChange: (event: string) => void;
+  onFiltersChange: (filters: GitHubFilterCondition[]) => void;
 }) {
-  const [filters, setFilters] = useState<GitHubFilterCondition[]>([]);
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
-  const summary = buildGitHubEventSummary(selectedEvents);
-
-  const matchesPreset = (events: string[]) =>
-    events.length === selectedEvents.length &&
-    events.every((value) => selectedEvents.includes(value));
-  const isCustomSelection = !githubEventPresets.some((preset) => matchesPreset(preset.events));
-
-  const toggleEvent = (value: string) => {
-    onSelectedEventsChange(
-      selectedEvents.includes(value)
-        ? selectedEvents.filter((event) => event !== value)
-        : [...selectedEvents, value],
-    );
-  };
-
-  const toggleGroupAll = (group: (typeof githubEventGroups)[number]) => {
-    const values = group.events.map((event) => event.value);
-    const allSelected = values.every((value) => selectedEvents.includes(value));
-    onSelectedEventsChange(
-      allSelected
-        ? selectedEvents.filter((event) => !values.includes(event))
-        : Array.from(new Set([...selectedEvents, ...values])),
-    );
-  };
+  const summary = buildGitHubEventSummary(selectedEvent);
+  const isCustomSelection = !githubEventPresets.some((preset) => isGitHubPresetSelected(preset, selectedEvent, filters));
+  const availableFilterFields = getGitHubFilterFields(selectedEvent);
+  const selectedFilterFields = new Set(availableFilterFields.map((field) => field.value));
 
   const normalizedQuery = query.trim().toLowerCase();
   const searchResults = normalizedQuery
@@ -1223,14 +1430,31 @@ function GitHubTriggerEditor({
         .filter((entry) => entry.events.length > 0)
     : [];
 
+  const selectEvent = (event: string) => {
+    const nextFilterFields = new Set(getGitHubFilterFields(event).map((field) => field.value));
+    onFiltersChange(filters.filter((filter) => nextFilterFields.has(filter.field)));
+    onSelectedEventChange(event);
+    setQuery("");
+    setMenuOpen(false);
+  };
+
+  const selectPreset = (preset: GitHubEventPreset) => {
+    onFiltersChange(preset.filters ?? []);
+    onSelectedEventChange(preset.event);
+    setQuery("");
+    setMenuOpen(false);
+  };
+
   const addFilter = () => {
-    setFilters((current) => [
-      ...current,
+    const defaultField = availableFilterFields[0];
+    if (!defaultField) return;
+    onFiltersChange([
+      ...filters,
       {
-        id: `filter-${current.length + 1}`,
-        field: "Author",
-        operator: "is one of",
-        value: "",
+        id: `filter-${filters.length + 1}`,
+        field: defaultField.value,
+        operator: defaultField.defaultOperator ?? "is one of",
+        value: defaultField.valueOptions?.[0] ?? "",
       },
     ]);
   };
@@ -1239,15 +1463,15 @@ function GitHubTriggerEditor({
     id: string,
     patch: Partial<Omit<GitHubFilterCondition, "id">>,
   ) => {
-    setFilters((current) =>
-      current.map((filter) =>
+    onFiltersChange(
+      filters.map((filter) =>
         filter.id === id ? { ...filter, ...patch } : filter,
       ),
     );
   };
 
   const removeFilter = (id: string) => {
-    setFilters((current) => current.filter((filter) => filter.id !== id));
+    onFiltersChange(filters.filter((filter) => filter.id !== id));
   };
 
   return (
@@ -1258,8 +1482,8 @@ function GitHubTriggerEditor({
             <button
               key={preset.label}
               type="button"
-              aria-pressed={matchesPreset(preset.events)}
-              onClick={() => onSelectedEventsChange(preset.events)}
+              aria-pressed={isGitHubPresetSelected(preset, selectedEvent, filters)}
+              onClick={() => selectPreset(preset)}
               className="rounded-full border px-3 py-1 text-sm font-medium transition-colors hover:bg-accent aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground"
             >
               {preset.label}
@@ -1312,25 +1536,19 @@ function GitHubTriggerEditor({
                     searchResults.map(({ group, events }) => (
                       <DropdownMenuGroup key={group.id}>
                         <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
-                        {events.map((event) => (
-                          <DropdownMenuCheckboxItem
-                            key={event.value}
-                            checked={selectedEvents.includes(event.value)}
-                            closeOnClick={false}
-                            onCheckedChange={() => toggleEvent(event.value)}
-                          >
-                            {event.label}
-                          </DropdownMenuCheckboxItem>
-                        ))}
+                        <DropdownMenuRadioGroup value={selectedEvent} onValueChange={selectEvent}>
+                          {events.map((event) => (
+                            <DropdownMenuRadioItem key={event.value} value={event.value}>
+                              {event.label}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
                       </DropdownMenuGroup>
                     ))
                   )
                 ) : (
                   githubEventGroups.map((group) => {
-                    const selectedCount = group.events.filter((event) =>
-                      selectedEvents.includes(event.value),
-                    ).length;
-                    const allSelected = selectedCount === group.events.length;
+                    const selectedCount = group.events.some((event) => event.value === selectedEvent) ? 1 : 0;
                     return (
                       <DropdownMenuSub key={group.id}>
                         <DropdownMenuSubTrigger>
@@ -1342,26 +1560,13 @@ function GitHubTriggerEditor({
                           )}
                         </DropdownMenuSubTrigger>
                         <DropdownMenuSubContent className="max-h-80 w-56 overflow-y-auto">
-                          <DropdownMenuCheckboxItem
-                            checked={allSelected}
-                            closeOnClick={false}
-                            onCheckedChange={() => toggleGroupAll(group)}
-                          >
-                            <span className="font-medium">
-                              {allSelected ? "Clear all" : "Select all"}
-                            </span>
-                          </DropdownMenuCheckboxItem>
-                          <DropdownMenuSeparator />
-                          {group.events.map((event) => (
-                            <DropdownMenuCheckboxItem
-                              key={event.value}
-                              checked={selectedEvents.includes(event.value)}
-                              closeOnClick={false}
-                              onCheckedChange={() => toggleEvent(event.value)}
-                            >
-                              {event.label}
-                            </DropdownMenuCheckboxItem>
-                          ))}
+                          <DropdownMenuRadioGroup value={selectedEvent} onValueChange={selectEvent}>
+                            {group.events.map((event) => (
+                              <DropdownMenuRadioItem key={event.value} value={event.value}>
+                                {event.label}
+                              </DropdownMenuRadioItem>
+                            ))}
+                          </DropdownMenuRadioGroup>
                         </DropdownMenuSubContent>
                       </DropdownMenuSub>
                     );
@@ -1375,26 +1580,33 @@ function GitHubTriggerEditor({
 
       <div className="grid gap-1.5">
         <Label className="text-xs text-muted-foreground">Filter</Label>
-        {filters.length > 0 && (
+        {availableFilterFields.length === 0 ? (
+          <div className="rounded-lg border bg-background/70 px-3 py-2 text-sm text-muted-foreground">
+            This event only supports activity filtering.
+          </div>
+        ) : filters.length > 0 && (
           <div className="space-y-2">
-            {filters.map((filter) => (
+            {filters.filter((filter) => selectedFilterFields.has(filter.field)).map((filter) => (
               <GitHubFilterRow
                 key={filter.id}
                 filter={filter}
+                fields={availableFilterFields}
                 onChange={(patch) => updateFilter(filter.id, patch)}
                 onRemove={() => removeFilter(filter.id)}
               />
             ))}
           </div>
         )}
-        <Button
-          type="button"
-          variant="outline"
-          onClick={addFilter}
-          className="w-fit justify-start bg-background font-normal"
-        >
-          Add a filter condition
-        </Button>
+        {availableFilterFields.length > 0 && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={addFilter}
+            className="w-fit justify-start bg-background font-normal"
+          >
+            Add a filter condition
+          </Button>
+        )}
       </div>
 
       <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
@@ -1441,18 +1653,28 @@ function buildScheduleSummary({
   }
 }
 
-function buildGitHubEventSummary(selectedEvents: string[]) {
+function buildGitHubEventSummary(selectedEvent: string) {
   const allEvents = githubEventGroups.flatMap((group) => group.events);
-  if (selectedEvents.length === 0) return "Select GitHub events";
-  if (selectedEvents.length <= 2) {
-    return selectedEvents
-      .map((value) => allEvents.find((event) => event.value === value)?.summary ?? value)
-      .join(", ");
-  }
-  const categoryCount = githubEventGroups.filter((group) =>
-    group.events.some((event) => selectedEvents.includes(event.value)),
-  ).length;
-  return `${selectedEvents.length} events · ${categoryCount} ${categoryCount === 1 ? "category" : "categories"}`;
+  return allEvents.find((event) => event.value === selectedEvent)?.summary ?? selectedEvent;
+}
+
+function getGitHubFilterFields(selectedEvent: string) {
+  const group = githubEventGroups.find((entry) =>
+    entry.events.some((event) => event.value === selectedEvent),
+  );
+  return group ? githubFilterFieldsByCategory[group.id] : [];
+}
+
+function isGitHubPresetSelected(preset: GitHubEventPreset, selectedEvent: string, filters: GitHubFilterCondition[]) {
+  if (preset.event !== selectedEvent) return false;
+  if (!preset.filters || preset.filters.length === 0) return true;
+  return preset.filters.every((presetFilter) =>
+    filters.some((filter) =>
+      filter.field === presetFilter.field &&
+      filter.operator === presetFilter.operator &&
+      filter.value === presetFilter.value,
+    ),
+  );
 }
 
 function summarizeSelectedMembers(
@@ -1479,14 +1701,7 @@ function buildRoutinePayload({
   enabled,
   selectedSubscriberIds,
   selectedLabelIds,
-  selectedTriggerTypes,
-  scheduleMode,
-  runAt,
-  hourlyMinute,
-  timeOfDay,
-  weeklyDay,
-  cronExpression,
-  githubEventValues,
+  triggers,
 }: {
   name: string;
   instructions: string;
@@ -1499,14 +1714,7 @@ function buildRoutinePayload({
   enabled: boolean;
   selectedSubscriberIds: string[];
   selectedLabelIds: string[];
-  selectedTriggerTypes: TriggerType[];
-  scheduleMode: ScheduleMode;
-  runAt: string;
-  hourlyMinute: string;
-  timeOfDay: string;
-  weeklyDay: string;
-  cronExpression: string;
-  githubEventValues: string[];
+  triggers: RoutineTriggerDraft[];
 }): CreateRoutineRequest {
   return {
     name: name.trim(),
@@ -1520,18 +1728,7 @@ function buildRoutinePayload({
     enabled,
     subscriber_ids: selectedSubscriberIds,
     label_ids: selectedLabelIds,
-    triggers: selectedTriggerTypes.map((triggerType) =>
-      buildRoutineTrigger({
-        triggerType,
-        scheduleMode,
-        runAt,
-        hourlyMinute,
-        timeOfDay,
-        weeklyDay,
-        cronExpression,
-        githubEventValues,
-      }),
-    ),
+    triggers: triggers.map(buildRoutineTrigger),
     actions: [
       {
         action_type: "create_issue",
@@ -1543,50 +1740,51 @@ function buildRoutinePayload({
   };
 }
 
-function buildRoutineTrigger({
-  triggerType,
-  scheduleMode,
-  runAt,
-  hourlyMinute,
-  timeOfDay,
-  weeklyDay,
-  cronExpression,
-  githubEventValues,
-}: {
-  triggerType: TriggerType;
-  scheduleMode: ScheduleMode;
-  runAt: string;
-  hourlyMinute: string;
-  timeOfDay: string;
-  weeklyDay: string;
-  cronExpression: string;
-  githubEventValues: string[];
-}): RoutineTriggerRequest {
+function buildRoutineTrigger(triggerDraft: RoutineTriggerDraft): RoutineTriggerRequest {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  if (triggerType === "schedule") {
+  if (triggerDraft.type === "schedule") {
     const trigger: RoutineTriggerRequest = {
+      id: triggerDraft.id,
       trigger_type: "schedule",
       timezone,
-      config: { mode: scheduleMode },
+      config: { mode: triggerDraft.schedule.mode },
       enabled: true,
     };
-    if (scheduleMode === "once") {
-      trigger.run_at = parseLocalDateTime(runAt)?.toISOString() ?? null;
+    if (triggerDraft.schedule.mode === "once") {
+      trigger.run_at = parseLocalDateTime(triggerDraft.schedule.runAt)?.toISOString() ?? null;
       return trigger;
     }
-    trigger.schedule = scheduleToCron(scheduleMode, hourlyMinute, timeOfDay, weeklyDay, cronExpression);
+    trigger.schedule = scheduleToCron(
+      triggerDraft.schedule.mode,
+      triggerDraft.schedule.hourlyMinute,
+      triggerDraft.schedule.timeOfDay,
+      triggerDraft.schedule.weeklyDay,
+      triggerDraft.schedule.cronExpression,
+    );
     return trigger;
   }
-  if (triggerType === "github") {
+  if (triggerDraft.type === "github") {
+    const config: Record<string, unknown> = { event_types: [triggerDraft.githubEventValue] };
+    const activeFilters = triggerDraft.githubFilters.filter((filter) => filter.value.trim() !== "");
+    if (activeFilters.length > 0) {
+      config.filters = activeFilters.map(({ field, operator, value }) => ({
+        field,
+        operator,
+        value: value.trim(),
+      }));
+    }
     return {
+      id: triggerDraft.id,
       trigger_type: "github",
-      config: { event_types: githubEventValues },
+      config,
       enabled: true,
     };
   }
   return {
+    id: triggerDraft.apiCredential?.id,
     trigger_type: "api",
     source_type: "standard",
+    token_draft_id: triggerDraft.apiCredential?.tokenDraftId,
     config: {},
     enabled: true,
   };
@@ -1619,26 +1817,52 @@ function parseLocalDateTime(value: string) {
   return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
 }
 
+function parseGitHubFilters(value: unknown): GitHubFilterCondition[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    if (!item || typeof item !== "object") return [];
+    const filter = item as Record<string, unknown>;
+    if (typeof filter.field !== "string") return [];
+    return [{
+      id: typeof filter.id === "string" ? filter.id : `filter-${index + 1}`,
+      field: filter.field,
+      operator: typeof filter.operator === "string" ? filter.operator : "matches",
+      value: typeof filter.value === "string" ? filter.value : "",
+    }];
+  });
+}
+
 function GitHubFilterRow({
   filter,
+  fields,
   onChange,
   onRemove,
 }: {
   filter: GitHubFilterCondition;
+  fields: GitHubFilterField[];
   onChange: (patch: Partial<Omit<GitHubFilterCondition, "id">>) => void;
   onRemove: () => void;
 }) {
+  const selectedField = fields.find((field) => field.value === filter.field) ?? fields[0];
+  const operators = selectedField?.operators ?? githubFilterOperators;
   return (
     <div className="rounded-lg bg-background p-2">
       <div className="flex items-center gap-2">
         <NativeSelect
           value={filter.field}
-          onChange={(event) => onChange({ field: event.target.value })}
+          onChange={(event) => {
+            const nextField = fields.find((field) => field.value === event.target.value);
+            onChange({
+              field: event.target.value,
+              operator: nextField?.defaultOperator ?? "is one of",
+              value: nextField?.valueOptions?.[0] ?? "",
+            });
+          }}
           className="flex-1"
         >
-          {githubFilterFields.map((field) => (
-            <NativeSelectOption key={field} value={field}>
-              {field}
+          {fields.map((field) => (
+            <NativeSelectOption key={field.value} value={field.value}>
+              {field.label}
             </NativeSelectOption>
           ))}
         </NativeSelect>
@@ -1647,7 +1871,7 @@ function GitHubFilterRow({
           onChange={(event) => onChange({ operator: event.target.value })}
           className="flex-1"
         >
-          {githubFilterOperators.map((operator) => (
+          {operators.map((operator) => (
             <NativeSelectOption key={operator} value={operator}>
               {operator}
             </NativeSelectOption>
@@ -1662,12 +1886,26 @@ function GitHubFilterRow({
           <X className="size-4" />
         </button>
       </div>
-      <Input
-        value={filter.value}
-        onChange={(event) => onChange({ value: event.target.value })}
-        placeholder="Comma-separated values"
-        className="mt-2 bg-background"
-      />
+      {selectedField?.valueOptions ? (
+        <NativeSelect
+          value={filter.value}
+          onChange={(event) => onChange({ value: event.target.value })}
+          className="mt-2 w-full"
+        >
+          {selectedField.valueOptions.map((option) => (
+            <NativeSelectOption key={option} value={option}>
+              {option}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      ) : (
+        <Input
+          value={filter.value}
+          onChange={(event) => onChange({ value: event.target.value })}
+          placeholder={selectedField?.placeholder ?? "Comma-separated values"}
+          className="mt-2 bg-background"
+        />
+      )}
     </div>
   );
 }
@@ -1705,19 +1943,17 @@ function SelectedTriggerPanel({
 }
 
 function ApiTriggerPanel({
-  routineID,
   credential,
   regenerating,
   onRegenerate,
 }: {
-  routineID: string | null;
   credential: ApiTriggerCredential | null;
   regenerating: boolean;
   onRegenerate: () => void;
 }) {
   const apiURL = credential
     ? getRoutineTriggerURL(credential.id)
-    : "Save the routine to generate an API endpoint";
+    : "Generate a token to create an API endpoint";
   const tokenValue = credential
     ? `${credential.tokenPrefix}...`
     : "Token will be available after generation";
@@ -1745,17 +1981,17 @@ function ApiTriggerPanel({
             type="button"
             variant="outline"
             onClick={onRegenerate}
-            disabled={!routineID || !credential || regenerating}
+            disabled={regenerating}
           >
-            {!routineID || !credential
-              ? "Save routine first"
-              : regenerating
+            {regenerating
                 ? "Regenerating..."
-                : "Regenerate token"}
+                : credential
+                  ? "Regenerate token"
+                  : "Generate token"}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Regenerating invalidates the previous token. Existing API URL stays the same.
+          Save the routine to activate generated API endpoints. Regenerating invalidates the previous token.
         </p>
       </div>
     </div>
