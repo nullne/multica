@@ -36,6 +36,10 @@ export async function regenerateRoutineTriggerToken(
   return res.json() as Promise<{ trigger: RoutineTrigger; token: string }>;
 }
 
+export async function generateRoutineTriggerTokenDraft(): Promise<{ draft_id: string; token_prefix: string; token: string }> {
+  return api.generateRoutineTriggerTokenDraft();
+}
+
 // Initialize token from localStorage on load
 if (typeof window !== "undefined") {
   const token = localStorage.getItem("multica_token");

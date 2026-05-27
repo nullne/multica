@@ -61,8 +61,10 @@ export interface Routine {
 }
 
 export interface RoutineTriggerRequest {
+  id?: string;
   trigger_type: RoutineTriggerType;
   source_type?: string | null;
+  token_draft_id?: string;
   schedule?: string | null;
   timezone?: string;
   run_at?: string | null;

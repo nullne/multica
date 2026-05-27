@@ -52,6 +52,16 @@ INSERT INTO routine_trigger (
 )
 RETURNING *;
 
+-- name: CreateRoutineTriggerWithID :one
+INSERT INTO routine_trigger (
+    id, routine_id, trigger_type, source_type, token_hash, token_prefix,
+    installation_id, schedule, timezone, run_at, next_run_at,
+    dedup_window_seconds, max_runs, config, enabled
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+)
+RETURNING *;
+
 -- name: GetRoutineTrigger :one
 SELECT * FROM routine_trigger
 WHERE id = $1;
@@ -232,3 +242,17 @@ WHERE trigger_id = $1
   AND status = 'processed'
   AND created_at > now() - make_interval(secs => @window_seconds::double precision)
 LIMIT 1;
+
+-- name: CreateRoutineTriggerTokenDraft :one
+INSERT INTO routine_trigger_token_draft (workspace_id, created_by_id, token_hash, token_prefix)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: ConsumeRoutineTriggerTokenDraft :one
+UPDATE routine_trigger_token_draft
+SET consumed_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+  AND consumed_at IS NULL
+  AND expires_at > now()
+RETURNING *;

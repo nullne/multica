@@ -29,7 +29,7 @@ func TestRoutineRoutesEnforceMemberReadOnly(t *testing.T) {
 		"assignee_type": "agent",
 		"assignee_id":   agentID,
 		"triggers": []map[string]any{
-			{"trigger_type": "api", "source_type": "standard"},
+			{"trigger_type": "schedule", "schedule": "0 9 * * 1", "timezone": "UTC"},
 		},
 	})
 	if createResp.StatusCode != http.StatusCreated {
@@ -81,6 +81,7 @@ func TestRoutineRoutesEnforceMemberReadOnly(t *testing.T) {
 		body   any
 	}{
 		{"POST", "/api/routines", map[string]any{"name": "Nope"}},
+		{"POST", "/api/routine-trigger-token-drafts", nil},
 		{"POST", "/api/routines/" + routine.ID + "/trigger", nil},
 		{"POST", "/api/routines/" + routine.ID + "/triggers/" + routine.Triggers[0].ID + "/regenerate-token", nil},
 		{"PATCH", "/api/routines/" + routine.ID, map[string]any{"name": "Nope"}},

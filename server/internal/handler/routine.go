@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	wh "github.com/nullne/multica/server/internal/webhook"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
+
+var errRoutineTriggerTokenRequired = errors.New("routine trigger token must be generated before saving")
 
 type RoutineResponse struct {
 	ID                  string                   `json:"id"`
@@ -95,6 +98,12 @@ type RoutineTriggerTokenResponse struct {
 	Token   string                 `json:"token"`
 }
 
+type RoutineTriggerTokenDraftResponse struct {
+	DraftID     string `json:"draft_id"`
+	TokenPrefix string `json:"token_prefix"`
+	Token       string `json:"token"`
+}
+
 type CreateRoutineRequest struct {
 	Name                string                  `json:"name"`
 	Instructions        *string                 `json:"instructions"`
@@ -115,8 +124,10 @@ type CreateRoutineRequest struct {
 type UpdateRoutineRequest = CreateRoutineRequest
 
 type RoutineTriggerRequest struct {
+	ID                 *string `json:"id"`
 	TriggerType        string  `json:"trigger_type"`
 	SourceType         *string `json:"source_type"`
+	TokenDraftID       *string `json:"token_draft_id"`
 	Schedule           *string `json:"schedule"`
 	Timezone           *string `json:"timezone"`
 	RunAt              *string `json:"run_at"`
@@ -273,6 +284,10 @@ func (h *Handler) CreateRoutine(w http.ResponseWriter, r *http.Request) {
 	}
 	routine, triggerTokens, err := h.saveRoutine(r.Context(), parseUUID(workspaceID), member.UserID, "member", req, nil)
 	if err != nil {
+		if errors.Is(err, errRoutineTriggerTokenRequired) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		slog.Warn("create routine failed", "workspace_id", workspaceID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create routine")
 		return
@@ -311,6 +326,10 @@ func (h *Handler) UpdateRoutine(w http.ResponseWriter, r *http.Request) {
 	}
 	routine, triggerTokens, err := h.saveRoutine(r.Context(), parseUUID(workspaceID), existing.CreatedByID, existing.CreatedByType, req, &existing.ID)
 	if err != nil {
+		if errors.Is(err, errRoutineTriggerTokenRequired) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		slog.Warn("update routine failed", "routine_id", uuidToString(id), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to update routine")
 		return
@@ -458,6 +477,38 @@ func (h *Handler) RegenerateRoutineTriggerToken(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, RoutineTriggerTokenResponse{
 		Trigger: routineTriggerToResponse(updated, rawToken),
 		Token:   rawToken,
+	})
+}
+
+func (h *Handler) GenerateRoutineTriggerTokenDraft(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
+		return
+	}
+	rawToken, err := wh.GenerateToken()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+	prefix := rawToken
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+	draft, err := h.Queries.CreateRoutineTriggerTokenDraft(r.Context(), db.CreateRoutineTriggerTokenDraftParams{
+		WorkspaceID: parseUUID(workspaceID),
+		CreatedByID: member.UserID,
+		TokenHash:   auth.HashToken(rawToken),
+		TokenPrefix: prefix,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate routine trigger token")
+		return
+	}
+	writeJSON(w, http.StatusCreated, RoutineTriggerTokenDraftResponse{
+		DraftID:     uuidToString(draft.ID),
+		TokenPrefix: draft.TokenPrefix,
+		Token:       rawToken,
 	})
 }
 
@@ -702,10 +753,6 @@ func (h *Handler) saveRoutine(ctx context.Context, workspaceID pgtype.UUID, crea
 			WorkspaceID:         workspaceID,
 		})
 		if err == nil {
-			triggers, _ := qtx.ListRoutineTriggers(ctx, *existingID)
-			for _, trigger := range triggers {
-				_ = qtx.DeleteRoutineTrigger(ctx, trigger.ID)
-			}
 			actions, _ := qtx.ListRoutineActions(ctx, *existingID)
 			for _, action := range actions {
 				_ = qtx.DeleteRoutineAction(ctx, action.ID)
@@ -716,6 +763,14 @@ func (h *Handler) saveRoutine(ctx context.Context, workspaceID pgtype.UUID, crea
 	}
 	if err != nil {
 		return db.Routine{}, nil, err
+	}
+	existingTriggers := []db.RoutineTrigger{}
+	if existingID != nil {
+		existingTriggers, _ = qtx.ListRoutineTriggers(ctx, *existingID)
+	}
+	existingTriggersByID := make(map[string]db.RoutineTrigger, len(existingTriggers))
+	for _, trigger := range existingTriggers {
+		existingTriggersByID[uuidToString(trigger.ID)] = trigger
 	}
 
 	for _, labelID := range req.LabelIDs {
@@ -732,13 +787,28 @@ func (h *Handler) saveRoutine(ctx context.Context, workspaceID pgtype.UUID, crea
 	}
 
 	triggerTokens := map[string]string{}
+	keptTriggerIDs := map[string]bool{}
 	for _, triggerReq := range req.Triggers {
-		trigger, token, err := createRoutineTrigger(ctx, qtx, workspaceID, routine.ID, triggerReq)
+		var existingTrigger db.RoutineTrigger
+		hasExistingTrigger := false
+		if triggerReq.ID != nil {
+			if candidate, ok := existingTriggersByID[*triggerReq.ID]; ok {
+				existingTrigger = candidate
+				hasExistingTrigger = true
+			}
+		}
+		trigger, token, err := saveRoutineTrigger(ctx, qtx, workspaceID, routine.ID, triggerReq, existingTrigger, hasExistingTrigger)
 		if err != nil {
 			return db.Routine{}, nil, err
 		}
+		keptTriggerIDs[uuidToString(trigger.ID)] = true
 		if token != "" {
 			triggerTokens[uuidToString(trigger.ID)] = token
+		}
+	}
+	for _, trigger := range existingTriggers {
+		if !keptTriggerIDs[uuidToString(trigger.ID)] {
+			_ = qtx.DeleteRoutineTrigger(ctx, trigger.ID)
 		}
 	}
 	actions := req.Actions
@@ -779,7 +849,7 @@ func (h *Handler) saveRoutine(ctx context.Context, workspaceID pgtype.UUID, crea
 	return routine, triggerTokens, nil
 }
 
-func createRoutineTrigger(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, routineID pgtype.UUID, req RoutineTriggerRequest) (db.RoutineTrigger, string, error) {
+func saveRoutineTrigger(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, routineID pgtype.UUID, req RoutineTriggerRequest, existing db.RoutineTrigger, hasExisting bool) (db.RoutineTrigger, string, error) {
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -822,17 +892,32 @@ func createRoutineTrigger(ctx context.Context, q *db.Queries, workspaceID pgtype
 	}
 	var tokenHash pgtype.Text
 	tokenPrefix := ""
-	rawToken := ""
+	var triggerID pgtype.UUID
 	if req.TriggerType == "api" {
-		rawToken, err = wh.GenerateToken()
-		if err != nil {
-			return db.RoutineTrigger{}, "", err
+		if req.TokenDraftID != nil && *req.TokenDraftID != "" {
+			draftID := parseUUID(*req.TokenDraftID)
+			if !draftID.Valid {
+				return db.RoutineTrigger{}, "", errors.New("invalid routine trigger token draft")
+			}
+			draft, err := q.ConsumeRoutineTriggerTokenDraft(ctx, db.ConsumeRoutineTriggerTokenDraftParams{
+				ID:          draftID,
+				WorkspaceID: workspaceID,
+			})
+			if err != nil {
+				return db.RoutineTrigger{}, "", errRoutineTriggerTokenRequired
+			}
+			triggerID = draft.ID
+			tokenHash = pgtype.Text{String: draft.TokenHash, Valid: true}
+			tokenPrefix = draft.TokenPrefix
+		} else if hasExisting && existing.TriggerType == "api" {
+			triggerID = existing.ID
+			tokenHash = existing.TokenHash
+			tokenPrefix = existing.TokenPrefix
+		} else {
+			return db.RoutineTrigger{}, "", errRoutineTriggerTokenRequired
 		}
-		tokenHash = pgtype.Text{String: auth.HashToken(rawToken), Valid: true}
-		tokenPrefix = rawToken
-		if len(tokenPrefix) > 12 {
-			tokenPrefix = tokenPrefix[:12]
-		}
+	} else if hasExisting {
+		triggerID = existing.ID
 	}
 	var installationID pgtype.Int8
 	if req.TriggerType == "github" {
@@ -841,6 +926,44 @@ func createRoutineTrigger(ctx context.Context, q *db.Queries, workspaceID pgtype
 			return db.RoutineTrigger{}, "", err
 		}
 		installationID = workspace.GithubInstallationID
+	}
+	if hasExisting {
+		trigger, err := q.UpdateRoutineTrigger(ctx, db.UpdateRoutineTriggerParams{
+			ID:                 existing.ID,
+			SourceType:         ptrToText(req.SourceType),
+			TokenHash:          tokenHash,
+			TokenPrefix:        tokenPrefix,
+			InstallationID:     installationID,
+			Schedule:           ptrToText(req.Schedule),
+			Timezone:           timezone,
+			RunAt:              runAt,
+			NextRunAt:          nextRunAt,
+			DedupWindowSeconds: dedupWindow,
+			MaxRuns:            optionalInt4(req.MaxRuns),
+			Config:             configJSON,
+			Enabled:            enabled,
+		})
+		return trigger, "", err
+	}
+	if triggerID.Valid {
+		trigger, err := q.CreateRoutineTriggerWithID(ctx, db.CreateRoutineTriggerWithIDParams{
+			ID:                 triggerID,
+			RoutineID:          routineID,
+			TriggerType:        req.TriggerType,
+			SourceType:         ptrToText(req.SourceType),
+			TokenHash:          tokenHash,
+			TokenPrefix:        tokenPrefix,
+			InstallationID:     installationID,
+			Schedule:           ptrToText(req.Schedule),
+			Timezone:           timezone,
+			RunAt:              runAt,
+			NextRunAt:          nextRunAt,
+			DedupWindowSeconds: dedupWindow,
+			MaxRuns:            optionalInt4(req.MaxRuns),
+			Config:             configJSON,
+			Enabled:            enabled,
+		})
+		return trigger, "", err
 	}
 	trigger, err := q.CreateRoutineTrigger(ctx, db.CreateRoutineTriggerParams{
 		RoutineID:          routineID,
@@ -858,7 +981,7 @@ func createRoutineTrigger(ctx context.Context, q *db.Queries, workspaceID pgtype
 		Config:             configJSON,
 		Enabled:            enabled,
 	})
-	return trigger, rawToken, err
+	return trigger, "", err
 }
 
 func (h *Handler) buildRoutineResponse(ctx context.Context, routine db.Routine, triggerTokens map[string]string) (RoutineResponse, error) {

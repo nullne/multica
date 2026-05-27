@@ -109,6 +109,37 @@ func (q *Queries) ClearRoutineSubscribers(ctx context.Context, routineID pgtype.
 	return err
 }
 
+const consumeRoutineTriggerTokenDraft = `-- name: ConsumeRoutineTriggerTokenDraft :one
+UPDATE routine_trigger_token_draft
+SET consumed_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+  AND consumed_at IS NULL
+  AND expires_at > now()
+RETURNING id, workspace_id, created_by_id, token_hash, token_prefix, consumed_at, expires_at, created_at
+`
+
+type ConsumeRoutineTriggerTokenDraftParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ConsumeRoutineTriggerTokenDraft(ctx context.Context, arg ConsumeRoutineTriggerTokenDraftParams) (RoutineTriggerTokenDraft, error) {
+	row := q.db.QueryRow(ctx, consumeRoutineTriggerTokenDraft, arg.ID, arg.WorkspaceID)
+	var i RoutineTriggerTokenDraft
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CreatedByID,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.ConsumedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createRoutine = `-- name: CreateRoutine :one
 INSERT INTO routine (
     workspace_id, name, instructions, priority,
@@ -295,6 +326,112 @@ type CreateRoutineTriggerParams struct {
 
 func (q *Queries) CreateRoutineTrigger(ctx context.Context, arg CreateRoutineTriggerParams) (RoutineTrigger, error) {
 	row := q.db.QueryRow(ctx, createRoutineTrigger,
+		arg.RoutineID,
+		arg.TriggerType,
+		arg.SourceType,
+		arg.TokenHash,
+		arg.TokenPrefix,
+		arg.InstallationID,
+		arg.Schedule,
+		arg.Timezone,
+		arg.RunAt,
+		arg.NextRunAt,
+		arg.DedupWindowSeconds,
+		arg.MaxRuns,
+		arg.Config,
+		arg.Enabled,
+	)
+	var i RoutineTrigger
+	err := row.Scan(
+		&i.ID,
+		&i.RoutineID,
+		&i.TriggerType,
+		&i.SourceType,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.InstallationID,
+		&i.Schedule,
+		&i.Timezone,
+		&i.RunAt,
+		&i.NextRunAt,
+		&i.LastTriggeredAt,
+		&i.DedupWindowSeconds,
+		&i.MaxRuns,
+		&i.SuccessfulRunsCount,
+		&i.Config,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createRoutineTriggerTokenDraft = `-- name: CreateRoutineTriggerTokenDraft :one
+INSERT INTO routine_trigger_token_draft (workspace_id, created_by_id, token_hash, token_prefix)
+VALUES ($1, $2, $3, $4)
+RETURNING id, workspace_id, created_by_id, token_hash, token_prefix, consumed_at, expires_at, created_at
+`
+
+type CreateRoutineTriggerTokenDraftParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	CreatedByID pgtype.UUID `json:"created_by_id"`
+	TokenHash   string      `json:"token_hash"`
+	TokenPrefix string      `json:"token_prefix"`
+}
+
+func (q *Queries) CreateRoutineTriggerTokenDraft(ctx context.Context, arg CreateRoutineTriggerTokenDraftParams) (RoutineTriggerTokenDraft, error) {
+	row := q.db.QueryRow(ctx, createRoutineTriggerTokenDraft,
+		arg.WorkspaceID,
+		arg.CreatedByID,
+		arg.TokenHash,
+		arg.TokenPrefix,
+	)
+	var i RoutineTriggerTokenDraft
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CreatedByID,
+		&i.TokenHash,
+		&i.TokenPrefix,
+		&i.ConsumedAt,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createRoutineTriggerWithID = `-- name: CreateRoutineTriggerWithID :one
+INSERT INTO routine_trigger (
+    id, routine_id, trigger_type, source_type, token_hash, token_prefix,
+    installation_id, schedule, timezone, run_at, next_run_at,
+    dedup_window_seconds, max_runs, config, enabled
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+)
+RETURNING id, routine_id, trigger_type, source_type, token_hash, token_prefix, installation_id, schedule, timezone, run_at, next_run_at, last_triggered_at, dedup_window_seconds, max_runs, successful_runs_count, config, enabled, created_at, updated_at
+`
+
+type CreateRoutineTriggerWithIDParams struct {
+	ID                 pgtype.UUID        `json:"id"`
+	RoutineID          pgtype.UUID        `json:"routine_id"`
+	TriggerType        string             `json:"trigger_type"`
+	SourceType         pgtype.Text        `json:"source_type"`
+	TokenHash          pgtype.Text        `json:"token_hash"`
+	TokenPrefix        string             `json:"token_prefix"`
+	InstallationID     pgtype.Int8        `json:"installation_id"`
+	Schedule           pgtype.Text        `json:"schedule"`
+	Timezone           string             `json:"timezone"`
+	RunAt              pgtype.Timestamptz `json:"run_at"`
+	NextRunAt          pgtype.Timestamptz `json:"next_run_at"`
+	DedupWindowSeconds int32              `json:"dedup_window_seconds"`
+	MaxRuns            pgtype.Int4        `json:"max_runs"`
+	Config             []byte             `json:"config"`
+	Enabled            bool               `json:"enabled"`
+}
+
+func (q *Queries) CreateRoutineTriggerWithID(ctx context.Context, arg CreateRoutineTriggerWithIDParams) (RoutineTrigger, error) {
+	row := q.db.QueryRow(ctx, createRoutineTriggerWithID,
+		arg.ID,
 		arg.RoutineID,
 		arg.TriggerType,
 		arg.SourceType,

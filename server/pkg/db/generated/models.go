@@ -382,6 +382,17 @@ type RoutineTrigger struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
+type RoutineTriggerTokenDraft struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CreatedByID pgtype.UUID        `json:"created_by_id"`
+	TokenHash   string             `json:"token_hash"`
+	TokenPrefix string             `json:"token_prefix"`
+	ConsumedAt  pgtype.Timestamptz `json:"consumed_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type RuntimeUsage struct {
 	ID               pgtype.UUID        `json:"id"`
 	RuntimeID        pgtype.UUID        `json:"runtime_id"`

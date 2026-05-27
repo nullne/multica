@@ -333,6 +333,7 @@ function routineToUpdatePayload(routine: Routine, enabled: boolean) {
     subscriber_ids: routine.subscriber_ids,
     label_ids: routine.label_ids,
     triggers: routine.triggers.map((trigger) => ({
+      id: trigger.id,
       trigger_type: trigger.trigger_type,
       source_type: trigger.source_type ?? null,
       schedule: trigger.schedule ?? null,

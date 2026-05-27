@@ -966,6 +966,10 @@ export class ApiClient {
     return this.fetch(`/api/routines/${id}/trigger`, { method: "POST" });
   }
 
+  async generateRoutineTriggerTokenDraft(): Promise<{ draft_id: string; token_prefix: string; token: string }> {
+    return this.fetch("/api/routine-trigger-token-drafts", { method: "POST" });
+  }
+
   async regenerateRoutineTriggerToken(
     routineId: string,
     triggerId: string,

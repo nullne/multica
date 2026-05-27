@@ -215,3 +215,89 @@ func TestRoutineSchedulerTimezoneAffectsNextRun(t *testing.T) {
 		t.Fatalf("next_run_at in Asia/Tokyo = %s, want hour/minute %02d:%02d", got, cronExpr.Hour(), cronExpr.Minute())
 	}
 }
+
+func TestRoutineSchedulerSkipsDisabledRoutinesAndTriggers(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+	queries := db.New(testPool)
+
+	var userID string
+	if err := testPool.QueryRow(ctx, `SELECT user_id::text FROM member WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&userID); err != nil {
+		t.Fatalf("find member: %v", err)
+	}
+
+	var disabledRoutineID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO routine (
+			workspace_id, name, instructions, priority,
+			enabled, created_by_id, created_by_type
+		)
+		VALUES ($1, 'Disabled schedule routine', 'Should not run', 'medium', FALSE, $2, 'member')
+		RETURNING id
+	`, testWorkspaceID, userID).Scan(&disabledRoutineID); err != nil {
+		t.Fatalf("insert disabled routine: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM routine WHERE id = $1`, disabledRoutineID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO routine_trigger (
+			routine_id, trigger_type, schedule, timezone,
+			next_run_at, enabled
+		)
+		VALUES ($1, 'schedule', '* * * * *', 'UTC', $2, TRUE)
+	`, disabledRoutineID, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("insert trigger for disabled routine: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO routine_action (routine_id, action_type, config, enabled, position)
+		VALUES ($1, 'create_issue', '{}'::jsonb, TRUE, 0)
+	`, disabledRoutineID); err != nil {
+		t.Fatalf("insert action for disabled routine: %v", err)
+	}
+
+	var disabledTriggerRoutineID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO routine (
+			workspace_id, name, instructions, priority,
+			enabled, created_by_id, created_by_type
+		)
+		VALUES ($1, 'Disabled schedule trigger', 'Should not run', 'medium', TRUE, $2, 'member')
+		RETURNING id
+	`, testWorkspaceID, userID).Scan(&disabledTriggerRoutineID); err != nil {
+		t.Fatalf("insert routine with disabled trigger: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM routine WHERE id = $1`, disabledTriggerRoutineID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO routine_trigger (
+			routine_id, trigger_type, schedule, timezone,
+			next_run_at, enabled
+		)
+		VALUES ($1, 'schedule', '* * * * *', 'UTC', $2, FALSE)
+	`, disabledTriggerRoutineID, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("insert disabled trigger: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO routine_action (routine_id, action_type, config, enabled, position)
+		VALUES ($1, 'create_issue', '{}'::jsonb, TRUE, 0)
+	`, disabledTriggerRoutineID); err != nil {
+		t.Fatalf("insert action for disabled trigger routine: %v", err)
+	}
+
+	taskSvc := service.NewTaskService(queries, nil, events.New())
+	fireRoutineScheduleTriggers(ctx, testPool, queries, taskSvc)
+
+	for _, title := range []string{"Disabled schedule routine", "Disabled schedule trigger"} {
+		var issueCount int
+		if err := testPool.QueryRow(ctx, `
+			SELECT count(*) FROM issue
+			WHERE workspace_id = $1 AND title = $2
+		`, testWorkspaceID, title).Scan(&issueCount); err != nil {
+			t.Fatalf("count issue %q: %v", title, err)
+		}
+		if issueCount != 0 {
+			t.Fatalf("issue count for %q = %d, want 0", title, issueCount)
+		}
+	}
+}
