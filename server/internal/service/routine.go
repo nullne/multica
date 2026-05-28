@@ -153,6 +153,7 @@ func (s *RoutineService) executeCreateIssue(ctx context.Context, routine db.Rout
 		DispatchProvider:      routine.DispatchProvider,
 		DispatchDaemonID:      routine.DispatchDaemonID,
 		DispatchDaemonLabel:   routine.DispatchDaemonLabel,
+		GithubAutoFixEnabled:  routine.GithubAutoFixEnabled,
 	})
 	if err != nil {
 		return RoutineActionResult{}, err

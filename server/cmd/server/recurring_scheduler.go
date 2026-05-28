@@ -216,6 +216,7 @@ func createIssueFromTemplate(ctx context.Context, pool *pgxpool.Pool, queries *d
 		DispatchProvider:      tmpl.DispatchProvider,
 		DispatchDaemonID:      tmpl.DispatchDaemonID,
 		DispatchDaemonLabel:   tmpl.DispatchDaemonLabel,
+		GithubAutoFixEnabled:  false,
 	})
 	if err != nil {
 		return db.Issue{}, err

@@ -3,9 +3,9 @@ INSERT INTO routine (
     workspace_id, name, instructions, priority,
     assignee_type, assignee_id, due_date_offset_hours,
     dispatch_provider, dispatch_daemon_id, dispatch_daemon_label,
-    enabled, created_by_id, created_by_type
+    enabled, github_auto_fix_enabled, created_by_id, created_by_type
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 )
 RETURNING *;
 
@@ -34,8 +34,9 @@ UPDATE routine SET
     dispatch_daemon_id    = $9,
     dispatch_daemon_label = $10,
     enabled               = $11,
+    github_auto_fix_enabled = $12,
     updated_at            = now()
-WHERE id = $1 AND workspace_id = $12
+WHERE id = $1 AND workspace_id = $13
 RETURNING *;
 
 -- name: DeleteRoutine :exec

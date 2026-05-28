@@ -49,6 +49,7 @@ export interface Routine {
   dispatch_provider?: string | null;
   dispatch_daemon_id?: string | null;
   dispatch_daemon_label?: string | null;
+  github_auto_fix_enabled: boolean;
   enabled: boolean;
   created_by_id: string;
   created_by_type: string;
@@ -91,6 +92,7 @@ export interface CreateRoutineRequest {
   dispatch_provider?: string | null;
   dispatch_daemon_id?: string | null;
   dispatch_daemon_label?: string | null;
+  github_auto_fix_enabled?: boolean;
   enabled?: boolean;
   subscriber_ids?: string[];
   label_ids?: string[];

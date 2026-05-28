@@ -145,27 +145,28 @@ INSERT INTO routine (
     workspace_id, name, instructions, priority,
     assignee_type, assignee_id, due_date_offset_hours,
     dispatch_provider, dispatch_daemon_id, dispatch_daemon_label,
-    enabled, created_by_id, created_by_type
+    enabled, github_auto_fix_enabled, created_by_id, created_by_type
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 )
-RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at
+RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled
 `
 
 type CreateRoutineParams struct {
-	WorkspaceID         pgtype.UUID `json:"workspace_id"`
-	Name                string      `json:"name"`
-	Instructions        pgtype.Text `json:"instructions"`
-	Priority            string      `json:"priority"`
-	AssigneeType        pgtype.Text `json:"assignee_type"`
-	AssigneeID          pgtype.UUID `json:"assignee_id"`
-	DueDateOffsetHours  pgtype.Int4 `json:"due_date_offset_hours"`
-	DispatchProvider    pgtype.Text `json:"dispatch_provider"`
-	DispatchDaemonID    pgtype.UUID `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel pgtype.Text `json:"dispatch_daemon_label"`
-	Enabled             bool        `json:"enabled"`
-	CreatedByID         pgtype.UUID `json:"created_by_id"`
-	CreatedByType       string      `json:"created_by_type"`
+	WorkspaceID          pgtype.UUID `json:"workspace_id"`
+	Name                 string      `json:"name"`
+	Instructions         pgtype.Text `json:"instructions"`
+	Priority             string      `json:"priority"`
+	AssigneeType         pgtype.Text `json:"assignee_type"`
+	AssigneeID           pgtype.UUID `json:"assignee_id"`
+	DueDateOffsetHours   pgtype.Int4 `json:"due_date_offset_hours"`
+	DispatchProvider     pgtype.Text `json:"dispatch_provider"`
+	DispatchDaemonID     pgtype.UUID `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel  pgtype.Text `json:"dispatch_daemon_label"`
+	Enabled              bool        `json:"enabled"`
+	GithubAutoFixEnabled bool        `json:"github_auto_fix_enabled"`
+	CreatedByID          pgtype.UUID `json:"created_by_id"`
+	CreatedByType        string      `json:"created_by_type"`
 }
 
 func (q *Queries) CreateRoutine(ctx context.Context, arg CreateRoutineParams) (Routine, error) {
@@ -181,6 +182,7 @@ func (q *Queries) CreateRoutine(ctx context.Context, arg CreateRoutineParams) (R
 		arg.DispatchDaemonID,
 		arg.DispatchDaemonLabel,
 		arg.Enabled,
+		arg.GithubAutoFixEnabled,
 		arg.CreatedByID,
 		arg.CreatedByType,
 	)
@@ -202,6 +204,7 @@ func (q *Queries) CreateRoutine(ctx context.Context, arg CreateRoutineParams) (R
 		&i.CreatedByType,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GithubAutoFixEnabled,
 	)
 	return i, err
 }
@@ -530,7 +533,7 @@ func (q *Queries) FindRecentRoutineRun(ctx context.Context, arg FindRecentRoutin
 }
 
 const getRoutine = `-- name: GetRoutine :one
-SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at FROM routine
+SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled FROM routine
 WHERE id = $1
 `
 
@@ -554,6 +557,7 @@ func (q *Queries) GetRoutine(ctx context.Context, id pgtype.UUID) (Routine, erro
 		&i.CreatedByType,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GithubAutoFixEnabled,
 	)
 	return i, err
 }
@@ -580,7 +584,7 @@ func (q *Queries) GetRoutineAction(ctx context.Context, id pgtype.UUID) (Routine
 }
 
 const getRoutineInWorkspace = `-- name: GetRoutineInWorkspace :one
-SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at FROM routine
+SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled FROM routine
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -609,6 +613,7 @@ func (q *Queries) GetRoutineInWorkspace(ctx context.Context, arg GetRoutineInWor
 		&i.CreatedByType,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GithubAutoFixEnabled,
 	)
 	return i, err
 }
@@ -1131,7 +1136,7 @@ func (q *Queries) ListRoutineTriggersByTypeAndWorkspace(ctx context.Context, arg
 }
 
 const listRoutines = `-- name: ListRoutines :many
-SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at FROM routine
+SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled FROM routine
 WHERE workspace_id = $1
 ORDER BY created_at DESC
 `
@@ -1162,6 +1167,7 @@ func (q *Queries) ListRoutines(ctx context.Context, workspaceID pgtype.UUID) ([]
 			&i.CreatedByType,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.GithubAutoFixEnabled,
 		); err != nil {
 			return nil, err
 		}
@@ -1185,24 +1191,26 @@ UPDATE routine SET
     dispatch_daemon_id    = $9,
     dispatch_daemon_label = $10,
     enabled               = $11,
+    github_auto_fix_enabled = $12,
     updated_at            = now()
-WHERE id = $1 AND workspace_id = $12
-RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at
+WHERE id = $1 AND workspace_id = $13
+RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled
 `
 
 type UpdateRoutineParams struct {
-	ID                  pgtype.UUID `json:"id"`
-	Name                string      `json:"name"`
-	Instructions        pgtype.Text `json:"instructions"`
-	Priority            string      `json:"priority"`
-	AssigneeType        pgtype.Text `json:"assignee_type"`
-	AssigneeID          pgtype.UUID `json:"assignee_id"`
-	DueDateOffsetHours  pgtype.Int4 `json:"due_date_offset_hours"`
-	DispatchProvider    pgtype.Text `json:"dispatch_provider"`
-	DispatchDaemonID    pgtype.UUID `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel pgtype.Text `json:"dispatch_daemon_label"`
-	Enabled             bool        `json:"enabled"`
-	WorkspaceID         pgtype.UUID `json:"workspace_id"`
+	ID                   pgtype.UUID `json:"id"`
+	Name                 string      `json:"name"`
+	Instructions         pgtype.Text `json:"instructions"`
+	Priority             string      `json:"priority"`
+	AssigneeType         pgtype.Text `json:"assignee_type"`
+	AssigneeID           pgtype.UUID `json:"assignee_id"`
+	DueDateOffsetHours   pgtype.Int4 `json:"due_date_offset_hours"`
+	DispatchProvider     pgtype.Text `json:"dispatch_provider"`
+	DispatchDaemonID     pgtype.UUID `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel  pgtype.Text `json:"dispatch_daemon_label"`
+	Enabled              bool        `json:"enabled"`
+	GithubAutoFixEnabled bool        `json:"github_auto_fix_enabled"`
+	WorkspaceID          pgtype.UUID `json:"workspace_id"`
 }
 
 func (q *Queries) UpdateRoutine(ctx context.Context, arg UpdateRoutineParams) (Routine, error) {
@@ -1218,6 +1226,7 @@ func (q *Queries) UpdateRoutine(ctx context.Context, arg UpdateRoutineParams) (R
 		arg.DispatchDaemonID,
 		arg.DispatchDaemonLabel,
 		arg.Enabled,
+		arg.GithubAutoFixEnabled,
 		arg.WorkspaceID,
 	)
 	var i Routine
@@ -1238,6 +1247,7 @@ func (q *Queries) UpdateRoutine(ctx context.Context, arg UpdateRoutineParams) (R
 		&i.CreatedByType,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GithubAutoFixEnabled,
 	)
 	return i, err
 }

@@ -37,6 +37,7 @@ function makeIssue(overrides: Partial<Issue> & {
     dispatch_provider: null,
     dispatch_daemon_id: null,
     dispatch_daemon_label: null,
+    github_auto_fix_enabled: false,
     labels: [],
     created_at: overrides.updated_at,
     ...overrides,

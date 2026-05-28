@@ -219,6 +219,87 @@ func TestGitHubAdapter_IssueCommentOnIssue(t *testing.T) {
 	}
 }
 
+func TestGitHubAdapter_PullRequestReviewComment(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "created",
+		"comment": {
+			"body": "Please simplify this branch",
+			"html_url": "https://github.com/org/repo/pull/42#discussion_r1",
+			"path": "server/main.go",
+			"user": {"login": "reviewer"}
+		},
+		"pull_request": {
+			"number": 42,
+			"title": "Add login",
+			"html_url": "https://github.com/org/repo/pull/42"
+		},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "pull_request_review_comment")
+
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event")
+	}
+	ev := events[0]
+	if ev.Type != "github.pull_request_review_comment.created" {
+		t.Fatalf("type = %q", ev.Type)
+	}
+	if ev.Data["source_url"] != "https://github.com/org/repo/pull/42" {
+		t.Fatalf("source_url = %q", ev.Data["source_url"])
+	}
+	if ev.Data["source_kind"] != "pr" {
+		t.Fatalf("source_kind = %q", ev.Data["source_kind"])
+	}
+	if !strings.Contains(ev.Data["body"], "Please simplify this branch") {
+		t.Fatalf("body = %q", ev.Data["body"])
+	}
+}
+
+func TestGitHubAdapter_PullRequestReviewSubmitted(t *testing.T) {
+	a := &githubAdapter{}
+	body := []byte(`{
+		"action": "submitted",
+		"review": {
+			"body": "Requesting changes before merge",
+			"state": "changes_requested",
+			"html_url": "https://github.com/org/repo/pull/42#pullrequestreview-1",
+			"user": {"login": "reviewer"}
+		},
+		"pull_request": {
+			"number": 42,
+			"title": "Add login",
+			"html_url": "https://github.com/org/repo/pull/42"
+		},
+		"repository": {"full_name": "org/repo"}
+	}`)
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "pull_request_review")
+
+	events, err := a.Parse(body, headers)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event")
+	}
+	ev := events[0]
+	if ev.Type != "github.pull_request_review.submitted" {
+		t.Fatalf("type = %q", ev.Type)
+	}
+	if ev.Data["source_url"] != "https://github.com/org/repo/pull/42" {
+		t.Fatalf("source_url = %q", ev.Data["source_url"])
+	}
+	if ev.Data["review_state"] != "changes_requested" {
+		t.Fatalf("review_state = %q", ev.Data["review_state"])
+	}
+}
+
 func TestGitHubAdapter_CheckRunCompletedOnPR(t *testing.T) {
 	a := &githubAdapter{}
 	body := []byte(`{

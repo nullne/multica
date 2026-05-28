@@ -54,6 +54,10 @@ func (a *githubAdapter) Parse(payload json.RawMessage, headers http.Header) ([]E
 		data = parseGitHubIssues(payload)
 	case "issue_comment":
 		data = parseGitHubIssueComment(payload)
+	case "pull_request_review_comment":
+		data = parseGitHubPullRequestReviewComment(payload)
+	case "pull_request_review":
+		data = parseGitHubPullRequestReview(payload)
 	case "check_run":
 		data = parseGitHubCheckRun(payload)
 	case "check_suite":
@@ -119,6 +123,10 @@ func isRelevantGitHubAction(eventType, action string) bool {
 		return false
 	case "issue_comment":
 		return action == "created"
+	case "pull_request_review_comment":
+		return action == "created"
+	case "pull_request_review":
+		return action == "submitted"
 	case "check_run", "check_suite", "workflow_run":
 		return action == "completed"
 	case "status":
@@ -403,6 +411,82 @@ func parseGitHubIssueComment(body []byte) map[string]string {
 		"external_id":  fmt.Sprintf("%s#%d", ev.Repository.FullName, ev.Issue.Number),
 		"title":        fmt.Sprintf("Comment on %s#%d", ev.Repository.FullName, ev.Issue.Number),
 		"body":         fmt.Sprintf("**Comment on [%s#%d](%s): %s**\n**By:** %s\n\n%s", ev.Repository.FullName, ev.Issue.Number, ev.Issue.HTMLURL, ev.Issue.Title, ev.Comment.User.Login, ev.Comment.Body),
+	}
+}
+
+func parseGitHubPullRequestReviewComment(body []byte) map[string]string {
+	var ev struct {
+		Action  string `json:"action"`
+		Comment struct {
+			Body    string `json:"body"`
+			HTMLURL string `json:"html_url"`
+			Path    string `json:"path"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		} `json:"comment"`
+		PullRequest struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+		} `json:"pull_request"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	return map[string]string{
+		"action":       ev.Action,
+		"number":       fmt.Sprintf("%d", ev.PullRequest.Number),
+		"issue_title":  ev.PullRequest.Title,
+		"comment_body": ev.Comment.Body,
+		"user":         ev.Comment.User.Login,
+		"repo":         ev.Repository.FullName,
+		"path":         ev.Comment.Path,
+		"html_url":     ev.Comment.HTMLURL,
+		"source_url":   ev.PullRequest.HTMLURL,
+		"source_kind":  "pr",
+		"external_id":  fmt.Sprintf("%s#%d", ev.Repository.FullName, ev.PullRequest.Number),
+		"title":        fmt.Sprintf("Review comment on %s#%d", ev.Repository.FullName, ev.PullRequest.Number),
+		"body":         fmt.Sprintf("**Review comment on [%s#%d](%s): %s**\n**File:** `%s`\n**By:** %s\n\n%s", ev.Repository.FullName, ev.PullRequest.Number, ev.PullRequest.HTMLURL, ev.PullRequest.Title, ev.Comment.Path, ev.Comment.User.Login, ev.Comment.Body),
+	}
+}
+
+func parseGitHubPullRequestReview(body []byte) map[string]string {
+	var ev struct {
+		Action string `json:"action"`
+		Review struct {
+			Body    string `json:"body"`
+			State   string `json:"state"`
+			HTMLURL string `json:"html_url"`
+			User    struct {
+				Login string `json:"login"`
+			} `json:"user"`
+		} `json:"review"`
+		PullRequest struct {
+			Number  int    `json:"number"`
+			Title   string `json:"title"`
+			HTMLURL string `json:"html_url"`
+		} `json:"pull_request"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	_ = json.Unmarshal(body, &ev)
+	return map[string]string{
+		"action":       ev.Action,
+		"number":       fmt.Sprintf("%d", ev.PullRequest.Number),
+		"issue_title":  ev.PullRequest.Title,
+		"comment_body": ev.Review.Body,
+		"review_state": ev.Review.State,
+		"user":         ev.Review.User.Login,
+		"repo":         ev.Repository.FullName,
+		"html_url":     ev.Review.HTMLURL,
+		"source_url":   ev.PullRequest.HTMLURL,
+		"source_kind":  "pr",
+		"external_id":  fmt.Sprintf("%s#%d", ev.Repository.FullName, ev.PullRequest.Number),
+		"title":        fmt.Sprintf("Review %s on %s#%d", ev.Review.State, ev.Repository.FullName, ev.PullRequest.Number),
+		"body":         fmt.Sprintf("**Review on [%s#%d](%s): %s**\n**State:** %s\n**By:** %s\n\n%s", ev.Repository.FullName, ev.PullRequest.Number, ev.PullRequest.HTMLURL, ev.PullRequest.Title, ev.Review.State, ev.Review.User.Login, ev.Review.Body),
 	}
 }
 

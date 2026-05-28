@@ -254,13 +254,14 @@ func TestLinkAttachmentsToIssueDoesNotStealCommentAttachments(t *testing.T) {
 
 	// Create a host issue + comment, attach to the comment.
 	hostIssue, err := testHandler.Queries.CreateIssue(ctx, db.CreateIssueParams{
-		WorkspaceID: wsUUID,
-		Title:       "host issue for link guard",
-		Status:      "todo",
-		Priority:    "none",
-		CreatorType: "member",
-		CreatorID:   parseUUID(testUserID),
-		Number:      9999001,
+		WorkspaceID:          wsUUID,
+		Title:                "host issue for link guard",
+		Status:               "todo",
+		Priority:             "none",
+		CreatorType:          "member",
+		CreatorID:            parseUUID(testUserID),
+		Number:               9999001,
+		GithubAutoFixEnabled: false,
 	})
 	if err != nil {
 		t.Fatalf("create host issue: %v", err)

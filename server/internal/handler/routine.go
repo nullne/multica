@@ -22,26 +22,27 @@ import (
 var errRoutineTriggerTokenRequired = errors.New("routine trigger token must be generated before saving")
 
 type RoutineResponse struct {
-	ID                  string                   `json:"id"`
-	WorkspaceID         string                   `json:"workspace_id"`
-	Name                string                   `json:"name"`
-	Instructions        *string                  `json:"instructions"`
-	Priority            string                   `json:"priority"`
-	AssigneeType        *string                  `json:"assignee_type"`
-	AssigneeID          *string                  `json:"assignee_id"`
-	DueDateOffsetHours  *int32                   `json:"due_date_offset_hours"`
-	DispatchProvider    *string                  `json:"dispatch_provider"`
-	DispatchDaemonID    *string                  `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel *string                  `json:"dispatch_daemon_label"`
-	Enabled             bool                     `json:"enabled"`
-	CreatedByID         string                   `json:"created_by_id"`
-	CreatedByType       string                   `json:"created_by_type"`
-	CreatedAt           string                   `json:"created_at"`
-	UpdatedAt           string                   `json:"updated_at"`
-	SubscriberIDs       []string                 `json:"subscriber_ids"`
-	LabelIDs            []string                 `json:"label_ids"`
-	Triggers            []RoutineTriggerResponse `json:"triggers"`
-	Actions             []RoutineActionResponse  `json:"actions"`
+	ID                   string                   `json:"id"`
+	WorkspaceID          string                   `json:"workspace_id"`
+	Name                 string                   `json:"name"`
+	Instructions         *string                  `json:"instructions"`
+	Priority             string                   `json:"priority"`
+	AssigneeType         *string                  `json:"assignee_type"`
+	AssigneeID           *string                  `json:"assignee_id"`
+	DueDateOffsetHours   *int32                   `json:"due_date_offset_hours"`
+	DispatchProvider     *string                  `json:"dispatch_provider"`
+	DispatchDaemonID     *string                  `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel  *string                  `json:"dispatch_daemon_label"`
+	Enabled              bool                     `json:"enabled"`
+	GithubAutoFixEnabled bool                     `json:"github_auto_fix_enabled"`
+	CreatedByID          string                   `json:"created_by_id"`
+	CreatedByType        string                   `json:"created_by_type"`
+	CreatedAt            string                   `json:"created_at"`
+	UpdatedAt            string                   `json:"updated_at"`
+	SubscriberIDs        []string                 `json:"subscriber_ids"`
+	LabelIDs             []string                 `json:"label_ids"`
+	Triggers             []RoutineTriggerResponse `json:"triggers"`
+	Actions              []RoutineActionResponse  `json:"actions"`
 }
 
 type RoutineTriggerResponse struct {
@@ -105,20 +106,21 @@ type RoutineTriggerTokenDraftResponse struct {
 }
 
 type CreateRoutineRequest struct {
-	Name                string                  `json:"name"`
-	Instructions        *string                 `json:"instructions"`
-	Priority            *string                 `json:"priority"`
-	AssigneeType        *string                 `json:"assignee_type"`
-	AssigneeID          *string                 `json:"assignee_id"`
-	DueDateOffsetHours  *int32                  `json:"due_date_offset_hours"`
-	DispatchProvider    *string                 `json:"dispatch_provider"`
-	DispatchDaemonID    *string                 `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel *string                 `json:"dispatch_daemon_label"`
-	Enabled             *bool                   `json:"enabled"`
-	SubscriberIDs       []string                `json:"subscriber_ids"`
-	LabelIDs            []string                `json:"label_ids"`
-	Triggers            []RoutineTriggerRequest `json:"triggers"`
-	Actions             []RoutineActionRequest  `json:"actions"`
+	Name                 string                  `json:"name"`
+	Instructions         *string                 `json:"instructions"`
+	Priority             *string                 `json:"priority"`
+	AssigneeType         *string                 `json:"assignee_type"`
+	AssigneeID           *string                 `json:"assignee_id"`
+	DueDateOffsetHours   *int32                  `json:"due_date_offset_hours"`
+	DispatchProvider     *string                 `json:"dispatch_provider"`
+	DispatchDaemonID     *string                 `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel  *string                 `json:"dispatch_daemon_label"`
+	Enabled              *bool                   `json:"enabled"`
+	GithubAutoFixEnabled *bool                   `json:"github_auto_fix_enabled"`
+	SubscriberIDs        []string                `json:"subscriber_ids"`
+	LabelIDs             []string                `json:"label_ids"`
+	Triggers             []RoutineTriggerRequest `json:"triggers"`
+	Actions              []RoutineActionRequest  `json:"actions"`
 }
 
 type UpdateRoutineRequest = CreateRoutineRequest
@@ -150,26 +152,27 @@ func routineToResponse(r db.Routine, subscriberIDs, labelIDs []string, triggers 
 		dueDateOffset = &r.DueDateOffsetHours.Int32
 	}
 	return RoutineResponse{
-		ID:                  uuidToString(r.ID),
-		WorkspaceID:         uuidToString(r.WorkspaceID),
-		Name:                r.Name,
-		Instructions:        textToPtr(r.Instructions),
-		Priority:            r.Priority,
-		AssigneeType:        textToPtr(r.AssigneeType),
-		AssigneeID:          uuidToPtr(r.AssigneeID),
-		DueDateOffsetHours:  dueDateOffset,
-		DispatchProvider:    textToPtr(r.DispatchProvider),
-		DispatchDaemonID:    uuidToPtr(r.DispatchDaemonID),
-		DispatchDaemonLabel: textToPtr(r.DispatchDaemonLabel),
-		Enabled:             r.Enabled,
-		CreatedByID:         uuidToString(r.CreatedByID),
-		CreatedByType:       r.CreatedByType,
-		CreatedAt:           timestampToString(r.CreatedAt),
-		UpdatedAt:           timestampToString(r.UpdatedAt),
-		SubscriberIDs:       subscriberIDs,
-		LabelIDs:            labelIDs,
-		Triggers:            triggers,
-		Actions:             actions,
+		ID:                   uuidToString(r.ID),
+		WorkspaceID:          uuidToString(r.WorkspaceID),
+		Name:                 r.Name,
+		Instructions:         textToPtr(r.Instructions),
+		Priority:             r.Priority,
+		AssigneeType:         textToPtr(r.AssigneeType),
+		AssigneeID:           uuidToPtr(r.AssigneeID),
+		DueDateOffsetHours:   dueDateOffset,
+		DispatchProvider:     textToPtr(r.DispatchProvider),
+		DispatchDaemonID:     uuidToPtr(r.DispatchDaemonID),
+		DispatchDaemonLabel:  textToPtr(r.DispatchDaemonLabel),
+		Enabled:              r.Enabled,
+		GithubAutoFixEnabled: r.GithubAutoFixEnabled,
+		CreatedByID:          uuidToString(r.CreatedByID),
+		CreatedByType:        r.CreatedByType,
+		CreatedAt:            timestampToString(r.CreatedAt),
+		UpdatedAt:            timestampToString(r.UpdatedAt),
+		SubscriberIDs:        subscriberIDs,
+		LabelIDs:             labelIDs,
+		Triggers:             triggers,
+		Actions:              actions,
 	}
 }
 
@@ -719,38 +722,44 @@ func (h *Handler) saveRoutine(ctx context.Context, workspaceID pgtype.UUID, crea
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	githubAutoFixEnabled := false
+	if req.GithubAutoFixEnabled != nil {
+		githubAutoFixEnabled = *req.GithubAutoFixEnabled
+	}
 
 	var routine db.Routine
 	if existingID == nil {
 		routine, err = qtx.CreateRoutine(ctx, db.CreateRoutineParams{
-			WorkspaceID:         workspaceID,
-			Name:                req.Name,
-			Instructions:        ptrToText(req.Instructions),
-			Priority:            priority,
-			AssigneeType:        ptrToText(req.AssigneeType),
-			AssigneeID:          parseOptionalUUID(req.AssigneeID),
-			DueDateOffsetHours:  optionalInt4(req.DueDateOffsetHours),
-			DispatchProvider:    ptrToText(req.DispatchProvider),
-			DispatchDaemonID:    parseOptionalUUID(req.DispatchDaemonID),
-			DispatchDaemonLabel: ptrToText(req.DispatchDaemonLabel),
-			Enabled:             enabled,
-			CreatedByID:         createdByID,
-			CreatedByType:       createdByType,
+			WorkspaceID:          workspaceID,
+			Name:                 req.Name,
+			Instructions:         ptrToText(req.Instructions),
+			Priority:             priority,
+			AssigneeType:         ptrToText(req.AssigneeType),
+			AssigneeID:           parseOptionalUUID(req.AssigneeID),
+			DueDateOffsetHours:   optionalInt4(req.DueDateOffsetHours),
+			DispatchProvider:     ptrToText(req.DispatchProvider),
+			DispatchDaemonID:     parseOptionalUUID(req.DispatchDaemonID),
+			DispatchDaemonLabel:  ptrToText(req.DispatchDaemonLabel),
+			Enabled:              enabled,
+			GithubAutoFixEnabled: githubAutoFixEnabled,
+			CreatedByID:          createdByID,
+			CreatedByType:        createdByType,
 		})
 	} else {
 		routine, err = qtx.UpdateRoutine(ctx, db.UpdateRoutineParams{
-			ID:                  *existingID,
-			Name:                req.Name,
-			Instructions:        ptrToText(req.Instructions),
-			Priority:            priority,
-			AssigneeType:        ptrToText(req.AssigneeType),
-			AssigneeID:          parseOptionalUUID(req.AssigneeID),
-			DueDateOffsetHours:  optionalInt4(req.DueDateOffsetHours),
-			DispatchProvider:    ptrToText(req.DispatchProvider),
-			DispatchDaemonID:    parseOptionalUUID(req.DispatchDaemonID),
-			DispatchDaemonLabel: ptrToText(req.DispatchDaemonLabel),
-			Enabled:             enabled,
-			WorkspaceID:         workspaceID,
+			ID:                   *existingID,
+			Name:                 req.Name,
+			Instructions:         ptrToText(req.Instructions),
+			Priority:             priority,
+			AssigneeType:         ptrToText(req.AssigneeType),
+			AssigneeID:           parseOptionalUUID(req.AssigneeID),
+			DueDateOffsetHours:   optionalInt4(req.DueDateOffsetHours),
+			DispatchProvider:     ptrToText(req.DispatchProvider),
+			DispatchDaemonID:     parseOptionalUUID(req.DispatchDaemonID),
+			DispatchDaemonLabel:  ptrToText(req.DispatchDaemonLabel),
+			Enabled:              enabled,
+			GithubAutoFixEnabled: githubAutoFixEnabled,
+			WorkspaceID:          workspaceID,
 		})
 		if err == nil {
 			actions, _ := qtx.ListRoutineActions(ctx, *existingID)

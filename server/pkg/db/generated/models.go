@@ -201,6 +201,7 @@ type Issue struct {
 	DispatchDaemonLabel         pgtype.Text        `json:"dispatch_daemon_label"`
 	AgentMentionChainCount      int32              `json:"agent_mention_chain_count"`
 	AgentMentionChainGeneration int64              `json:"agent_mention_chain_generation"`
+	GithubAutoFixEnabled        bool               `json:"github_auto_fix_enabled"`
 }
 
 type IssueDependency struct {
@@ -304,22 +305,23 @@ type RecurringTemplateSubscriber struct {
 }
 
 type Routine struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	Name                string             `json:"name"`
-	Instructions        pgtype.Text        `json:"instructions"`
-	Priority            string             `json:"priority"`
-	AssigneeType        pgtype.Text        `json:"assignee_type"`
-	AssigneeID          pgtype.UUID        `json:"assignee_id"`
-	DueDateOffsetHours  pgtype.Int4        `json:"due_date_offset_hours"`
-	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
-	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
-	Enabled             bool               `json:"enabled"`
-	CreatedByID         pgtype.UUID        `json:"created_by_id"`
-	CreatedByType       string             `json:"created_by_type"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ID                   pgtype.UUID        `json:"id"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	Name                 string             `json:"name"`
+	Instructions         pgtype.Text        `json:"instructions"`
+	Priority             string             `json:"priority"`
+	AssigneeType         pgtype.Text        `json:"assignee_type"`
+	AssigneeID           pgtype.UUID        `json:"assignee_id"`
+	DueDateOffsetHours   pgtype.Int4        `json:"due_date_offset_hours"`
+	DispatchProvider     pgtype.Text        `json:"dispatch_provider"`
+	DispatchDaemonID     pgtype.UUID        `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel  pgtype.Text        `json:"dispatch_daemon_label"`
+	Enabled              bool               `json:"enabled"`
+	CreatedByID          pgtype.UUID        `json:"created_by_id"`
+	CreatedByType        string             `json:"created_by_type"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	GithubAutoFixEnabled bool               `json:"github_auto_fix_enabled"`
 }
 
 type RoutineAction struct {

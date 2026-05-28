@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { ActorAvatar } from "@/components/common/actor-avatar";
@@ -735,6 +736,10 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
   const taskRuns = useIssueTaskRuns(id);
   const taskRunBuckets = useMemo(() => groupTaskRunsByTrigger(taskRuns), [taskRuns]);
   const activeTaskRun = useMemo(() => taskRuns.find(isActiveTask) ?? null, [taskRuns]);
+  const hasGitHubPRorIssueLink = useMemo(
+    () => issue?.links?.some((link) => link.source_type === "github" && (link.kind === "pr" || link.kind === "issue")) ?? false,
+    [issue?.links],
+  );
 
   const loading = issueLoading;
 
@@ -1790,6 +1795,30 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   {/* Dispatch hints — visible when assignee is an agent */}
                   {issue.assignee_type === "agent" && issue.assignee_id && (
                     <DispatchHints issue={issue} onUpdate={handleUpdateField} />
+                  )}
+
+                  {hasGitHubPRorIssueLink && (
+                    <PropRow label="PR auto-fix">
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <div className="flex items-center gap-2">
+                              <Switch
+                                checked={issue.github_auto_fix_enabled}
+                                onCheckedChange={(checked) => handleUpdateField({ github_auto_fix_enabled: checked })}
+                                aria-label="Auto-fix pull requests"
+                              />
+                              <span className="text-xs text-muted-foreground">
+                                {issue.github_auto_fix_enabled ? "On" : "Off"}
+                              </span>
+                            </div>
+                          }
+                        />
+                        <TooltipContent side="left">
+                          GitHub PR comments, review feedback, failed checks, and workflow completions add a bot comment here.
+                        </TooltipContent>
+                      </Tooltip>
+                    </PropRow>
                   )}
                 </div>}
               </div>

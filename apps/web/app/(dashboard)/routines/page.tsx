@@ -524,6 +524,7 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
   const [openTriggerId, setOpenTriggerId] = useState<string | null>(null);
   const [addingTrigger, setAddingTrigger] = useState(false);
   const [enabled, setEnabled] = useState(true);
+  const [githubAutoFixEnabled, setGithubAutoFixEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [regeneratingApiToken, setRegeneratingApiToken] = useState(false);
   const [loadingRoutine, setLoadingRoutine] = useState(Boolean(routineID));
@@ -621,6 +622,7 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
         setSelectedSubscriberIds(routine.subscriber_ids ?? []);
         setSelectedLabelIds(routine.label_ids ?? []);
         setEnabled(routine.enabled);
+        setGithubAutoFixEnabled(routine.github_auto_fix_enabled);
         const drafts = sortTriggerDrafts(routine.triggers.map(routineTriggerToDraft));
         setTriggerDrafts(drafts);
         setOpenTriggerId(drafts[0]?.clientId ?? null);
@@ -700,6 +702,7 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
         dispatchDaemonId,
         dispatchDaemonLabel,
         enabled,
+        githubAutoFixEnabled,
         selectedSubscriberIds,
         selectedLabelIds,
         triggers: effectiveTriggerDrafts,
@@ -1028,10 +1031,21 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
                 />
               </TabsContent>
               <TabsContent value="behavior" className="mt-4">
-                <PreviewPanel
-                  title="Behavior"
-                  description="Advanced actions, deduplication, and comment-on-existing-issue behavior will live here once the routine backend is connected."
-                />
+                <div className="rounded-xl border bg-muted/20 px-4 py-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium">Auto-fix pull requests</div>
+                      <p className="text-xs text-muted-foreground">
+                        Watch failed checks, workflow completions, and review comments on PRs this routine links.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={githubAutoFixEnabled}
+                      onCheckedChange={setGithubAutoFixEnabled}
+                      aria-label="Auto-fix pull requests"
+                    />
+                  </div>
+                </div>
               </TabsContent>
               <TabsContent value="permissions" className="mt-4">
                 <PreviewPanel
@@ -1699,6 +1713,7 @@ function buildRoutinePayload({
   dispatchDaemonId,
   dispatchDaemonLabel,
   enabled,
+  githubAutoFixEnabled,
   selectedSubscriberIds,
   selectedLabelIds,
   triggers,
@@ -1712,6 +1727,7 @@ function buildRoutinePayload({
   dispatchDaemonId: string | null;
   dispatchDaemonLabel: string | null;
   enabled: boolean;
+  githubAutoFixEnabled: boolean;
   selectedSubscriberIds: string[];
   selectedLabelIds: string[];
   triggers: RoutineTriggerDraft[];
@@ -1725,6 +1741,7 @@ function buildRoutinePayload({
     dispatch_provider: dispatchProvider,
     dispatch_daemon_id: dispatchDaemonId,
     dispatch_daemon_label: dispatchDaemonLabel,
+    github_auto_fix_enabled: githubAutoFixEnabled,
     enabled,
     subscriber_ids: selectedSubscriberIds,
     label_ids: selectedLabelIds,

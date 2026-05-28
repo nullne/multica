@@ -958,12 +958,13 @@ func TestManualTriggerRoutineCreatesIssue(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	req := routineRequest(t, "POST", "/api/routines", map[string]any{
-		"name":          "Routine manual trigger",
-		"instructions":  "Created manually",
-		"priority":      "medium",
-		"assignee_type": "agent",
-		"assignee_id":   agentID,
-		"enabled":       true,
+		"name":                    "Routine manual trigger",
+		"instructions":            "Created manually",
+		"priority":                "medium",
+		"assignee_type":           "agent",
+		"assignee_id":             agentID,
+		"enabled":                 true,
+		"github_auto_fix_enabled": true,
 		"triggers": []map[string]any{
 			{
 				"trigger_type": "schedule",
@@ -1006,12 +1007,16 @@ func TestManualTriggerRoutineCreatesIssue(t *testing.T) {
 	}
 
 	var issueID string
+	var autoFixEnabled bool
 	if err := testPool.QueryRow(context.Background(), `
-		SELECT id::text FROM issue
+		SELECT id::text, github_auto_fix_enabled FROM issue
 		WHERE workspace_id = $1 AND title = 'Routine manual trigger'
 		ORDER BY created_at DESC LIMIT 1
-	`, testWorkspaceID).Scan(&issueID); err != nil {
+	`, testWorkspaceID).Scan(&issueID, &autoFixEnabled); err != nil {
 		t.Fatalf("query created issue: %v", err)
+	}
+	if !autoFixEnabled {
+		t.Fatalf("expected routine-created issue to inherit github_auto_fix_enabled")
 	}
 	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
 }

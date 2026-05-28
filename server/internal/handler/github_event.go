@@ -70,8 +70,9 @@ func (h *Handler) ReceiveGitHubEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	received, created := 0, 0
+	received, created, autoFixComments := 0, 0, 0
 	if err == nil {
+		autoFixComments = h.processGitHubAutoFixEvents(r.Context(), webhook, body, r.Header)
 		received, created = h.ingestWithWebhook(r.Context(), webhook, body, r.Header)
 	}
 	routineReceived, routineRan := h.ingestRoutineTriggers(r.Context(), routineTriggers, "github", body, r.Header)
@@ -79,9 +80,10 @@ func (h *Handler) ReceiveGitHubEvent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]any{
-		"received":         received + routineReceived,
-		"created":          created,
-		"routine_received": routineReceived,
-		"routine_ran":      routineRan,
+		"received":          received + routineReceived,
+		"created":           created,
+		"auto_fix_comments": autoFixComments,
+		"routine_received":  routineReceived,
+		"routine_ran":       routineRan,
 	})
 }

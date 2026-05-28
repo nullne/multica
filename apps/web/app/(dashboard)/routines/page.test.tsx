@@ -114,6 +114,7 @@ describe("RoutinesPage", () => {
       subscriber_ids: [],
       label_ids: [],
       enabled: true,
+      github_auto_fix_enabled: false,
     });
     mocks.api.updateRoutine.mockResolvedValue({});
     mocks.generateRoutineTriggerTokenDraft.mockResolvedValue({
@@ -205,6 +206,8 @@ describe("RoutinesPage", () => {
     await user.type(screen.getByLabelText(/Name/), "Daily review");
     await user.type(screen.getByLabelText("Instructions"), "Review the code every day");
     await user.click(screen.getByRole("button", { name: "Select Test Agent" }));
+    await user.click(screen.getByRole("tab", { name: "Behavior" }));
+    await user.click(screen.getByRole("switch", { name: "Auto-fix pull requests" }));
     await user.click(screen.getByRole("button", { name: /Add another trigger/i }));
     await user.click(screen.getByRole("button", { name: /Schedule/i }));
     await user.click(screen.getByRole("button", { name: /Create routine/i }));
@@ -213,6 +216,7 @@ describe("RoutinesPage", () => {
       expect(mocks.api.createRoutine).toHaveBeenCalledWith(
         expect.objectContaining({
           subscriber_ids: ["user-1", "user-2", "user-3", "user-4"],
+          github_auto_fix_enabled: true,
         }),
       );
     });
@@ -239,6 +243,7 @@ describe("RoutinesPage", () => {
         subscriber_ids: [],
         label_ids: [],
         enabled: true,
+        github_auto_fix_enabled: false,
       },
     ]);
     render(<RoutinesPage />);

@@ -226,6 +226,280 @@ func TestReceiveGitHubEvent_PullRequestCreatesIssueAndLink(t *testing.T) {
 	})
 }
 
+func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	ctx := context.Background()
+	secret := []byte("test-secret")
+
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	installationID := time.Now().UnixNano()
+	webhookID := setupGitHubWebhookFixture(t, installationID)
+
+	var botID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email, kind)
+		VALUES ('GitHub', $1, 'bot')
+		RETURNING id
+	`, fmt.Sprintf("github-bot-%d@multica.test", installationID)).Scan(&botID); err != nil {
+		t.Fatalf("create github bot user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, botID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, botID); err != nil {
+		t.Fatalf("add bot member: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		UPDATE webhook SET bot_user_id = $1 WHERE id = $2
+	`, botID, uuidToString(webhookID)); err != nil {
+		t.Fatalf("bind github bot: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text FROM agent WHERE workspace_id = $1 AND name = 'Handler Test Agent'
+	`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	enabledPRNumber := uniqueIssueNumber()
+	enabledPR := fmt.Sprintf("https://github.com/acme/widgets/pull/%d", enabledPRNumber)
+	disabledPR := fmt.Sprintf("https://github.com/acme/widgets/pull/%d", uniqueIssueNumber())
+	enabledIssueID := insertLinkedAutoFixIssue(t, "Auto-fix enabled issue", agentID, enabledPR, true)
+	enabledIssueID2 := insertLinkedAutoFixIssue(t, "Second auto-fix enabled issue", agentID, enabledPR, true)
+	disabledIssueID := insertLinkedAutoFixIssue(t, "Auto-fix disabled issue", agentID, disabledPR, false)
+	var enabledLinkCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM issue_link
+		WHERE workspace_id = $1 AND url = $2
+	`, testWorkspaceID, enabledPR).Scan(&enabledLinkCount); err != nil {
+		t.Fatalf("count enabled PR links: %v", err)
+	}
+	if enabledLinkCount != 2 {
+		t.Fatalf("expected same PR URL to be linked to two issues, got %d links", enabledLinkCount)
+	}
+
+	sendComment := func(prURL string, bodyText string) {
+		t.Helper()
+		body := []byte(fmt.Sprintf(`{
+			"action":"created",
+			"installation":{"id":%d},
+			"comment":{"body":%q,"html_url":"%s#issuecomment-1","user":{"login":"reviewer"}},
+			"issue":{"number":123,"title":"Review feedback","html_url":%q,"pull_request":{"html_url":%q}},
+			"repository":{"full_name":"acme/widgets"}
+		}`, installationID, bodyText, prURL, prURL, prURL))
+		req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "issue_comment")
+		req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+		w := httptest.NewRecorder()
+		testHandler.ReceiveGitHubEvent(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("issue_comment: expected 202, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+
+	sendComment(enabledPR, "Please fix the failing assertion")
+	sendComment(disabledPR, "This should not notify the issue")
+	sendReviewComment := func(prURL string, bodyText string) {
+		t.Helper()
+		body := []byte(fmt.Sprintf(`{
+			"action":"created",
+			"installation":{"id":%d},
+			"comment":{"body":%q,"html_url":"%s#discussion_r1","path":"server/main.go","user":{"login":"reviewer"}},
+			"pull_request":{"number":123,"title":"Review feedback","html_url":%q},
+			"repository":{"full_name":"acme/widgets"}
+		}`, installationID, bodyText, prURL, prURL))
+		req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+		req.Header.Set("X-GitHub-Event", "pull_request_review_comment")
+		req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+		w := httptest.NewRecorder()
+		testHandler.ReceiveGitHubEvent(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("pull_request_review_comment: expected 202, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+
+	var enabledCommentID string
+	var enabledContent string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, content FROM comment
+		WHERE issue_id = $1 AND author_id = $2 AND author_type = 'member'
+		ORDER BY created_at DESC LIMIT 1
+	`, enabledIssueID, botID).Scan(&enabledCommentID, &enabledContent); err != nil {
+		t.Fatalf("expected bot comment on enabled issue: %v", err)
+	}
+	if enabledContent == "" || !bytes.Contains([]byte(enabledContent), []byte("Please fix the failing assertion")) {
+		t.Fatalf("bot comment content = %q, want GitHub feedback body", enabledContent)
+	}
+
+	var enabledTasks int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM agent_task_queue
+		WHERE issue_id = $1 AND agent_id = $2 AND trigger_comment_id = $3
+	`, enabledIssueID, agentID, enabledCommentID).Scan(&enabledTasks); err != nil {
+		t.Fatalf("count enabled tasks: %v", err)
+	}
+	if enabledTasks != 1 {
+		t.Fatalf("expected bot comment to enqueue one assignee task, got %d", enabledTasks)
+	}
+	var secondEnabledComments int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM comment
+		WHERE issue_id = $1 AND author_id = $2 AND content LIKE '%Please fix the failing assertion%'
+	`, enabledIssueID2, botID).Scan(&secondEnabledComments); err != nil {
+		t.Fatalf("count second enabled comments: %v", err)
+	}
+	if secondEnabledComments != 1 {
+		t.Fatalf("expected same PR comment to notify second linked issue, got %d comments", secondEnabledComments)
+	}
+	sendReviewComment(enabledPR, "Inline review feedback")
+
+	body := []byte(fmt.Sprintf(`{
+		"action":"completed",
+		"installation":{"id":%d},
+		"check_run":{
+			"name":"unit tests",
+			"status":"completed",
+			"conclusion":"success",
+			"html_url":"%s/checks/1",
+			"head_sha":"abc123",
+			"pull_requests":[{"html_url":%q}]
+		},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, enabledPR, enabledPR))
+	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "check_run")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("check_run success: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var successComments int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM comment
+		WHERE issue_id = $1 AND author_id = $2 AND content LIKE '%Conclusion:** success%'
+	`, enabledIssueID, botID).Scan(&successComments); err != nil {
+		t.Fatalf("count success comments: %v", err)
+	}
+	if successComments != 0 {
+		t.Fatalf("expected successful check_run to be ignored, got %d comments", successComments)
+	}
+
+	body = []byte(fmt.Sprintf(`{
+		"action":"completed",
+		"installation":{"id":%d},
+		"check_run":{
+			"name":"unit tests",
+			"status":"completed",
+			"conclusion":"failure",
+			"html_url":"%s/checks/2",
+			"head_sha":"def456",
+			"pull_requests":[{"html_url":%q}]
+		},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, enabledPR, enabledPR))
+	req = httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "check_run")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w = httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("check_run failure: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	body = []byte(fmt.Sprintf(`{
+		"action":"completed",
+		"installation":{"id":%d},
+		"workflow_run":{
+			"name":"CI",
+			"status":"completed",
+			"conclusion":"success",
+			"html_url":"%s/actions/runs/1",
+			"head_sha":"ghi789",
+			"head_branch":"main",
+			"pull_requests":[{"number":%d}]
+		},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, enabledPR, enabledPRNumber))
+	req = httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "workflow_run")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w = httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("workflow_run success: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var eventComments int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM comment
+		WHERE issue_id = $1 AND author_id = $2
+		  AND (
+		    content LIKE '%Inline review feedback%'
+		    OR content LIKE '%Conclusion:** failure%'
+		    OR content LIKE '%Workflow:** CI%'
+		  )
+	`, enabledIssueID, botID).Scan(&eventComments); err != nil {
+		t.Fatalf("count event comments: %v", err)
+	}
+	if eventComments != 3 {
+		t.Fatalf("expected review comment, failed check_run, and completed workflow comments, got %d", eventComments)
+	}
+
+	var disabledComments int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM comment
+		WHERE issue_id = $1 AND author_id = $2
+	`, disabledIssueID, botID).Scan(&disabledComments); err != nil {
+		t.Fatalf("count disabled comments: %v", err)
+	}
+	if disabledComments != 0 {
+		t.Fatalf("expected no bot comment on disabled issue, got %d", disabledComments)
+	}
+}
+
+func insertLinkedAutoFixIssue(t *testing.T, title, agentID, prURL string, enabled bool) string {
+	t.Helper()
+	ctx := context.Background()
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (
+			workspace_id, title, status, priority, assignee_type, assignee_id,
+			creator_type, creator_id, number, github_auto_fix_enabled
+		)
+		VALUES ($1, $2, 'todo', 'medium', 'agent', $3, 'member', $4, $5, $6)
+		RETURNING id
+	`, testWorkspaceID, title, agentID, testUserID, uniqueIssueNumber(), enabled).Scan(&issueID); err != nil {
+		t.Fatalf("insert linked auto-fix issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+	if _, err := testHandler.Queries.CreateIssueLink(ctx, db.CreateIssueLinkParams{
+		IssueID:     parseUUID(issueID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+		SourceType:  "github",
+		Kind:        "pr",
+		Direction:   "source",
+		Url:         prURL,
+		ExternalID:  "",
+	}); err != nil {
+		t.Fatalf("create issue link: %v", err)
+	}
+	return issueID
+}
+
 func TestReceiveGitHubEvent_PullRequestReusesLinkedGitHubIssue(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")
