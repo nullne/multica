@@ -155,6 +155,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Post("/members", h.CreateMember)
 					r.Get("/providers", h.GetWorkspaceProviders)
 					r.Patch("/providers", h.UpdateWorkspaceProviders)
+					r.Post("/providers/{provider}/validate", h.ValidateWorkspaceProvider)
 					r.Get("/telegram-notifications", h.GetWorkspaceTelegramNotifications)
 					r.Put("/telegram-notifications", h.UpsertWorkspaceTelegramNotifications)
 					r.Delete("/telegram-notifications", h.DeleteWorkspaceTelegramNotifications)

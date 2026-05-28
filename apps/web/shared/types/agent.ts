@@ -87,6 +87,12 @@ export interface AgentTask {
   created_at: string;
   /** Comment that triggered this run; absent/null when triggered by the issue itself. */
   trigger_comment_id?: string | null;
+  /**
+   * Reply comment this run produced; absent/null while the run is still
+   * active or when it finished without writing a reply. Used by the UI to
+   * embed run traces inside their corresponding agent reply.
+   */
+  result_comment_id?: string | null;
 }
 
 export interface Agent {

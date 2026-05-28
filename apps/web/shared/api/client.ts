@@ -27,6 +27,7 @@ import type {
   Workspace,
   WorkspaceRepo,
   WorkspaceProviderSettings,
+  ProviderValidationResult,
   MemberWithUser,
   User,
   Skill,
@@ -650,6 +651,13 @@ export class ApiClient {
     return this.fetch(`/api/workspaces/${workspaceId}/providers`, {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+  }
+
+  async validateProviderAPIKey(workspaceId: string, provider: string, apiKey: string): Promise<ProviderValidationResult> {
+    return this.fetch(`/api/workspaces/${workspaceId}/providers/${provider}/validate`, {
+      method: "POST",
+      body: JSON.stringify({ api_key: apiKey }),
     });
   }
 

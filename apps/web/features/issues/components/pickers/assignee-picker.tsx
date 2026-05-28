@@ -338,6 +338,8 @@ export function AssigneePicker({
   const open = controlledOpen ?? internalOpen;
   const setOpen = controlledOnOpenChange ?? setInternalOpen;
   const [filter, setFilter] = useState("");
+  const [membersExpanded, setMembersExpanded] = useState(true);
+  const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [internalPendingAgentId, setInternalPendingAgentId] = useState<string | null>(null);
   const pendingAgentId =
     controlledPendingAgentId !== undefined
@@ -361,8 +363,11 @@ export function AssigneePicker({
   const filteredMembers = members.filter((m) =>
     m.kind !== "bot" && m.name.toLowerCase().includes(query),
   );
-  const filteredAgents = agents.filter((a) =>
-    !a.archived_at && a.name.toLowerCase().includes(query),
+  const assignableAgents = agents.filter(
+    (a) => !a.archived_at && canAssignAgent(a, user?.id, memberRole),
+  );
+  const filteredAgents = assignableAgents.filter((a) =>
+    a.name.toLowerCase().includes(query),
   );
 
   const isSelected = (type: string, id: string) =>
@@ -424,6 +429,8 @@ export function AssigneePicker({
         setOpen(v);
         if (!v) {
           setFilter("");
+          setMembersExpanded(true);
+          setAgentsExpanded(true);
           setPendingAgentId(null);
         }
       }}
@@ -467,9 +474,40 @@ export function AssigneePicker({
             <span className="text-muted-foreground">Unassigned</span>
           </PickerItem>
 
+          {/* Agents — clicking switches to the dispatch confirmation step */}
+          {filteredAgents.length > 0 && (
+            <PickerSection
+              label="Agents"
+              collapsed={!agentsExpanded}
+              onToggle={() => setAgentsExpanded((open) => !open)}
+            >
+              {filteredAgents.map((a) => {
+                return (
+                  <PickerItem
+                    key={a.id}
+                    selected={isSelected("agent", a.id)}
+                    onClick={() => {
+                      setPendingAgentId(a.id);
+                    }}
+                  >
+                    <ActorAvatar actorType="agent" actorId={a.id} size={18} />
+                    <span>{a.name}</span>
+                    {a.visibility === "private" && (
+                      <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
+                    )}
+                  </PickerItem>
+                );
+              })}
+            </PickerSection>
+          )}
+
           {/* Members */}
           {filteredMembers.length > 0 && (
-            <PickerSection label="Members">
+            <PickerSection
+              label="Members"
+              collapsed={!membersExpanded}
+              onToggle={() => setMembersExpanded((open) => !open)}
+            >
               {filteredMembers.map((m) => (
                 <PickerItem
                   key={m.user_id}
@@ -483,32 +521,6 @@ export function AssigneePicker({
                   <span>{m.name}</span>
                 </PickerItem>
               ))}
-            </PickerSection>
-          )}
-
-          {/* Agents — clicking switches to the dispatch confirmation step */}
-          {filteredAgents.length > 0 && (
-            <PickerSection label="Agents">
-              {filteredAgents.map((a) => {
-                const allowed = canAssignAgent(a, user?.id, memberRole);
-                return (
-                  <PickerItem
-                    key={a.id}
-                    selected={isSelected("agent", a.id)}
-                    disabled={!allowed}
-                    onClick={() => {
-                      if (!allowed) return;
-                      setPendingAgentId(a.id);
-                    }}
-                  >
-                    <ActorAvatar actorType="agent" actorId={a.id} size={18} />
-                    <span className={allowed ? "" : "text-muted-foreground"}>{a.name}</span>
-                    {a.visibility === "private" && (
-                      <Lock className="ml-auto h-3 w-3 text-muted-foreground" />
-                    )}
-                  </PickerItem>
-                );
-              })}
             </PickerSection>
           )}
 

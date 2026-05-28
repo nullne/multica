@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/nullne/multica/server/internal/codeagent"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/pkg/protocol"
@@ -27,6 +30,29 @@ type ProviderConfig struct {
 type WorkspaceProviderSettings struct {
 	Providers            map[string]ProviderConfig `json:"providers,omitempty"`
 	MulticaTargetVersion string                    `json:"multica_target_version,omitempty"`
+}
+
+type ProviderValidationStatus string
+
+const (
+	ProviderValidationValid       ProviderValidationStatus = "valid"
+	ProviderValidationInvalid     ProviderValidationStatus = "invalid"
+	ProviderValidationUnsupported ProviderValidationStatus = "unsupported"
+	ProviderValidationUnavailable ProviderValidationStatus = "temporarily_unavailable"
+)
+
+type ProviderValidationResult struct {
+	Provider string                   `json:"provider"`
+	Status   ProviderValidationStatus `json:"status"`
+	Message  string                   `json:"message"`
+}
+
+var providerValidationHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+var providerValidationURLs = map[string]string{
+	"claude":   "https://api.anthropic.com/v1/models",
+	"codex":    "https://api.openai.com/v1/models",
+	"opencode": "https://api.openai.com/v1/models",
 }
 
 // SupportedProviders lists the provider keys recognised by multica.
@@ -139,6 +165,85 @@ func daemonProviderConfig(ps WorkspaceProviderSettings) map[string]map[string]an
 	return out
 }
 
+func isSupportedProvider(provider string) bool {
+	for _, p := range SupportedProviders {
+		if p == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func validateProviderAPIKey(ctx context.Context, provider, apiKey string) ProviderValidationResult {
+	if _, ok := providerValidationURLs[provider]; !ok {
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationUnsupported,
+			Message:  "Validation is not supported for this provider yet.",
+		}
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationInvalid,
+			Message:  "No API key is configured for this provider.",
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, providerValidationURLs[provider], nil)
+	if err != nil {
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationUnavailable,
+			Message:  "Could not build provider validation request.",
+		}
+	}
+	switch provider {
+	case "claude":
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	default:
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := providerValidationHTTPClient.Do(req)
+	if err != nil {
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationUnavailable,
+			Message:  "Provider validation is temporarily unavailable.",
+		}
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationValid,
+			Message:  "API key is valid.",
+		}
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationInvalid,
+			Message:  "Provider rejected the API key.",
+		}
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationUnavailable,
+			Message:  "Provider validation is temporarily unavailable.",
+		}
+	default:
+		return ProviderValidationResult{
+			Provider: provider,
+			Status:   ProviderValidationInvalid,
+			Message:  "Provider rejected the API key.",
+		}
+	}
+}
+
 // GetWorkspaceProviders returns the provider configuration for a workspace.
 // API keys are redacted in the response.
 func (h *Handler) GetWorkspaceProviders(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +325,39 @@ func (h *Handler) UpdateWorkspaceProviders(w http.ResponseWriter, r *http.Reques
 	h.publish(protocol.EventWorkspaceUpdated, id, "member", userID, map[string]any{"workspace": workspaceToResponse(ws)})
 
 	writeJSON(w, http.StatusOK, redactProviderSettings(parseProviderSettings(ws.Settings)))
+}
+
+// ValidateWorkspaceProvider validates a provider API key without returning or logging it.
+func (h *Handler) ValidateWorkspaceProvider(w http.ResponseWriter, r *http.Request) {
+	id := workspaceIDFromURL(r, "id")
+	provider := chi.URLParam(r, "provider")
+	if !isSupportedProvider(provider) {
+		writeError(w, http.StatusBadRequest, "unsupported provider: "+provider)
+		return
+	}
+
+	var req struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	apiKey := req.APIKey
+	if apiKey == "" || isRedacted(apiKey) {
+		ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(id))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "workspace not found")
+			return
+		}
+		ps := parseProviderSettings(ws.Settings)
+		if cfg, ok := ps.Providers[provider]; ok {
+			apiKey = cfg.APIKey
+		}
+	}
+
+	writeJSON(w, http.StatusOK, validateProviderAPIKey(r.Context(), provider, apiKey))
 }
 
 // isRedacted returns true if the string looks like a redacted API key (all * or *…*XXXX).

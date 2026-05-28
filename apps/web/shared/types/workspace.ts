@@ -29,6 +29,18 @@ export interface WorkspaceProviderSettings {
   providers?: Record<string, ProviderConfig>;
 }
 
+export type ProviderValidationStatus =
+  | "valid"
+  | "invalid"
+  | "unsupported"
+  | "temporarily_unavailable";
+
+export interface ProviderValidationResult {
+  provider: string;
+  status: ProviderValidationStatus;
+  message: string;
+}
+
 export interface Member {
   id: string;
   workspace_id: string;
