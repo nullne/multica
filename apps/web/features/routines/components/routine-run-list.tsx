@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { StatusIcon, RunningIndicatorRing } from "@/features/issues/components";
 import { issueUrl } from "@/features/issues/utils/url";
 import { useWorkspaceStore } from "@/features/workspace";
@@ -79,15 +80,32 @@ function RoutineRunRow({ run }: { run: RoutineRun }) {
             {run.issue?.title ?? formatDateTime(run.created_at)}
           </span>
           <span className="block truncate text-xs text-muted-foreground">
-            {run.issue
-              ? `${run.issue.identifier} · ${formatDateTime(run.created_at)}`
-              : run.event_type || "routine"}
+            {formatRunSubtitle(run)}
           </span>
         </span>
       </span>
-      <Badge variant="secondary" className="shrink-0 uppercase tracking-wide">
-        {source.label}
-      </Badge>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span className="shrink-0 cursor-default">
+              <Badge variant="secondary" className="uppercase tracking-wide">
+                {source.label}
+              </Badge>
+            </span>
+          }
+        />
+        <TooltipContent side="left" align="end" className="max-w-md items-start bg-popover p-0 text-popover-foreground shadow-lg">
+          <div className="space-y-2 p-3">
+            <div>
+              <div className="text-xs font-semibold">{source.tooltipTitle}</div>
+              <div className="text-[11px] text-muted-foreground">{run.event_type || "routine"}</div>
+            </div>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2 text-[11px] leading-relaxed text-muted-foreground">
+              {formatRunPayload(run.payload)}
+            </pre>
+          </div>
+        </TooltipContent>
+      </Tooltip>
     </>
   );
 
@@ -124,13 +142,42 @@ function RoutineRunStatusIcon({ run }: { run: RoutineRun }) {
   );
 }
 
-function getRoutineRunSource(run: RoutineRun): { filter: Exclude<RoutineRunFilter, "all">; label: string } {
-  if (run.event_type === "schedule") return { filter: "scheduled", label: "Scheduled" };
-  if (run.event_type === "manual") return { filter: "manual", label: "Manual" };
+function getRoutineRunSource(run: RoutineRun): { filter: Exclude<RoutineRunFilter, "all">; label: string; tooltipTitle: string } {
+  if (run.event_type === "schedule") return { filter: "scheduled", label: "Scheduled", tooltipTitle: "Scheduled run" };
+  if (run.event_type === "manual") return { filter: "manual", label: "Manual", tooltipTitle: "Manual run" };
   if (run.event_type.startsWith("github.") || run.event_type.startsWith("alert.")) {
-    return { filter: "webhook", label: "Webhook" };
+    return { filter: "webhook", label: "Webhook", tooltipTitle: run.event_type.startsWith("github.") ? "GitHub webhook event" : "Webhook event" };
   }
-  return { filter: "api", label: "API" };
+  return { filter: "api", label: "API", tooltipTitle: "API call payload" };
+}
+
+function formatRunSubtitle(run: RoutineRun): string {
+  const parts = run.issue ? [run.issue.identifier, formatDateTime(run.created_at)] : [run.event_type || "routine"];
+  const eventLabel = formatWebhookEventLabel(run.event_type);
+  if (eventLabel) parts.push(eventLabel);
+  return parts.join(" · ");
+}
+
+function formatWebhookEventLabel(eventType: string): string | null {
+  if (eventType.startsWith("github.")) {
+    return eventType.slice("github.".length);
+  }
+  if (eventType.startsWith("alert.")) {
+    return eventType;
+  }
+  return null;
+}
+
+function formatRunPayload(payload: unknown): string {
+  if (payload == null || (typeof payload === "object" && Object.keys(payload).length === 0)) {
+    return "No payload captured";
+  }
+  if (typeof payload === "string") return payload;
+  try {
+    return JSON.stringify(payload, null, 2);
+  } catch {
+    return String(payload);
+  }
 }
 
 function formatDateTime(value: string) {

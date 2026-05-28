@@ -327,6 +327,24 @@ function priorityLabel(priority: string): string {
   return PRIORITY_CONFIG[priority as IssuePriority]?.label ?? priority;
 }
 
+function routineTriggerLabel(issue: Issue): string {
+  const origin = issue.routine_origin;
+  if (!origin?.trigger_type) return "Deleted trigger";
+  if (origin.trigger_type === "api") return "API call";
+  if (origin.trigger_type === "github") return origin.event_type || "GitHub webhook";
+  if (origin.trigger_type === "schedule") {
+    if (origin.schedule) return `Schedule ${origin.schedule}`;
+    if (origin.run_at) return `Schedule ${shortDate(origin.run_at)}`;
+    return "Schedule";
+  }
+  return origin.trigger_type;
+}
+
+function routineTriggerURL(triggerID: string): string {
+  const baseURL = process.env.NEXT_PUBLIC_API_URL || (typeof window !== "undefined" ? window.location.origin : "");
+  return `${baseURL}/api/webhook/${triggerID}`;
+}
+
 function humanizeActivityAction(action?: string): string {
   if (!action) return "updated this issue";
   return action.replace(/_/g, " ");
@@ -1894,6 +1912,33 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                   <PropRow label="Updated">
                     <span className="text-muted-foreground">{shortDate(issue.updated_at)}</span>
                   </PropRow>
+                  {issue.routine_origin && (
+                    <>
+                      <PropRow label="Routine">
+                        <Link
+                          href={`/routines/${issue.routine_origin.routine_id}`}
+                          className="truncate text-primary hover:underline"
+                        >
+                          {issue.routine_origin.routine_name}
+                        </Link>
+                      </PropRow>
+                      <PropRow label="Trigger">
+                        <span className="truncate text-muted-foreground">{routineTriggerLabel(issue)}</span>
+                      </PropRow>
+                      {issue.routine_origin.trigger_type === "api" && issue.routine_origin.trigger_id && (
+                        <PropRow label="API">
+                          <a
+                            href={routineTriggerURL(issue.routine_origin.trigger_id)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="truncate text-primary hover:underline"
+                          >
+                            Open API endpoint
+                          </a>
+                        </PropRow>
+                      )}
+                    </>
+                  )}
                   {(() => {
                     const branch = issue.links?.find((l) => l.kind === "branch" && l.direction === "output");
                     const outgoingPr = issue.links?.find((l) => l.kind === "pr" && l.direction === "output");

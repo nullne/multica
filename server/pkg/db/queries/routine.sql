@@ -236,6 +236,59 @@ WHERE routine_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 
+-- name: GetRoutineOriginForIssue :one
+SELECT
+    rr.issue_id,
+    rr.id AS run_id,
+    rr.routine_id,
+    r.name AS routine_name,
+    rr.trigger_id,
+    rt.trigger_type,
+    rt.source_type,
+    rt.token_prefix,
+    rt.schedule,
+    rt.timezone,
+    rt.run_at,
+    rr.action_id,
+    ra.action_type,
+    rr.event_type,
+    rr.created_at
+FROM routine_run rr
+JOIN routine r ON r.id = rr.routine_id
+LEFT JOIN routine_trigger rt ON rt.id = rr.trigger_id
+LEFT JOIN routine_action ra ON ra.id = rr.action_id
+WHERE rr.issue_id = $1
+  AND r.workspace_id = $2
+  AND rr.status = 'processed'
+ORDER BY rr.created_at ASC
+LIMIT 1;
+
+-- name: ListRoutineOriginsByIssues :many
+SELECT DISTINCT ON (rr.issue_id)
+    rr.issue_id,
+    rr.id AS run_id,
+    rr.routine_id,
+    r.name AS routine_name,
+    rr.trigger_id,
+    rt.trigger_type,
+    rt.source_type,
+    rt.token_prefix,
+    rt.schedule,
+    rt.timezone,
+    rt.run_at,
+    rr.action_id,
+    ra.action_type,
+    rr.event_type,
+    rr.created_at
+FROM routine_run rr
+JOIN routine r ON r.id = rr.routine_id
+LEFT JOIN routine_trigger rt ON rt.id = rr.trigger_id
+LEFT JOIN routine_action ra ON ra.id = rr.action_id
+WHERE rr.issue_id = ANY(sqlc.arg('issue_ids')::uuid[])
+  AND r.workspace_id = sqlc.arg('workspace_id')
+  AND rr.status = 'processed'
+ORDER BY rr.issue_id, rr.created_at ASC;
+
 -- name: FindRecentRoutineRun :one
 SELECT id FROM routine_run
 WHERE trigger_id = $1

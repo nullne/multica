@@ -45,8 +45,26 @@ type IssueResponse struct {
 	UpdatedAt             string                  `json:"updated_at"`
 	Labels                []LabelResponse         `json:"labels"`
 	Links                 []IssueLinkResponse     `json:"links"`
+	RoutineOrigin         *RoutineOriginResponse  `json:"routine_origin,omitempty"`
 	Reactions             []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments           []AttachmentResponse    `json:"attachments,omitempty"`
+}
+
+type RoutineOriginResponse struct {
+	RunID       string  `json:"run_id"`
+	RoutineID   string  `json:"routine_id"`
+	RoutineName string  `json:"routine_name"`
+	TriggerID   *string `json:"trigger_id"`
+	TriggerType *string `json:"trigger_type"`
+	SourceType  *string `json:"source_type"`
+	TokenPrefix *string `json:"token_prefix"`
+	Schedule    *string `json:"schedule"`
+	Timezone    *string `json:"timezone"`
+	RunAt       *string `json:"run_at"`
+	ActionID    *string `json:"action_id"`
+	ActionType  *string `json:"action_type"`
+	EventType   string  `json:"event_type"`
+	TriggeredAt string  `json:"triggered_at"`
 }
 
 // IssueLinkResponse describes an external link attached to an issue (e.g.
@@ -81,6 +99,73 @@ func (h *Handler) hydrateLinks(ctx context.Context, issueID pgtype.UUID, resp *I
 		for i, l := range links {
 			resp.Links[i] = issueLinkToResponse(l)
 		}
+	}
+}
+
+func (h *Handler) hydrateRoutineOrigin(ctx context.Context, workspaceID, issueID pgtype.UUID, resp *IssueResponse) {
+	origin, err := h.Queries.GetRoutineOriginForIssue(ctx, db.GetRoutineOriginForIssueParams{
+		IssueID:     issueID,
+		WorkspaceID: workspaceID,
+	})
+	if err == nil {
+		resp.RoutineOrigin = routineOriginFromGetRow(origin)
+	}
+}
+
+func (h *Handler) hydrateRoutineOrigins(ctx context.Context, workspaceID pgtype.UUID, issueIDs []pgtype.UUID, resp []IssueResponse) {
+	origins, err := h.Queries.ListRoutineOriginsByIssues(ctx, db.ListRoutineOriginsByIssuesParams{
+		IssueIds:    issueIDs,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return
+	}
+	originMap := make(map[string]*RoutineOriginResponse, len(origins))
+	for _, origin := range origins {
+		originMap[uuidToString(origin.IssueID)] = routineOriginFromListRow(origin)
+	}
+	for i := range resp {
+		if origin, ok := originMap[resp[i].ID]; ok {
+			resp[i].RoutineOrigin = origin
+		}
+	}
+}
+
+func routineOriginFromGetRow(row db.GetRoutineOriginForIssueRow) *RoutineOriginResponse {
+	return &RoutineOriginResponse{
+		RunID:       uuidToString(row.RunID),
+		RoutineID:   uuidToString(row.RoutineID),
+		RoutineName: row.RoutineName,
+		TriggerID:   uuidToPtr(row.TriggerID),
+		TriggerType: textToPtr(row.TriggerType),
+		SourceType:  textToPtr(row.SourceType),
+		TokenPrefix: textToPtr(row.TokenPrefix),
+		Schedule:    textToPtr(row.Schedule),
+		Timezone:    textToPtr(row.Timezone),
+		RunAt:       timestampToPtr(row.RunAt),
+		ActionID:    uuidToPtr(row.ActionID),
+		ActionType:  textToPtr(row.ActionType),
+		EventType:   row.EventType,
+		TriggeredAt: timestampToString(row.CreatedAt),
+	}
+}
+
+func routineOriginFromListRow(row db.ListRoutineOriginsByIssuesRow) *RoutineOriginResponse {
+	return &RoutineOriginResponse{
+		RunID:       uuidToString(row.RunID),
+		RoutineID:   uuidToString(row.RoutineID),
+		RoutineName: row.RoutineName,
+		TriggerID:   uuidToPtr(row.TriggerID),
+		TriggerType: textToPtr(row.TriggerType),
+		SourceType:  textToPtr(row.SourceType),
+		TokenPrefix: textToPtr(row.TokenPrefix),
+		Schedule:    textToPtr(row.Schedule),
+		Timezone:    textToPtr(row.Timezone),
+		RunAt:       timestampToPtr(row.RunAt),
+		ActionID:    uuidToPtr(row.ActionID),
+		ActionType:  textToPtr(row.ActionType),
+		EventType:   row.EventType,
+		TriggeredAt: timestampToString(row.CreatedAt),
 	}
 }
 
@@ -296,6 +381,8 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+
+		h.hydrateRoutineOrigins(ctx, parseUUID(workspaceID), issueIDs, resp)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -384,6 +471,8 @@ func (h *Handler) ListRecentIssues(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+
+		h.hydrateRoutineOrigins(ctx, parseUUID(workspaceID), issueIDs, resp)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -418,6 +507,8 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 			resp.Links[i] = issueLinkToResponse(l)
 		}
 	}
+
+	h.hydrateRoutineOrigin(r.Context(), issue.WorkspaceID, issue.ID, &resp)
 
 	// Fetch issue reactions.
 	reactions, err := h.Queries.ListIssueReactions(r.Context(), issue.ID)

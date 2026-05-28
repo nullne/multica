@@ -305,7 +305,17 @@ describe("RoutineDetailPage", () => {
       makeRun({ id: "run-schedule", event_type: "schedule", issue_id: "issue-1", title: "Scheduled issue" }),
       makeRun({ id: "run-manual", event_type: "manual", issue_id: "issue-2", title: "Manual issue" }),
       makeRun({ id: "run-api", event_type: "custom", issue_id: "issue-3", title: "API issue" }),
-      makeRun({ id: "run-webhook", event_type: "github.pull_request.opened", issue_id: "issue-4", title: "Webhook issue" }),
+      makeRun({
+        id: "run-webhook",
+        event_type: "github.pull_request.opened",
+        issue_id: "issue-4",
+        title: "Webhook issue",
+        payload: {
+          action: "opened",
+          repository: { full_name: "octocat/hello-world" },
+          pull_request: { number: 42, title: "Add webhook details" },
+        },
+      }),
     ]);
 
     render(<RoutineViewPage routineID="routine-1" />);
@@ -313,6 +323,12 @@ describe("RoutineDetailPage", () => {
     expect(await screen.findByText("Scheduled issue")).toBeInTheDocument();
     expect(screen.getByTitle("Agent is working")).toBeInTheDocument();
     expect(screen.getAllByText("Webhook").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/pull_request\.opened/)).toBeInTheDocument();
+
+    await user.hover(screen.getAllByText("Webhook").at(-1)!);
+
+    expect(await screen.findByText("GitHub webhook event")).toBeInTheDocument();
+    expect(screen.getByText(/octocat\/hello-world/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Manual" }));
 
@@ -466,11 +482,13 @@ function makeRun({
   event_type,
   issue_id,
   title,
+  payload = {},
 }: {
   id: string;
   event_type: string;
   issue_id: string;
   title: string;
+  payload?: unknown;
 }) {
   return {
     id,
@@ -479,7 +497,7 @@ function makeRun({
     action_id: "action-1",
     event_type,
     dedup_key: "",
-    payload: {},
+    payload,
     status: "processed",
     issue_id,
     comment_id: null,
