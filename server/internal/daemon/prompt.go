@@ -15,6 +15,11 @@ func BuildPrompt(task Task) string {
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 
+	if raw := marshalContextField(task.Context, "routine_event"); raw != "" {
+		b.WriteString("\nThis issue was created by a routine trigger. Raw routine event context:\n")
+		b.WriteString(raw + "\n")
+	}
+
 	role := taskContextRole(task.Context)
 	switch role {
 	case "criteria":

@@ -22,6 +22,8 @@ import (
 
 var errRoutineTriggerTokenRequired = errors.New("routine trigger token must be generated before saving")
 
+const routineTriggerMaxPayloadBytes = 1 << 20
+
 type RoutineResponse struct {
 	ID                   string                   `json:"id"`
 	WorkspaceID          string                   `json:"workspace_id"`
@@ -597,9 +599,17 @@ func (h *Handler) IngestRoutineTrigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid routine trigger token")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, routineTriggerMaxPayloadBytes+1))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	if len(body) > routineTriggerMaxPayloadBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "payload exceeds 1MB limit")
+		return
+	}
+	if !json.Valid(body) {
+		writeError(w, http.StatusBadRequest, "invalid JSON payload")
 		return
 	}
 	sourceType := "standard"

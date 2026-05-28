@@ -65,6 +65,29 @@ func TestBuildPromptNoIssueDetails(t *testing.T) {
 	}
 }
 
+func TestBuildPromptIncludesRoutineEventContext(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildPrompt(Task{
+		IssueID: "issue-1",
+		Context: map[string]any{
+			"routine_event": map[string]any{
+				"type":        "custom",
+				"raw_payload": `{"deployment":{"service":"api"}}`,
+			},
+		},
+	})
+	for _, want := range []string{
+		"routine trigger",
+		"raw_payload",
+		"deployment",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q", want)
+		}
+	}
+}
+
 func TestBuildPromptCriteriaRoleIncludesStructuredBlock(t *testing.T) {
 	t.Parallel()
 

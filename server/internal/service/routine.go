@@ -93,12 +93,6 @@ func (s *RoutineService) executeCreateIssue(ctx context.Context, routine db.Rout
 	if title == "" {
 		title = evt.Data["title"]
 	}
-	if title == "" {
-		title = routine.Name
-	}
-	if title == "" {
-		title = "Routine run"
-	}
 
 	description := renderRoutineTemplate(cfg.DescriptionTemplate, evt.Data)
 	if description == "" {
@@ -194,7 +188,7 @@ func (s *RoutineService) executeCreateIssue(ctx context.Context, routine db.Rout
 	}
 
 	if s.TaskService != nil && issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid {
-		_, _ = s.TaskService.EnqueueTaskForIssue(ctx, issue)
+		_, _ = s.TaskService.EnqueueTaskForIssueWithContext(ctx, issue, routineTaskContext(evt))
 	}
 
 	_ = s.logRun(ctx, routine.ID, trigger.ID, action.ID, evt, "processed", issue.ID, pgtype.UUID{}, "")
@@ -360,4 +354,28 @@ func strToText(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
+}
+
+func routineTaskContext(evt RoutineEvent) []byte {
+	rawPayload := evt.Data["raw_payload"]
+	if rawPayload == "" && len(evt.Payload) > 0 {
+		rawPayload = string(evt.Payload)
+	}
+	routineEvent := map[string]any{
+		"type":        evt.Type,
+		"dedup_key":   evt.DedupKey,
+		"raw_payload": rawPayload,
+	}
+	var parsedPayload any
+	if rawPayload != "" && json.Unmarshal([]byte(rawPayload), &parsedPayload) == nil {
+		routineEvent["payload"] = parsedPayload
+	}
+	context := map[string]any{
+		"routine_event": routineEvent,
+	}
+	b, err := json.Marshal(context)
+	if err != nil {
+		return nil
+	}
+	return b
 }

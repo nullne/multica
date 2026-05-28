@@ -1122,6 +1122,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		Repos:             convertReposForEnv(task.Repos),
 		GitHubCodeAccess:  task.GitHubCodeAccess,
 	}
+	if routineEvent, ok := task.Context["routine_event"].(map[string]any); ok {
+		taskCtx.RoutineEvent = routineEvent
+	}
 
 	// Try to reuse the workdir from a previous task on the same (agent, issue) pair.
 	var env *execenv.Environment

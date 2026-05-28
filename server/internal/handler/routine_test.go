@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +260,152 @@ func TestRoutineAPITriggerIngestCreatesIssue(t *testing.T) {
 	}
 	if len(runs) == 0 || runs[0].Status != "processed" {
 		t.Fatalf("expected processed routine run, got %+v", runs)
+	}
+}
+
+func TestRoutineAPITriggerAcceptsFlexibleJSONPayload(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine flexible payload",
+		"instructions":  "Investigate raw payload",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	payload := []byte(`{"deployment":{"service":"api","status":"failed"},"metadata":{"source":"curl"}}`)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, bytes.NewReader(payload))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var issueID, title, description string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, title, COALESCE(description, '')
+		FROM issue
+		WHERE workspace_id = $1 AND description = 'Investigate raw payload'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID, &title, &description); err != nil {
+		t.Fatalf("query created issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+	if title != "" {
+		t.Fatalf("issue title = %q, want empty", title)
+	}
+	if description != "Investigate raw payload" {
+		t.Fatalf("issue description = %q", description)
+	}
+
+	runs, err := testHandler.Queries.ListRoutineRuns(ctx, db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns: %v", err)
+	}
+	if len(runs) == 0 || runs[0].Status != "processed" {
+		t.Fatalf("expected processed routine run, got %+v", runs)
+	}
+	var storedPayload map[string]any
+	if err := json.Unmarshal(runs[0].Payload, &storedPayload); err != nil {
+		t.Fatalf("unmarshal run payload: %v", err)
+	}
+	deployment, ok := storedPayload["deployment"].(map[string]any)
+	if !ok || deployment["service"] != "api" {
+		t.Fatalf("stored payload missing deployment.service: %#v", storedPayload)
+	}
+
+	var taskContext []byte
+	if err := testPool.QueryRow(ctx, `
+		SELECT context FROM agent_task_queue
+		WHERE issue_id = $1
+		ORDER BY created_at DESC LIMIT 1
+	`, issueID).Scan(&taskContext); err != nil {
+		t.Fatalf("query task context: %v", err)
+	}
+	var contextData map[string]any
+	if err := json.Unmarshal(taskContext, &contextData); err != nil {
+		t.Fatalf("unmarshal task context: %v", err)
+	}
+	routineEvent, ok := contextData["routine_event"].(map[string]any)
+	if !ok {
+		t.Fatalf("routine_event missing from task context: %#v", contextData)
+	}
+	if routineEvent["raw_payload"] != string(payload) {
+		t.Fatalf("raw_payload = %q, want %q", routineEvent["raw_payload"], string(payload))
+	}
+
+	arrayPayload := []byte(`[{"status":"failed"},{"status":"retrying"}]`)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, bytes.NewReader(arrayPayload))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("array payload: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+	runs, err = testHandler.Queries.ListRoutineRuns(ctx, db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     1,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns after array payload: %v", err)
+	}
+	var storedArray []any
+	if len(runs) == 0 || json.Unmarshal(runs[0].Payload, &storedArray) != nil || len(storedArray) != 2 {
+		t.Fatalf("expected array payload in latest run, got %+v", runs)
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, bytes.NewBufferString(`{"event":`))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid JSON: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, strings.NewReader(`"`+strings.Repeat("x", 1<<20)+`"`))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized JSON: expected 413, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

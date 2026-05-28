@@ -1,6 +1,7 @@
 package execenv
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,6 +131,15 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("## Quick Start\n\n")
 	fmt.Fprintf(&b, "Run `multica issue get %s --output json` to fetch the full issue details.\n\n", ctx.IssueID)
+
+	if len(ctx.RoutineEvent) > 0 {
+		if raw, err := json.MarshalIndent(ctx.RoutineEvent, "", "  "); err == nil {
+			b.WriteString("## Routine Trigger Event\n\n")
+			b.WriteString("```json\n")
+			b.Write(raw)
+			b.WriteString("\n```\n\n")
+		}
+	}
 
 	if len(ctx.AgentSkills) > 0 {
 		b.WriteString("## Agent Skills\n\n")
