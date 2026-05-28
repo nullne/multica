@@ -1,6 +1,6 @@
 -- Backfill source_type='github' webhook rows for workspaces that already
 -- had a GitHub App installation before migration 050. Without this row
--- /api/github/events would silently drop incoming events because
+-- /api/webhook/github would silently drop incoming events because
 -- GetWebhookByInstallationID would return ErrNoRows.
 --
 -- token_hash/token_prefix are required (NOT NULL UNIQUE) by the schema even
