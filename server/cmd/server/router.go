@@ -87,12 +87,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	// handler so the route is inert in production.
 	r.Post("/auth/dev", h.LoginDev)
 
-	// Webhook ingest (public — authenticated by webhook token, not JWT)
-	r.Post("/api/webhooks/{id}", h.IngestWebhook)
-	r.Post("/api/routine-triggers/{id}", h.IngestRoutineTrigger)
-
-	// GitHub App webhook receiver (public — authenticated by HMAC signature)
-	r.Post("/api/github/events", h.ReceiveGitHubEvent)
+	// Public webhook ingest. Routine triggers use bearer tokens; GitHub uses HMAC.
+	r.Post("/api/webhook/github", h.ReceiveGitHubEvent)
+	r.Post("/api/webhook/{id}", h.IngestRoutineTrigger)
 
 	// Daemon API routes (all require a valid token)
 	r.Route("/api/daemon", func(r chi.Router) {
@@ -300,36 +297,6 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Get("/{runtimeId}/ping/{pingId}", h.GetPing)
 				r.Post("/{runtimeId}/update", h.InitiateUpdate)
 				r.Get("/{runtimeId}/update/{updateId}", h.GetUpdate)
-			})
-
-			// Webhooks (CRUD — workspace-scoped management)
-			r.Get("/api/webhook-adapters", h.ListWebhookAdapters)
-			r.Get("/api/webhook-events", h.ListWorkspaceWebhookEvents)
-			r.Route("/api/webhooks", func(r chi.Router) {
-				r.Get("/", h.ListWebhooks)
-				r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/", h.CreateWebhook)
-				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.GetWebhook)
-					r.Put("/", h.UpdateWebhook)
-					r.Delete("/", h.DeleteWebhook)
-					r.Post("/regenerate-token", h.RegenerateWebhookToken)
-					r.Get("/events", h.ListWebhookEvents)
-					r.Get("/actions", h.ListWebhookActions)
-					r.Post("/actions", h.CreateWebhookAction)
-					r.Put("/actions/{actionId}", h.UpdateWebhookAction)
-					r.Delete("/actions/{actionId}", h.DeleteWebhookAction)
-				})
-			})
-
-			// Recurring issue templates
-			r.Route("/api/recurring-templates", func(r chi.Router) {
-				r.Get("/", h.ListRecurringTemplates)
-				r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/", h.CreateRecurringTemplate)
-				r.Route("/{id}", func(r chi.Router) {
-					r.Get("/", h.GetRecurringTemplate)
-					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Patch("/", h.UpdateRecurringTemplate)
-					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Delete("/", h.DeleteRecurringTemplate)
-				})
 			})
 
 			// Routines

@@ -33,7 +33,7 @@ func (h *Handler) GitHubInstallURL(w http.ResponseWriter, r *http.Request) {
 // Side effects (in one transaction):
 //  1. Persist installation_id on the workspace.
 //  2. Upsert a source_type='github' webhook record bound to installation_id.
-//     This is what /api/github/events looks up to route incoming events
+//     This is what /api/webhook/github looks up to route incoming events
 //     through the unified webhook pipeline.
 func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 	if h.GitHubApp == nil {
@@ -141,7 +141,7 @@ func (h *Handler) GitHubStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // GitHubDisconnect removes the GitHub App installation from the workspace
-// and the matching webhook record (so /api/github/events stops routing
+// and the matching webhook record (so /api/webhook/github stops routing
 // events for this installation).
 func (h *Handler) GitHubDisconnect(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)

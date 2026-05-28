@@ -881,7 +881,7 @@ func (h *Handler) IngestWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if webhook.SourceType == "github" {
-		writeError(w, http.StatusBadRequest, "send github events to /api/github/events")
+		writeError(w, http.StatusBadRequest, "send github events to /api/webhook/github")
 		return
 	}
 

@@ -198,7 +198,7 @@ describe("RoutineDetailPage", () => {
     expect(screen.getByText("Schedule")).toBeInTheDocument();
     expect(screen.getByText("Cron 0 9 * * 1 · UTC")).toBeInTheDocument();
     expect(screen.getAllByText("API").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText(/\/api\/routine-triggers\/trigger-api/)).toBeInTheDocument();
+    expect(screen.getByText(/\/api\/webhook\/trigger-api/)).toBeInTheDocument();
     expect(screen.getByText("GitHub")).toBeInTheDocument();
     expect(screen.getByText("github.pull_request.opened")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Runs" })).toBeInTheDocument();

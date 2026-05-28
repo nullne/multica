@@ -315,7 +315,7 @@ function formatTriggerDetail(trigger: Routine["triggers"][number]) {
 
 function getRoutineTriggerURL(triggerID: string) {
   const baseURL = process.env.NEXT_PUBLIC_API_URL || (typeof window !== "undefined" ? window.location.origin : "");
-  return `${baseURL}/api/routine-triggers/${triggerID}`;
+  return `${baseURL}/api/webhook/${triggerID}`;
 }
 
 function routineToUpdatePayload(routine: Routine, enabled: boolean) {

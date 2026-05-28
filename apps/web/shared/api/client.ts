@@ -44,20 +44,8 @@ import type {
   TimelineEntry,
   TaskMessagePayload,
   Attachment,
-  WebhookWithActions,
-  WebhookAction,
-  CreateWebhookRequest,
-  CreateWebhookResponse,
-  UpdateWebhookRequest,
-  CreateWebhookActionRequest,
-  UpdateWebhookActionRequest,
-  WebhookEvent,
-  AdapterInfo,
   BotUser,
   CreateBotUserRequest,
-  RecurringTemplate,
-  CreateRecurringTemplateRequest,
-  UpdateRecurringTemplateRequest,
   Routine,
   CreateRoutineRequest,
   UpdateRoutineRequest,
@@ -845,102 +833,6 @@ export class ApiClient {
 
   async deleteAttachment(id: string): Promise<void> {
     await this.fetch(`/api/attachments/${id}`, { method: "DELETE" });
-  }
-
-  // Webhooks
-  async listWebhooks(): Promise<WebhookWithActions[]> {
-    return this.fetch("/api/webhooks");
-  }
-
-  async getWebhook(id: string): Promise<WebhookWithActions> {
-    return this.fetch(`/api/webhooks/${id}`);
-  }
-
-  async createWebhook(data: CreateWebhookRequest): Promise<CreateWebhookResponse> {
-    return this.fetch("/api/webhooks", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updateWebhook(id: string, data: UpdateWebhookRequest): Promise<WebhookWithActions> {
-    return this.fetch(`/api/webhooks/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async deleteWebhook(id: string): Promise<void> {
-    await this.fetch(`/api/webhooks/${id}`, { method: "DELETE" });
-  }
-
-  async regenerateWebhookToken(id: string): Promise<CreateWebhookResponse> {
-    return this.fetch(`/api/webhooks/${id}/regenerate-token`, { method: "POST" });
-  }
-
-  async listWebhookEvents(id: string): Promise<WebhookEvent[]> {
-    return this.fetch(`/api/webhooks/${id}/events`);
-  }
-
-  async listWorkspaceWebhookEvents(): Promise<WebhookEvent[]> {
-    return this.fetch("/api/webhook-events");
-  }
-
-  async listWebhookActions(webhookId: string): Promise<WebhookAction[]> {
-    return this.fetch(`/api/webhooks/${webhookId}/actions`);
-  }
-
-  async createWebhookAction(webhookId: string, data: CreateWebhookActionRequest): Promise<WebhookAction> {
-    return this.fetch(`/api/webhooks/${webhookId}/actions`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updateWebhookAction(webhookId: string, actionId: string, data: UpdateWebhookActionRequest): Promise<WebhookAction> {
-    return this.fetch(`/api/webhooks/${webhookId}/actions/${actionId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async deleteWebhookAction(webhookId: string, actionId: string): Promise<void> {
-    await this.fetch(`/api/webhooks/${webhookId}/actions/${actionId}`, {
-      method: "DELETE",
-    });
-  }
-
-  async listWebhookAdapters(): Promise<AdapterInfo[]> {
-    return this.fetch("/api/webhook-adapters");
-  }
-
-  // Recurring Issue Templates
-  async listRecurringTemplates(options?: { includeInactive?: boolean }): Promise<RecurringTemplate[]> {
-    // The recurring templates list defaults to active (enabled and not yet at
-    // max_runs). Pass includeInactive=true to also receive disabled and
-    // completed templates so admins can re-enable or delete them.
-    const path = options?.includeInactive
-      ? "/api/recurring-templates?include_inactive=true"
-      : "/api/recurring-templates";
-    return this.fetch(path);
-  }
-
-  async createRecurringTemplate(data: CreateRecurringTemplateRequest): Promise<RecurringTemplate> {
-    return this.fetch("/api/recurring-templates", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async updateRecurringTemplate(id: string, data: UpdateRecurringTemplateRequest): Promise<RecurringTemplate> {
-    return this.fetch(`/api/recurring-templates/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    });
-  }
-
-  async deleteRecurringTemplate(id: string): Promise<void> {
-    await this.fetch(`/api/recurring-templates/${id}`, { method: "DELETE" });
   }
 
   // Routines

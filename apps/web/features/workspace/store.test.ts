@@ -60,14 +60,6 @@ vi.mock("@/features/runtimes", () => ({
   },
 }));
 
-vi.mock("@/features/recurring-templates", () => ({
-  useRecurringTemplateStore: {
-    getState: () => ({
-      setTemplates: vi.fn(),
-    }),
-  },
-}));
-
 import { useWorkspaceStore } from "./store";
 
 function createDeferred<T>() {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings, Users, FolderGit2, Cpu, Tag, Webhook, RefreshCw } from "lucide-react";
+import { Settings, Users, FolderGit2, Cpu, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useWorkspaceStore } from "@/features/workspace";
 import { WorkspaceTab } from "./_components/workspace-tab";
@@ -8,8 +8,6 @@ import { MembersTab } from "./_components/members-tab";
 import { RepositoriesTab } from "./_components/repositories-tab";
 import { ProvidersTab } from "./_components/providers-tab";
 import { LabelsTab } from "./_components/labels-tab";
-import { WebhooksTab } from "./_components/webhooks-tab";
-import { RecurringTemplatesTab } from "./_components/recurring-templates-tab";
 
 const workspaceTabs = [
   { value: "workspace", label: "General", icon: Settings },
@@ -17,8 +15,6 @@ const workspaceTabs = [
   { value: "providers", label: "Providers", icon: Cpu },
   { value: "repositories", label: "Repositories", icon: FolderGit2 },
   { value: "members", label: "Members", icon: Users },
-  { value: "webhooks", label: "Webhooks", icon: Webhook },
-  { value: "recurring-templates", label: "Recurring", icon: RefreshCw },
 ];
 
 export default function SettingsPage() {
@@ -50,8 +46,6 @@ export default function SettingsPage() {
           <TabsContent value="providers"><ProvidersTab /></TabsContent>
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
-          <TabsContent value="webhooks"><WebhooksTab /></TabsContent>
-          <TabsContent value="recurring-templates"><RecurringTemplatesTab /></TabsContent>
         </div>
       </div>
     </Tabs>

@@ -173,7 +173,7 @@ func TestRoutineAPITriggerRequiresGeneratedTokenDraft(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+draft.DraftID, map[string]any{
+	req = newRequest("POST", "/api/webhook/"+draft.DraftID, map[string]any{
 		"title":     "Routine API draft issue",
 		"dedup_key": "routine-api-draft",
 	})
@@ -230,7 +230,7 @@ func TestRoutineAPITriggerIngestCreatesIssue(t *testing.T) {
 		"dedup_key": "routine-api-ingest-test",
 	}
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, body)
+	req = newRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, body)
 	req = withURLParam(req, "id", routine.Triggers[0].ID)
 	req.Header.Set("Authorization", "Bearer "+apiToken)
 	testHandler.IngestRoutineTrigger(w, req)
@@ -331,7 +331,7 @@ func TestRoutineIssueTemplateFieldsAreApplied(t *testing.T) {
 
 	sourceURL := "https://alerts.example.com/incidents/42"
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, map[string]any{
+	req = newRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, map[string]any{
 		"title":     "ignored by template",
 		"body":      "payload body",
 		"dedup_key": "routine-template-fields",
@@ -444,7 +444,7 @@ func TestRoutineAPITriggerCanAssignIssueToMember(t *testing.T) {
 	})
 
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, map[string]any{
+	req = newRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, map[string]any{
 		"title":     "Routine member assigned issue",
 		"dedup_key": "routine-member-assignee",
 	})
@@ -515,7 +515,7 @@ func TestRoutineDisabledAPITriggersDoNotCreateIssuesUntilEnabled(t *testing.T) {
 	ingest := func(title, dedupKey string) {
 		t.Helper()
 		w = httptest.NewRecorder()
-		req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{
+		req = newRequest("POST", "/api/webhook/"+trigger.ID, map[string]any{
 			"title":     title,
 			"dedup_key": dedupKey,
 		})
@@ -611,7 +611,7 @@ func TestRoutineRunHistoryRecordsActionErrors(t *testing.T) {
 	})
 
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, map[string]any{
+	req = newRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, map[string]any{
 		"title":     "Routine action error event",
 		"dedup_key": "routine-action-error",
 		"fields": map[string]string{
@@ -689,7 +689,7 @@ func TestRoutineAPITriggerAuthRegenerateFilterAndDedup(t *testing.T) {
 	trigger := routine.Triggers[0]
 
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{"title": "No token"})
+	req = newRequest("POST", "/api/webhook/"+trigger.ID, map[string]any{"title": "No token"})
 	req = withURLParam(req, "id", trigger.ID)
 	testHandler.IngestRoutineTrigger(w, req)
 	if w.Code != http.StatusUnauthorized {
@@ -697,7 +697,7 @@ func TestRoutineAPITriggerAuthRegenerateFilterAndDedup(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{"title": "Wrong token"})
+	req = newRequest("POST", "/api/webhook/"+trigger.ID, map[string]any{"title": "Wrong token"})
 	req = withURLParam(req, "id", trigger.ID)
 	req.Header.Set("Authorization", "Bearer wrong")
 	testHandler.IngestRoutineTrigger(w, req)
@@ -719,7 +719,7 @@ func TestRoutineAPITriggerAuthRegenerateFilterAndDedup(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{"title": "Old token"})
+	req = newRequest("POST", "/api/webhook/"+trigger.ID, map[string]any{"title": "Old token"})
 	req = withURLParam(req, "id", trigger.ID)
 	req.Header.Set("Authorization", "Bearer "+oldToken)
 	testHandler.IngestRoutineTrigger(w, req)
@@ -730,7 +730,7 @@ func TestRoutineAPITriggerAuthRegenerateFilterAndDedup(t *testing.T) {
 	ingest := func(eventType, dedupKey, title string) {
 		t.Helper()
 		w = httptest.NewRecorder()
-		req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{
+		req = newRequest("POST", "/api/webhook/"+trigger.ID, map[string]any{
 			"title":     title,
 			"type":      eventType,
 			"dedup_key": dedupKey,
