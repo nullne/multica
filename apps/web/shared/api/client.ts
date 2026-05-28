@@ -58,6 +58,10 @@ import type {
   RecurringTemplate,
   CreateRecurringTemplateRequest,
   UpdateRecurringTemplateRequest,
+  Routine,
+  CreateRoutineRequest,
+  UpdateRoutineRequest,
+  RoutineRun,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
 
@@ -937,5 +941,53 @@ export class ApiClient {
 
   async deleteRecurringTemplate(id: string): Promise<void> {
     await this.fetch(`/api/recurring-templates/${id}`, { method: "DELETE" });
+  }
+
+  // Routines
+  async listRoutines(): Promise<Routine[]> {
+    return this.fetch("/api/routines");
+  }
+
+  async getRoutine(id: string): Promise<Routine> {
+    return this.fetch(`/api/routines/${id}`);
+  }
+
+  async createRoutine(data: CreateRoutineRequest): Promise<Routine> {
+    return this.fetch("/api/routines", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateRoutine(id: string, data: UpdateRoutineRequest): Promise<Routine> {
+    return this.fetch(`/api/routines/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteRoutine(id: string): Promise<void> {
+    await this.fetch(`/api/routines/${id}`, { method: "DELETE" });
+  }
+
+  async triggerRoutine(id: string): Promise<{ ran: number }> {
+    return this.fetch(`/api/routines/${id}/trigger`, { method: "POST" });
+  }
+
+  async generateRoutineTriggerTokenDraft(): Promise<{ draft_id: string; token_prefix: string; token: string }> {
+    return this.fetch("/api/routine-trigger-token-drafts", { method: "POST" });
+  }
+
+  async regenerateRoutineTriggerToken(
+    routineId: string,
+    triggerId: string,
+  ): Promise<{ trigger: Routine["triggers"][number]; token: string }> {
+    return this.fetch(`/api/routines/${routineId}/triggers/${triggerId}/regenerate-token`, {
+      method: "POST",
+    });
+  }
+
+  async listRoutineRuns(id: string): Promise<RoutineRun[]> {
+    return this.fetch(`/api/routines/${id}/runs`);
   }
 }

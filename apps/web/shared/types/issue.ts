@@ -72,6 +72,7 @@ export interface Issue {
   dispatch_provider: string | null;
   dispatch_daemon_id: string | null;
   dispatch_daemon_label: string | null;
+  github_auto_fix_enabled: boolean;
   labels: Label[];
   links?: IssueLink[];
   reactions?: IssueReaction[];

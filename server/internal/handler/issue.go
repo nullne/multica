@@ -40,6 +40,7 @@ type IssueResponse struct {
 	DispatchProvider      *string                 `json:"dispatch_provider"`
 	DispatchDaemonID      *string                 `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
+	GithubAutoFixEnabled  bool                    `json:"github_auto_fix_enabled"`
 	CreatedAt             string                  `json:"created_at"`
 	UpdatedAt             string                  `json:"updated_at"`
 	Labels                []LabelResponse         `json:"labels"`
@@ -142,6 +143,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DispatchProvider:      textToPtr(i.DispatchProvider),
 		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
 		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
+		GithubAutoFixEnabled:  i.GithubAutoFixEnabled,
 		Labels:                []LabelResponse{},
 		Links:                 []IssueLinkResponse{},
 		CreatedAt:             timestampToString(i.CreatedAt),
@@ -455,6 +457,7 @@ type CreateIssueRequest struct {
 	DispatchProvider      *string `json:"dispatch_provider"`
 	DispatchDaemonID      *string `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string `json:"dispatch_daemon_label"`
+	GithubAutoFixEnabled  bool    `json:"github_auto_fix_enabled"`
 	// AttachmentIDs are previously-uploaded attachment IDs to attach to the
 	// issue. They are linked before the agent task is enqueued so the agent
 	// can read them as soon as it starts.
@@ -610,6 +613,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		DispatchProvider:      dispatchProvider,
 		DispatchDaemonID:      dispatchDaemonID,
 		DispatchDaemonLabel:   ptrToText(req.DispatchDaemonLabel),
+		GithubAutoFixEnabled:  req.GithubAutoFixEnabled,
 	})
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -675,6 +679,7 @@ type UpdateIssueRequest struct {
 	DispatchProvider      *string  `json:"dispatch_provider"`
 	DispatchDaemonID      *string  `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string  `json:"dispatch_daemon_label"`
+	GithubAutoFixEnabled  *bool    `json:"github_auto_fix_enabled"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -715,6 +720,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		DispatchProvider:      prevIssue.DispatchProvider,
 		DispatchDaemonID:      prevIssue.DispatchDaemonID,
 		DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
+		GithubAutoFixEnabled:  pgtype.Bool{Bool: prevIssue.GithubAutoFixEnabled, Valid: true},
 	}
 
 	// COALESCE fields — only set when explicitly provided
@@ -785,6 +791,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if dispatchDaemonLabelPresent {
 		params.DispatchDaemonLabel = ptrToText(req.DispatchDaemonLabel)
+	}
+	if _, ok := rawFields["github_auto_fix_enabled"]; ok && req.GithubAutoFixEnabled != nil {
+		params.GithubAutoFixEnabled = pgtype.Bool{Bool: *req.GithubAutoFixEnabled, Valid: true}
 	}
 
 	// Reconcile dispatch + verifier with the assignee.
@@ -1386,6 +1395,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			DispatchProvider:      prevIssue.DispatchProvider,
 			DispatchDaemonID:      prevIssue.DispatchDaemonID,
 			DispatchDaemonLabel:   prevIssue.DispatchDaemonLabel,
+			GithubAutoFixEnabled:  pgtype.Bool{Bool: prevIssue.GithubAutoFixEnabled, Valid: true},
 		}
 
 		if req.Updates.Title != nil {
@@ -1446,6 +1456,9 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		if batchDaemonLabelPresent {
 			params.DispatchDaemonLabel = ptrToText(req.Updates.DispatchDaemonLabel)
+		}
+		if _, ok := rawUpdates["github_auto_fix_enabled"]; ok && req.Updates.GithubAutoFixEnabled != nil {
+			params.GithubAutoFixEnabled = pgtype.Bool{Bool: *req.Updates.GithubAutoFixEnabled, Valid: true}
 		}
 
 		// Reconcile dispatch + verifier with assignee — see UpdateIssue for rationale.

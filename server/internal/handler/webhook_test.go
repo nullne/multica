@@ -249,6 +249,12 @@ func TestActionMatchesFilters_LabeledRequiresExplicitGitHubLabels(t *testing.T) 
 	if actionMatchesFilters([]string{"github.issues"}, nil, nil, issueLabeled) {
 		t.Error("issue labeled should be filtered out under prefix event_types when github_labels is empty")
 	}
+	if !actionMatchesFilters([]string{"github.pull_request.labeled"}, nil, nil, prLabeled) {
+		t.Error("explicit PR labeled event_type should match even when github_labels is empty")
+	}
+	if !actionMatchesFilters([]string{"github.issues.labeled"}, nil, nil, issueLabeled) {
+		t.Error("explicit issue labeled event_type should match even when github_labels is empty")
+	}
 
 	// Opting in via a matching github_labels filter lets the labeled event through.
 	if !actionMatchesFilters(nil, nil, []string{"needs-triage"}, prLabeled) {
@@ -351,4 +357,3 @@ func TestMergeActionConfig_SubscriberIDsUpdated(t *testing.T) {
 		t.Errorf("subscriber_ids not updated: got %v", result.SubscriberIDs)
 	}
 }
-

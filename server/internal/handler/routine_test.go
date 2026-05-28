@@ -1,0 +1,1175 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/nullne/multica/server/internal/middleware"
+	db "github.com/nullne/multica/server/pkg/db/generated"
+)
+
+func routineRequest(t *testing.T, method, path string, body any) *http.Request {
+	t.Helper()
+	req := newRequest(method, path, body)
+	member, err := testHandler.Queries.GetMemberByUserAndWorkspace(req.Context(), db.GetMemberByUserAndWorkspaceParams{
+		UserID:      parseUUID(testUserID),
+		WorkspaceID: parseUUID(testWorkspaceID),
+	})
+	if err != nil {
+		t.Fatalf("load member: %v", err)
+	}
+	return req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, member))
+}
+
+func routineAPITokenDraft(t *testing.T) (map[string]any, string) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routine-trigger-token-drafts", nil)
+	testHandler.GenerateRoutineTriggerTokenDraft(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("GenerateRoutineTriggerTokenDraft: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var draft RoutineTriggerTokenDraftResponse
+	if err := json.NewDecoder(w.Body).Decode(&draft); err != nil {
+		t.Fatalf("decode draft: %v", err)
+	}
+	return map[string]any{
+		"id":             draft.DraftID,
+		"trigger_type":   "api",
+		"source_type":    "standard",
+		"token_draft_id": draft.DraftID,
+	}, draft.Token
+}
+
+func TestRoutineCRUD_CreateGetAndRunList(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine CRUD test",
+		"instructions":  "Create a routine issue",
+		"priority":      "high",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "schedule",
+				"schedule":     "0 9 * * 1",
+				"timezone":     "UTC",
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var created RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created routine: %v", err)
+	}
+	if created.Name != "Routine CRUD test" {
+		t.Fatalf("name = %q", created.Name)
+	}
+	if len(created.Triggers) != 1 || created.Triggers[0].TriggerType != "schedule" {
+		t.Fatalf("expected one schedule trigger, got %+v", created.Triggers)
+	}
+	if len(created.Actions) != 1 || created.Actions[0].ActionType != "create_issue" {
+		t.Fatalf("expected default create_issue action, got %+v", created.Actions)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(created.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "GET", "/api/routines/"+created.ID, nil)
+	req = withURLParam(req, "id", created.ID)
+	testHandler.GetRoutine(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetRoutine: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "GET", "/api/routines/"+created.ID+"/runs", nil)
+	req = withURLParam(req, "id", created.ID)
+	testHandler.ListRoutineRuns(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListRoutineRuns: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRoutineAPITriggerRequiresGeneratedTokenDraft(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routine-trigger-token-drafts", nil)
+	testHandler.GenerateRoutineTriggerTokenDraft(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("GenerateRoutineTriggerTokenDraft: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var draft RoutineTriggerTokenDraftResponse
+	if err := json.NewDecoder(w.Body).Decode(&draft); err != nil {
+		t.Fatalf("decode draft: %v", err)
+	}
+	if draft.DraftID == "" || draft.Token == "" || draft.TokenPrefix == "" {
+		t.Fatalf("expected generated draft token, got %+v", draft)
+	}
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine API draft",
+		"instructions":  "Created from generated API token",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"id":             draft.DraftID,
+				"trigger_type":   "api",
+				"source_type":    "standard",
+				"token_draft_id": draft.DraftID,
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+	if len(routine.Triggers) != 1 || routine.Triggers[0].ID != draft.DraftID || routine.Triggers[0].Token != "" {
+		t.Fatalf("expected consumed API trigger without re-revealed token, got %+v", routine.Triggers)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+draft.DraftID, map[string]any{
+		"title":     "Routine API draft issue",
+		"dedup_key": "routine-api-draft",
+	})
+	req = withURLParam(req, "id", draft.DraftID)
+	req.Header.Set("Authorization", "Bearer "+draft.Token)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRoutineAPITriggerIngestCreatesIssue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	apiTrigger["dedup_window_seconds"] = 600
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine API ingest",
+		"instructions":  "Created from API",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+	if len(routine.Triggers) != 1 {
+		t.Fatalf("expected API trigger, got %+v", routine.Triggers)
+	}
+
+	body := map[string]any{
+		"title":     "Routine API issue",
+		"body":      "Created by API trigger",
+		"dedup_key": "routine-api-ingest-test",
+	}
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, body)
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT id::text FROM issue
+		WHERE workspace_id = $1 AND title = 'Routine API issue'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID); err != nil {
+		t.Fatalf("query created issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	runs, err := testHandler.Queries.ListRoutineRuns(context.Background(), db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns: %v", err)
+	}
+	if len(runs) == 0 || runs[0].Status != "processed" {
+		t.Fatalf("expected processed routine run, got %+v", runs)
+	}
+}
+
+func TestRoutineIssueTemplateFieldsAreApplied(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	var subscriberID string
+	if err := testPool.QueryRow(ctx, `SELECT user_id::text FROM member WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&subscriberID); err != nil {
+		t.Fatalf("find subscriber: %v", err)
+	}
+	label, err := testHandler.Queries.CreateLabel(ctx, db.CreateLabelParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Name:        "routine-template-test",
+		Color:       "blue",
+	})
+	if err != nil {
+		t.Fatalf("create label: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteLabel(ctx, db.DeleteLabelParams{ID: label.ID, WorkspaceID: parseUUID(testWorkspaceID)})
+	})
+
+	dueOffset := int32(24)
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":                  "Routine template fields",
+		"instructions":          "Fallback body",
+		"priority":              "low",
+		"assignee_type":         "agent",
+		"assignee_id":           agentID,
+		"due_date_offset_hours": dueOffset,
+		"dispatch_provider":     "codex",
+		"dispatch_daemon_label": "local-dev",
+		"subscriber_ids":        []string{subscriberID},
+		"label_ids":             []string{uuidToString(label.ID)},
+		"triggers":              []map[string]any{apiTrigger},
+		"actions": []map[string]any{
+			{
+				"action_type": "create_issue",
+				"config": map[string]any{
+					"title_template":       "Deploy {{.fields.service}} failed",
+					"description_template": "See {{.source_url}}",
+				},
+				"enabled":  true,
+				"position": 0,
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	sourceURL := "https://alerts.example.com/incidents/42"
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, map[string]any{
+		"title":     "ignored by template",
+		"body":      "payload body",
+		"dedup_key": "routine-template-fields",
+		"fields": map[string]string{
+			"service":     "api",
+			"source_url":  sourceURL,
+			"source_kind": "alert",
+			"external_id": "incident-42",
+		},
+	})
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var issue struct {
+		ID                  string
+		Title               string
+		Description         string
+		Priority            string
+		AssigneeType        string
+		AssigneeID          string
+		DispatchProvider    string
+		DispatchDaemonLabel string
+		DueDate             time.Time
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, title, description, priority, assignee_type, assignee_id::text,
+		       dispatch_provider, dispatch_daemon_label, due_date
+		FROM issue
+		WHERE workspace_id = $1 AND title = 'Deploy api failed'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(
+		&issue.ID,
+		&issue.Title,
+		&issue.Description,
+		&issue.Priority,
+		&issue.AssigneeType,
+		&issue.AssigneeID,
+		&issue.DispatchProvider,
+		&issue.DispatchDaemonLabel,
+		&issue.DueDate,
+	); err != nil {
+		t.Fatalf("query created issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issue.ID) })
+	if issue.Description != "See "+sourceURL {
+		t.Fatalf("description = %q", issue.Description)
+	}
+	if issue.Priority != "low" || issue.AssigneeType != "agent" || issue.AssigneeID != agentID {
+		t.Fatalf("unexpected issue assignment/priority: %+v", issue)
+	}
+	if issue.DispatchProvider != "codex" || issue.DispatchDaemonLabel != "local-dev" {
+		t.Fatalf("unexpected dispatch config: %+v", issue)
+	}
+	if time.Until(issue.DueDate) < 23*time.Hour || time.Until(issue.DueDate) > 25*time.Hour {
+		t.Fatalf("due date %s is not about 24h from now", issue.DueDate)
+	}
+	if _, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Url:         sourceURL,
+	}); err != nil {
+		t.Fatalf("expected source issue link for API event: %v", err)
+	}
+
+	var labelCount, subscriberCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue_to_label WHERE issue_id = $1 AND label_id = $2`, issue.ID, uuidToString(label.ID)).Scan(&labelCount); err != nil {
+		t.Fatalf("query issue label: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue_subscriber WHERE issue_id = $1 AND user_id = $2`, issue.ID, subscriberID).Scan(&subscriberCount); err != nil {
+		t.Fatalf("query issue subscriber: %v", err)
+	}
+	if labelCount != 1 || subscriberCount != 1 {
+		t.Fatalf("labelCount=%d subscriberCount=%d, want 1/1", labelCount, subscriberCount)
+	}
+}
+
+func TestRoutineAPITriggerCanAssignIssueToMember(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine member assignee",
+		"instructions":  "Created for a member",
+		"priority":      "high",
+		"assignee_type": "member",
+		"assignee_id":   testUserID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, map[string]any{
+		"title":     "Routine member assigned issue",
+		"dedup_key": "routine-member-assignee",
+	})
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var issue struct {
+		ID           string
+		AssigneeType string
+		AssigneeID   string
+		Priority     string
+	}
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, assignee_type, assignee_id::text, priority
+		FROM issue
+		WHERE workspace_id = $1 AND title = 'Routine member assigned issue'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issue.ID, &issue.AssigneeType, &issue.AssigneeID, &issue.Priority); err != nil {
+		t.Fatalf("query created issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issue.ID) })
+	if issue.AssigneeType != "member" || issue.AssigneeID != testUserID || issue.Priority != "high" {
+		t.Fatalf("unexpected member assignment/priority: %+v", issue)
+	}
+}
+
+func TestRoutineDisabledAPITriggersDoNotCreateIssuesUntilEnabled(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine disabled API",
+		"instructions":  "Disabled routines should not run",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       false,
+		"triggers":      []map[string]any{apiTrigger},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+	trigger := routine.Triggers[0]
+
+	ingest := func(title, dedupKey string) {
+		t.Helper()
+		w = httptest.NewRecorder()
+		req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{
+			"title":     title,
+			"dedup_key": dedupKey,
+		})
+		req = withURLParam(req, "id", trigger.ID)
+		req.Header.Set("Authorization", "Bearer "+apiToken)
+		testHandler.IngestRoutineTrigger(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+
+	ingest("Disabled routine should not create", "routine-disabled")
+	assertIssueCount(t, "Disabled routine should not create", 0)
+	assertRoutineRunCount(t, routine.ID, 0)
+
+	if _, err := testPool.Exec(ctx, `UPDATE routine SET enabled = TRUE WHERE id = $1`, routine.ID); err != nil {
+		t.Fatalf("enable routine: %v", err)
+	}
+	ingest("Enabled routine should create", "routine-enabled")
+	assertIssueCount(t, "Enabled routine should create", 1)
+	assertRoutineRunStatus(t, routine.ID, "processed")
+
+	if _, err := testPool.Exec(ctx, `DELETE FROM issue WHERE workspace_id = $1 AND title IN ('Disabled routine should not create', 'Enabled routine should create')`, testWorkspaceID); err != nil {
+		t.Fatalf("cleanup issues: %v", err)
+	}
+
+	if _, err := testPool.Exec(ctx, `UPDATE routine_trigger SET enabled = FALSE WHERE id = $1`, trigger.ID); err != nil {
+		t.Fatalf("disable trigger: %v", err)
+	}
+	ingest("Disabled trigger should not create", "routine-disabled-trigger")
+	assertIssueCount(t, "Disabled trigger should not create", 0)
+}
+
+func TestRoutineRunHistoryRecordsActionErrors(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	var linkedIssueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number)
+		VALUES ($1, 'Routine linked issue for error', 'todo', 'medium', 'member', $2, 9981)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&linkedIssueID); err != nil {
+		t.Fatalf("insert linked issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, linkedIssueID) })
+	sourceURL := "https://github.com/acme/widgets/pull/routine-error"
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO issue_link (issue_id, workspace_id, source_type, kind, direction, url, external_id)
+		VALUES ($1, $2, 'github', 'pr', 'source', $3, 'routine-error')
+	`, linkedIssueID, testWorkspaceID, sourceURL); err != nil {
+		t.Fatalf("insert issue link: %v", err)
+	}
+
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine action error",
+		"instructions":  "This action is intentionally misconfigured",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+		"actions": []map[string]any{
+			{
+				"action_type": "comment_issue",
+				"config":      map[string]any{},
+				"enabled":     true,
+				"position":    0,
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+routine.Triggers[0].ID, map[string]any{
+		"title":     "Routine action error event",
+		"dedup_key": "routine-action-error",
+		"fields": map[string]string{
+			"source_url": sourceURL,
+		},
+	})
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	runs, err := testHandler.Queries.ListRoutineRuns(ctx, db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns: %v", err)
+	}
+	for _, run := range runs {
+		if run.Status == "error" && run.ErrorMessage.Valid && run.ErrorMessage.String == "comment_issue requires bot_user_id" {
+			return
+		}
+	}
+	t.Fatalf("expected readable error run, got %+v", runs)
+}
+
+func TestRoutineAPITriggerAuthRegenerateFilterAndDedup(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, oldToken := routineAPITokenDraft(t)
+	apiTrigger["dedup_window_seconds"] = 600
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine API auth filter dedup",
+		"instructions":  "Created from API",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+		"actions": []map[string]any{
+			{
+				"action_type": "create_issue",
+				"config": map[string]any{
+					"event_types": []string{"deploy.passed"},
+				},
+				"enabled":  true,
+				"position": 0,
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+	trigger := routine.Triggers[0]
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{"title": "No token"})
+	req = withURLParam(req, "id", trigger.ID)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token: expected 401, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{"title": "Wrong token"})
+	req = withURLParam(req, "id", trigger.ID)
+	req.Header.Set("Authorization", "Bearer wrong")
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong token: expected 401, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "POST", "/api/routines/"+routine.ID+"/triggers/"+trigger.ID+"/regenerate-token", nil)
+	req = withURLParam(req, "id", routine.ID)
+	req = withURLParam(req, "triggerId", trigger.ID)
+	testHandler.RegenerateRoutineTriggerToken(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RegenerateRoutineTriggerToken: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var regenerated RoutineTriggerTokenResponse
+	if err := json.NewDecoder(w.Body).Decode(&regenerated); err != nil {
+		t.Fatalf("decode regenerated token: %v", err)
+	}
+
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{"title": "Old token"})
+	req = withURLParam(req, "id", trigger.ID)
+	req.Header.Set("Authorization", "Bearer "+oldToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("old token: expected 401 after regenerate, got %d", w.Code)
+	}
+
+	ingest := func(eventType, dedupKey, title string) {
+		t.Helper()
+		w = httptest.NewRecorder()
+		req = newRequest("POST", "/api/routine-triggers/"+trigger.ID, map[string]any{
+			"title":     title,
+			"type":      eventType,
+			"dedup_key": dedupKey,
+		})
+		req = withURLParam(req, "id", trigger.ID)
+		req.Header.Set("Authorization", "Bearer "+regenerated.Token)
+		testHandler.IngestRoutineTrigger(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("ingest %s: expected 202, got %d: %s", eventType, w.Code, w.Body.String())
+		}
+	}
+	ingest("deploy.failed", "routine-filtered", "Filtered event")
+	ingest("deploy.passed", "routine-dedup", "Processed event")
+	ingest("deploy.passed", "routine-dedup", "Duplicate event")
+
+	runs, err := testHandler.Queries.ListRoutineRuns(context.Background(), db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, run := range runs {
+		seen[run.Status] = true
+	}
+	for _, status := range []string{"filtered", "processed", "deduped"} {
+		if !seen[status] {
+			t.Fatalf("expected %s run in %+v", status, runs)
+		}
+	}
+}
+
+func TestRegenerateRoutineTriggerToken(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, _ := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine API regenerate",
+		"instructions":  "Created from API",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+	oldPrefix := routine.Triggers[0].TokenPrefix
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "POST", "/api/routines/"+routine.ID+"/triggers/"+routine.Triggers[0].ID+"/regenerate-token", nil)
+	req = withURLParam(req, "id", routine.ID)
+	req = withURLParam(req, "triggerId", routine.Triggers[0].ID)
+	testHandler.RegenerateRoutineTriggerToken(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RegenerateRoutineTriggerToken: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Trigger RoutineTriggerResponse `json:"trigger"`
+		Token   string                 `json:"token"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode regenerate response: %v", err)
+	}
+	if resp.Token == "" {
+		t.Fatal("expected regenerated token")
+	}
+	if resp.Trigger.TokenPrefix == "" || resp.Trigger.TokenPrefix == oldPrefix {
+		t.Fatalf("expected new token prefix, old=%q new=%q", oldPrefix, resp.Trigger.TokenPrefix)
+	}
+}
+
+func TestRoutineGitHubTriggerEvents(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	installationID := time.Now().UnixNano()
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET github_installation_id = $1 WHERE id = $2`, installationID, testWorkspaceID); err != nil {
+		t.Fatalf("set github installation: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `UPDATE workspace SET github_installation_id = NULL WHERE id = $1`, testWorkspaceID)
+	})
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine GitHub events",
+		"instructions":  "Created from GitHub",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "github",
+			},
+		},
+		"actions": []map[string]any{
+			{
+				"action_type": "create_issue",
+				"config": map[string]any{
+					"event_types": []string{
+						"github.pull_request.opened",
+						"github.pull_request.merged",
+						"github.issues.opened",
+						"github.release.published",
+					},
+					"title_template": "GitHub {{.action}}: {{.title}}",
+				},
+				"enabled":  true,
+				"position": 0,
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+	if len(routine.Triggers) != 1 || routine.Triggers[0].InstallationID == nil || *routine.Triggers[0].InstallationID != installationID {
+		t.Fatalf("expected github trigger installation %d, got %+v", installationID, routine.Triggers)
+	}
+
+	trigger, err := testHandler.Queries.GetRoutineTrigger(ctx, parseUUID(routine.Triggers[0].ID))
+	if err != nil {
+		t.Fatalf("GetRoutineTrigger: %v", err)
+	}
+	headers := http.Header{}
+	cases := []struct {
+		name        string
+		githubEvent string
+		body        []byte
+		wantTitle   string
+	}{
+		{
+			name:        "pull_request.opened",
+			githubEvent: "pull_request",
+			body:        []byte(`{"action":"opened","pull_request":{"number":1,"title":"Open PR","html_url":"https://github.com/acme/widgets/pull/801","user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`),
+			wantTitle:   "GitHub opened: Open PR",
+		},
+		{
+			name:        "pull_request.merged",
+			githubEvent: "pull_request",
+			body:        []byte(`{"action":"closed","pull_request":{"number":2,"title":"Merge PR","merged":true,"html_url":"https://github.com/acme/widgets/pull/802","user":{"login":"bob"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`),
+			wantTitle:   "GitHub merged: Merge PR",
+		},
+		{
+			name:        "issues.opened",
+			githubEvent: "issues",
+			body:        []byte(`{"action":"opened","issue":{"number":3,"title":"Open issue","html_url":"https://github.com/acme/widgets/issues/803","user":{"login":"carol"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`),
+			wantTitle:   "GitHub opened: Open issue",
+		},
+		{
+			name:        "release.published",
+			githubEvent: "release",
+			body:        []byte(`{"action":"published","release":{"name":"v1.0.0","tag_name":"v1.0.0","html_url":"https://github.com/acme/widgets/releases/tag/v1.0.0","author":{"login":"dana"},"body":"notes"},"repository":{"full_name":"acme/widgets"}}`),
+			wantTitle:   "GitHub published: v1.0.0",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			headers.Set("X-GitHub-Event", tc.githubEvent)
+			received, ran := testHandler.ingestRoutineTriggers(ctx, []db.RoutineTrigger{trigger}, "github", tc.body, headers)
+			if received != 1 || ran != 1 {
+				t.Fatalf("received=%d ran=%d, want 1/1", received, ran)
+			}
+			var issueID string
+			if err := testPool.QueryRow(ctx, `
+				SELECT id::text FROM issue
+				WHERE workspace_id = $1 AND title = $2
+				ORDER BY created_at DESC LIMIT 1
+			`, testWorkspaceID, tc.wantTitle).Scan(&issueID); err != nil {
+				t.Fatalf("query issue %q: %v", tc.wantTitle, err)
+			}
+			t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+		})
+	}
+}
+
+func TestManualTriggerRoutineCreatesIssue(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":                    "Routine manual trigger",
+		"instructions":            "Created manually",
+		"priority":                "medium",
+		"assignee_type":           "agent",
+		"assignee_id":             agentID,
+		"enabled":                 true,
+		"github_auto_fix_enabled": true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "schedule",
+				"schedule":     "0 9 * * 1",
+				"timezone":     "UTC",
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "POST", "/api/routines/"+routine.ID+"/trigger", nil)
+	req = withURLParam(req, "id", routine.ID)
+	testHandler.TriggerRoutine(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("TriggerRoutine: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Ran int `json:"ran"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode trigger response: %v", err)
+	}
+	if resp.Ran != 1 {
+		t.Fatalf("expected one action to run, got %d", resp.Ran)
+	}
+
+	var issueID string
+	var autoFixEnabled bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT id::text, github_auto_fix_enabled FROM issue
+		WHERE workspace_id = $1 AND title = 'Routine manual trigger'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID, &autoFixEnabled); err != nil {
+		t.Fatalf("query created issue: %v", err)
+	}
+	if !autoFixEnabled {
+		t.Fatalf("expected routine-created issue to inherit github_auto_fix_enabled")
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID) })
+}
+
+func TestCreateRoutineValidatesRequiredFields(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":         "Missing required fields",
+		"instructions": "",
+		"triggers":     []map[string]any{},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("CreateRoutine: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRoutineWorkspaceIsolation(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, _ := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine isolation",
+		"instructions":  "Only workspace A",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"triggers":      []map[string]any{apiTrigger},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	var otherUserID, otherWorkspaceID string
+	if err := testPool.QueryRow(ctx, `INSERT INTO "user" (name, email) VALUES ('Routine Other', $1) RETURNING id`, "routine-other-"+time.Now().Format("150405.000000000")+"@example.com").Scan(&otherUserID); err != nil {
+		t.Fatalf("insert other user: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `INSERT INTO workspace (name, slug, issue_prefix) VALUES ('Routine Other', $1, 'ROT') RETURNING id`, "routine-other-"+time.Now().Format("150405000000000")).Scan(&otherWorkspaceID); err != nil {
+		t.Fatalf("insert other workspace: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `INSERT INTO member (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`, otherWorkspaceID, otherUserID); err != nil {
+		t.Fatalf("insert other member: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, otherWorkspaceID)
+		_, _ = testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, otherUserID)
+	})
+
+	member, err := testHandler.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
+		UserID:      parseUUID(otherUserID),
+		WorkspaceID: parseUUID(otherWorkspaceID),
+	})
+	if err != nil {
+		t.Fatalf("load other member: %v", err)
+	}
+	otherReq := func(method, path string, body any) *http.Request {
+		req := newRequest(method, path, body)
+		req.Header.Set("X-User-ID", otherUserID)
+		req.Header.Set("X-Workspace-ID", otherWorkspaceID)
+		return req.WithContext(middleware.SetMemberContext(req.Context(), otherWorkspaceID, member))
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.ListRoutines(w, otherReq("GET", "/api/routines", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListRoutines other workspace: expected 200, got %d", w.Code)
+	}
+	var routines []RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routines); err != nil {
+		t.Fatalf("decode routines: %v", err)
+	}
+	for _, item := range routines {
+		if item.ID == routine.ID {
+			t.Fatalf("routine from workspace A leaked into workspace B list")
+		}
+	}
+
+	w = httptest.NewRecorder()
+	req = otherReq("GET", "/api/routines/"+routine.ID, nil)
+	req = withURLParam(req, "id", routine.ID)
+	testHandler.GetRoutine(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GetRoutine other workspace: expected 404, got %d", w.Code)
+	}
+
+	if _, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(otherWorkspaceID),
+		Url:         "https://alerts.example.com/incidents/42",
+	}); err != pgx.ErrNoRows {
+		t.Fatalf("source link should not be visible in other workspace, err=%v", err)
+	}
+}
+
+func assertIssueCount(t *testing.T, title string, want int) {
+	t.Helper()
+	var count int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM issue
+		WHERE workspace_id = $1 AND title = $2
+	`, testWorkspaceID, title).Scan(&count); err != nil {
+		t.Fatalf("count issue %q: %v", title, err)
+	}
+	if count != want {
+		t.Fatalf("issue count for %q = %d, want %d", title, count, want)
+	}
+}
+
+func assertRoutineRunCount(t *testing.T, routineID string, want int) {
+	t.Helper()
+	var count int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM routine_run
+		WHERE routine_id = $1
+	`, routineID).Scan(&count); err != nil {
+		t.Fatalf("count routine runs: %v", err)
+	}
+	if count != want {
+		t.Fatalf("routine run count = %d, want %d", count, want)
+	}
+}
+
+func assertRoutineRunStatus(t *testing.T, routineID, status string) {
+	t.Helper()
+	var count int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM routine_run
+		WHERE routine_id = $1 AND status = $2
+	`, routineID, status).Scan(&count); err != nil {
+		t.Fatalf("count %s routine runs: %v", status, err)
+	}
+	if count == 0 {
+		t.Fatalf("expected at least one %s routine run", status)
+	}
+}

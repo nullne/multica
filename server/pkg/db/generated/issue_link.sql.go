@@ -14,8 +14,9 @@ import (
 const createIssueLink = `-- name: CreateIssueLink :one
 INSERT INTO issue_link (issue_id, workspace_id, source_type, kind, direction, url, external_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (workspace_id, url) DO UPDATE
-    SET source_type = EXCLUDED.source_type,
+ON CONFLICT (issue_id, url) DO UPDATE
+    SET workspace_id = EXCLUDED.workspace_id,
+        source_type = EXCLUDED.source_type,
         kind        = EXCLUDED.kind,
         direction   = EXCLUDED.direction,
         external_id = EXCLUDED.external_id
@@ -33,7 +34,7 @@ type CreateIssueLinkParams struct {
 }
 
 // Insert a new external link for an issue. Returns the existing row when the
-// (workspace_id, url) pair is already linked (idempotent for repeated webhook
+// (issue_id, url) pair is already linked (idempotent for repeated webhook
 // ingest of the same source URL).
 func (q *Queries) CreateIssueLink(ctx context.Context, arg CreateIssueLinkParams) (IssueLink, error) {
 	row := q.db.QueryRow(ctx, createIssueLink,
@@ -152,6 +153,47 @@ ORDER BY created_at ASC
 // Batch fetch of links for multiple issues; used by issue listing endpoints.
 func (q *Queries) ListIssueLinksByIssues(ctx context.Context, dollar_1 []pgtype.UUID) ([]IssueLink, error) {
 	rows, err := q.db.Query(ctx, listIssueLinksByIssues, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IssueLink{}
+	for rows.Next() {
+		var i IssueLink
+		if err := rows.Scan(
+			&i.ID,
+			&i.IssueID,
+			&i.WorkspaceID,
+			&i.SourceType,
+			&i.Kind,
+			&i.Direction,
+			&i.Url,
+			&i.ExternalID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIssueLinksByURL = `-- name: ListIssueLinksByURL :many
+SELECT id, issue_id, workspace_id, source_type, kind, direction, url, external_id, created_at FROM issue_link
+WHERE workspace_id = $1 AND url = $2
+ORDER BY created_at ASC
+`
+
+type ListIssueLinksByURLParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Url         string      `json:"url"`
+}
+
+func (q *Queries) ListIssueLinksByURL(ctx context.Context, arg ListIssueLinksByURLParams) ([]IssueLink, error) {
+	rows, err := q.db.Query(ctx, listIssueLinksByURL, arg.WorkspaceID, arg.Url)
 	if err != nil {
 		return nil, err
 	}

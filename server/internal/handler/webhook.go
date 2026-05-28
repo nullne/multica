@@ -778,7 +778,14 @@ type CommentIssueActionConfig struct {
 // actions configured before label filtering existed do not start receiving
 // extra triggers when a label is added to a PR/issue.
 func actionMatchesFilters(eventTypes, repos, githubLabels []string, evt wh.Event) bool {
-	if isGitHubLabeledEvent(evt.Type) && len(githubLabels) == 0 {
+	explicitEventTypeMatch := false
+	for _, t := range eventTypes {
+		if t == evt.Type {
+			explicitEventTypeMatch = true
+			break
+		}
+	}
+	if isGitHubLabeledEvent(evt.Type) && len(githubLabels) == 0 && !explicitEventTypeMatch {
 		return false
 	}
 	if len(eventTypes) > 0 {
@@ -972,6 +979,130 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 	return len(events), created
 }
 
+func (h *Handler) processGitHubAutoFixEvents(ctx context.Context, webhook db.Webhook, body []byte, headers http.Header) int {
+	if webhook.SourceType != "github" || webhook.Status != "active" {
+		return 0
+	}
+	adapter, err := wh.GetAdapter("github")
+	if err != nil {
+		return 0
+	}
+	events, err := adapter.Parse(json.RawMessage(body), headers)
+	if err != nil || len(events) == 0 {
+		return 0
+	}
+	created := 0
+	for _, evt := range events {
+		if !isGitHubAutoFixEvent(evt) {
+			continue
+		}
+		if evt.DedupKey != "" && webhook.DedupWindowSeconds > 0 {
+			if _, err := h.Queries.FindRecentWebhookEvent(ctx, db.FindRecentWebhookEventParams{
+				WebhookID:     webhook.ID,
+				DedupKey:      evt.DedupKey,
+				WindowSeconds: float64(webhook.DedupWindowSeconds),
+			}); err == nil {
+				continue
+			}
+		}
+		links, err := h.findIssueLinksForEvent(ctx, webhook.WorkspaceID, evt)
+		if err != nil {
+			slog.Warn("github auto-fix: issue link lookup failed", "webhook_id", uuidToString(webhook.ID), "error", err)
+			continue
+		}
+		if len(links) == 0 {
+			continue
+		}
+		for _, link := range links {
+			issue, err := h.Queries.GetIssue(ctx, link.IssueID)
+			if err != nil || !issue.GithubAutoFixEnabled {
+				continue
+			}
+			if !webhook.BotUserID.Valid {
+				botID, err := h.ensureGitHubBotUser(ctx, webhook.WorkspaceID)
+				if err != nil {
+					slog.Warn("github auto-fix: ensure bot user failed", "webhook_id", uuidToString(webhook.ID), "error", err)
+					continue
+				}
+				webhook.BotUserID = botID
+				if _, err := h.DB.Exec(ctx, `UPDATE webhook SET bot_user_id = $1, updated_at = now() WHERE id = $2 AND bot_user_id IS NULL`, botID, webhook.ID); err != nil {
+					slog.Warn("github auto-fix: persist bot user failed", "webhook_id", uuidToString(webhook.ID), "error", err)
+				}
+			}
+			cfg := CommentIssueActionConfig{
+				ContentTemplate: githubAutoFixCommentTemplate(evt),
+			}
+			if _, ran, err := h.createWebhookBotCommentOnIssue(ctx, webhook, issue, cfg, evt); err != nil {
+				slog.Warn("github auto-fix: create bot comment failed", "issue_id", uuidToString(link.IssueID), "error", err)
+				continue
+			} else if ran {
+				created++
+			}
+		}
+	}
+	return created
+}
+
+func (h *Handler) ensureGitHubBotUser(ctx context.Context, workspaceID pgtype.UUID) (pgtype.UUID, error) {
+	if h.DB == nil {
+		return pgtype.UUID{}, fmt.Errorf("database executor unavailable")
+	}
+	email := fmt.Sprintf("github-bot+%s@multica.local", uuidToString(workspaceID))
+	var botID pgtype.UUID
+	err := h.DB.QueryRow(ctx, `
+		WITH bot AS (
+			INSERT INTO "user" (name, email, kind)
+			VALUES ('GitHub', $2, 'bot')
+			ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id
+		), member_insert AS (
+			INSERT INTO member (workspace_id, user_id, role)
+			SELECT $1, id, 'member' FROM bot
+			ON CONFLICT (workspace_id, user_id) DO NOTHING
+		)
+		SELECT id FROM bot
+	`, workspaceID, email).Scan(&botID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	return botID, nil
+}
+
+func isGitHubAutoFixEvent(evt wh.Event) bool {
+	if evt.Data["source_kind"] != "pr" {
+		return false
+	}
+	switch evt.Type {
+	case "github.issue_comment.created", "github.pull_request_review_comment.created", "github.pull_request_review.submitted":
+		return true
+	case "github.check_run.completed":
+		return isFailedGitHubConclusion(evt.Data["conclusion"])
+	case "github.workflow_run.completed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFailedGitHubConclusion(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "failure", "failed", "error", "timed_out", "cancelled", "action_required":
+		return true
+	default:
+		return false
+	}
+}
+
+func githubAutoFixCommentTemplate(evt wh.Event) string {
+	if strings.HasPrefix(evt.Type, "github.issue_comment.") {
+		return "GitHub PR comment received:\n\n{{.body}}"
+	}
+	if strings.HasPrefix(evt.Type, "github.pull_request_review") {
+		return "GitHub PR review feedback received:\n\n{{.body}}"
+	}
+	return "GitHub CI signal received for this pull request:\n\n{{.body}}"
+}
+
 // runWebhookAction dispatches a single (event, action) pair. Returns
 // (ran, issueID, error). ran=false means the action's filters did not match
 // (no error, just skipped). ran=true with a nil error means the action
@@ -1062,19 +1193,20 @@ func (h *Handler) executeCreateIssueAction(ctx context.Context, webhook db.Webho
 	}
 
 	issue, err := qtx.CreateIssue(ctx, db.CreateIssueParams{
-		WorkspaceID:         webhook.WorkspaceID,
-		Title:               title,
-		Description:         strToText(description),
-		Status:              "backlog",
-		Priority:            priority,
-		AssigneeType:        pgtype.Text{String: "agent", Valid: true},
-		AssigneeID:          parseUUID(cfg.AgentID),
-		CreatorType:         creatorType,
-		CreatorID:           webhook.ID,
-		Number:              issueNumber,
-		DispatchProvider:    strToText(cfg.DispatchProvider),
-		DispatchDaemonID:    parseOptionalUUID(&cfg.DispatchDaemonID),
-		DispatchDaemonLabel: strToText(cfg.DispatchDaemonLabel),
+		WorkspaceID:          webhook.WorkspaceID,
+		Title:                title,
+		Description:          strToText(description),
+		Status:               "backlog",
+		Priority:             priority,
+		AssigneeType:         pgtype.Text{String: "agent", Valid: true},
+		AssigneeID:           parseUUID(cfg.AgentID),
+		CreatorType:          creatorType,
+		CreatorID:            webhook.ID,
+		Number:               issueNumber,
+		DispatchProvider:     strToText(cfg.DispatchProvider),
+		DispatchDaemonID:     parseOptionalUUID(&cfg.DispatchDaemonID),
+		DispatchDaemonLabel:  strToText(cfg.DispatchDaemonLabel),
+		GithubAutoFixEnabled: false,
 	})
 	if err != nil {
 		return pgtype.UUID{}, err
@@ -1153,6 +1285,14 @@ func (h *Handler) executeCommentIssueAction(ctx context.Context, webhook db.Webh
 		return pgtype.UUID{}, false, fmt.Errorf("load issue: %w", err)
 	}
 
+	return h.createWebhookBotCommentOnIssue(ctx, webhook, issue, cfg, evt)
+}
+
+func (h *Handler) createWebhookBotCommentOnIssue(ctx context.Context, webhook db.Webhook, issue db.Issue, cfg CommentIssueActionConfig, evt wh.Event) (pgtype.UUID, bool, error) {
+	if !webhook.BotUserID.Valid {
+		return pgtype.UUID{}, false, fmt.Errorf("webhook has no bot_user_id")
+	}
+
 	content := renderTemplate(cfg.ContentTemplate, evt.Data)
 	if content == "" {
 		content = evt.Data["body"]
@@ -1220,6 +1360,29 @@ func (h *Handler) executeCommentIssueAction(ctx context.Context, webhook db.Webh
 	h.enqueueMentionedAgentTasks(ctx, issue, comment, "member", botID, onCommentEnqueued)
 
 	return issue.ID, true, nil
+}
+
+func (h *Handler) findIssueLinksForEvent(ctx context.Context, workspaceID pgtype.UUID, evt wh.Event) ([]db.IssueLink, error) {
+	seenIssues := map[string]bool{}
+	links := []db.IssueLink{}
+	for _, sourceURL := range eventSourceURLs(evt) {
+		matches, err := h.Queries.ListIssueLinksByURL(ctx, db.ListIssueLinksByURLParams{
+			WorkspaceID: workspaceID,
+			Url:         sourceURL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("lookup issue_link: %w", err)
+		}
+		for _, link := range matches {
+			issueID := uuidToString(link.IssueID)
+			if seenIssues[issueID] {
+				continue
+			}
+			seenIssues[issueID] = true
+			links = append(links, link)
+		}
+	}
+	return links, nil
 }
 
 func (h *Handler) findIssueLinkForEvent(ctx context.Context, workspaceID pgtype.UUID, evt wh.Event) (db.IssueLink, bool, error) {

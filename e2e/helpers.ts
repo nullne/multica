@@ -22,9 +22,10 @@ export async function loginAsDefault(page: Page, existingApi?: TestApiClient) {
 
   const token = api.getToken();
   await page.goto("/login");
-  await page.evaluate((t) => {
+  await page.evaluate(({ token: t, workspaceId }) => {
     localStorage.setItem("multica_token", t);
-  }, token);
+    if (workspaceId) localStorage.setItem("multica_workspace_id", workspaceId);
+  }, { token, workspaceId: api.getWorkspaceId() });
   await page.goto("/issues");
   await page.waitForURL("**/issues", { timeout: 10000 });
   // Ensure auth init settled so subsequent hard-navigations don't race with

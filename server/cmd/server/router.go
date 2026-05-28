@@ -89,6 +89,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 
 	// Webhook ingest (public — authenticated by webhook token, not JWT)
 	r.Post("/api/webhooks/{id}", h.IngestWebhook)
+	r.Post("/api/routine-triggers/{id}", h.IngestRoutineTrigger)
 
 	// GitHub App webhook receiver (public — authenticated by HMAC signature)
 	r.Post("/api/github/events", h.ReceiveGitHubEvent)
@@ -328,6 +329,21 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 					r.Get("/", h.GetRecurringTemplate)
 					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Patch("/", h.UpdateRecurringTemplate)
 					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Delete("/", h.DeleteRecurringTemplate)
+				})
+			})
+
+			// Routines
+			r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/api/routine-trigger-token-drafts", h.GenerateRoutineTriggerTokenDraft)
+			r.Route("/api/routines", func(r chi.Router) {
+				r.Get("/", h.ListRoutines)
+				r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/", h.CreateRoutine)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetRoutine)
+					r.Get("/runs", h.ListRoutineRuns)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/trigger", h.TriggerRoutine)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/triggers/{triggerId}/regenerate-token", h.RegenerateRoutineTriggerToken)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Patch("/", h.UpdateRoutine)
+					r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Delete("/", h.DeleteRoutine)
 				})
 			})
 

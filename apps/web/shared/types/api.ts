@@ -16,6 +16,7 @@ export interface CreateIssueRequest {
   dispatch_provider?: string;
   dispatch_daemon_id?: string;
   dispatch_daemon_label?: string;
+  github_auto_fix_enabled?: boolean;
 }
 
 export interface UpdateIssueRequest {
@@ -33,6 +34,7 @@ export interface UpdateIssueRequest {
   dispatch_provider?: string | null;
   dispatch_daemon_id?: string | null;
   dispatch_daemon_label?: string | null;
+  github_auto_fix_enabled?: boolean;
 }
 
 export interface ListIssuesParams {

@@ -1,0 +1,13 @@
+---
+description: Multi-select controls should show selected names consistently.
+globs: apps/web/**/*.tsx
+alwaysApply: false
+---
+
+# Multi-Select Display
+
+- Multi-select triggers should summarize selected items by name, not by count alone.
+- Show up to the first 3 selected names in order, then append `+N more` for overflow.
+- Use the empty-state label only when no items are selected, for example `No subscribers`.
+- For subscriber/notification-recipient multi-selects, default new forms to the currently logged-in user when available.
+- Keep the full selected list in the popover/menu with checkmarks for selected rows.

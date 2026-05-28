@@ -92,6 +92,7 @@ const stableStoreIssues = vi.hoisted(() => [
     dispatch_provider: null,
     dispatch_daemon_id: null,
     dispatch_daemon_label: null,
+    github_auto_fix_enabled: false,
     created_at: "2026-01-15T00:00:00Z",
     updated_at: "2026-01-20T00:00:00Z",
   },
@@ -214,6 +215,7 @@ const mockIssue: Issue = {
   dispatch_provider: null,
   dispatch_daemon_id: null,
   dispatch_daemon_label: null,
+  github_auto_fix_enabled: false,
   labels: [],
   created_at: "2026-01-15T00:00:00Z",
   updated_at: "2026-01-20T00:00:00Z",
@@ -262,6 +264,8 @@ async function renderPage(id = "issue-1") {
 describe("IssueDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (stableStoreIssues[0] as Issue).links = undefined;
+    (stableStoreIssues[0] as Issue).github_auto_fix_enabled = false;
     workspaceState.workspace = wsOne;
   });
 
@@ -292,6 +296,45 @@ describe("IssueDetailPage", () => {
 
     expect(screen.getByText("In Progress")).toBeInTheDocument();
     expect(screen.getByText("High")).toBeInTheDocument();
+  });
+
+  it("updates the GitHub auto-fix switch as a live issue property", async () => {
+    (stableStoreIssues[0] as Issue).links = [
+      {
+        id: "link-1",
+        source_type: "github",
+        kind: "pr",
+        direction: "output",
+        url: "https://github.com/acme/app/pull/42",
+        external_id: "acme/app#42",
+        created_at: "2026-01-20T00:00:00Z",
+      },
+    ];
+    mockGetIssue.mockResolvedValueOnce(mockIssue);
+    mockListTimeline.mockResolvedValueOnce(mockTimeline);
+    mockUpdateIssue.mockResolvedValueOnce({ ...mockIssue, github_auto_fix_enabled: true });
+
+    const user = userEvent.setup();
+    await renderPage();
+
+    const toggle = await screen.findByRole("switch", { name: "Auto-fix pull requests" });
+    await user.click(toggle);
+
+    await waitFor(() => {
+      expect(mockUpdateIssue).toHaveBeenCalledWith("issue-1", { github_auto_fix_enabled: true });
+    });
+  });
+
+  it("hides the GitHub auto-fix switch when the issue has no GitHub PR or issue link", async () => {
+    mockGetIssue.mockResolvedValueOnce(mockIssue);
+    mockListTimeline.mockResolvedValueOnce(mockTimeline);
+    await renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText("Properties")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("switch", { name: "Auto-fix pull requests" })).not.toBeInTheDocument();
   });
 
   it("renders comments", async () => {

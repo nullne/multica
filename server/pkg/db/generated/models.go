@@ -202,6 +202,7 @@ type Issue struct {
 	DispatchDaemonLabel         pgtype.Text        `json:"dispatch_daemon_label"`
 	AgentMentionChainCount      int32              `json:"agent_mention_chain_count"`
 	AgentMentionChainGeneration int64              `json:"agent_mention_chain_generation"`
+	GithubAutoFixEnabled        bool               `json:"github_auto_fix_enabled"`
 }
 
 type IssueDependency struct {
@@ -302,6 +303,97 @@ type RecurringTemplateSubscriber struct {
 	TemplateID pgtype.UUID        `json:"template_id"`
 	UserID     pgtype.UUID        `json:"user_id"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type Routine struct {
+	ID                   pgtype.UUID        `json:"id"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	Name                 string             `json:"name"`
+	Instructions         pgtype.Text        `json:"instructions"`
+	Priority             string             `json:"priority"`
+	AssigneeType         pgtype.Text        `json:"assignee_type"`
+	AssigneeID           pgtype.UUID        `json:"assignee_id"`
+	DueDateOffsetHours   pgtype.Int4        `json:"due_date_offset_hours"`
+	DispatchProvider     pgtype.Text        `json:"dispatch_provider"`
+	DispatchDaemonID     pgtype.UUID        `json:"dispatch_daemon_id"`
+	DispatchDaemonLabel  pgtype.Text        `json:"dispatch_daemon_label"`
+	Enabled              bool               `json:"enabled"`
+	CreatedByID          pgtype.UUID        `json:"created_by_id"`
+	CreatedByType        string             `json:"created_by_type"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	GithubAutoFixEnabled bool               `json:"github_auto_fix_enabled"`
+}
+
+type RoutineAction struct {
+	ID         pgtype.UUID        `json:"id"`
+	RoutineID  pgtype.UUID        `json:"routine_id"`
+	ActionType string             `json:"action_type"`
+	Config     []byte             `json:"config"`
+	Enabled    bool               `json:"enabled"`
+	Position   int32              `json:"position"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type RoutineLabel struct {
+	RoutineID pgtype.UUID        `json:"routine_id"`
+	LabelID   pgtype.UUID        `json:"label_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type RoutineRun struct {
+	ID           pgtype.UUID        `json:"id"`
+	RoutineID    pgtype.UUID        `json:"routine_id"`
+	TriggerID    pgtype.UUID        `json:"trigger_id"`
+	ActionID     pgtype.UUID        `json:"action_id"`
+	EventType    string             `json:"event_type"`
+	DedupKey     string             `json:"dedup_key"`
+	Payload      []byte             `json:"payload"`
+	Status       string             `json:"status"`
+	IssueID      pgtype.UUID        `json:"issue_id"`
+	CommentID    pgtype.UUID        `json:"comment_id"`
+	ErrorMessage pgtype.Text        `json:"error_message"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type RoutineSubscriber struct {
+	RoutineID pgtype.UUID        `json:"routine_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type RoutineTrigger struct {
+	ID                  pgtype.UUID        `json:"id"`
+	RoutineID           pgtype.UUID        `json:"routine_id"`
+	TriggerType         string             `json:"trigger_type"`
+	SourceType          pgtype.Text        `json:"source_type"`
+	TokenHash           pgtype.Text        `json:"token_hash"`
+	TokenPrefix         string             `json:"token_prefix"`
+	InstallationID      pgtype.Int8        `json:"installation_id"`
+	Schedule            pgtype.Text        `json:"schedule"`
+	Timezone            string             `json:"timezone"`
+	RunAt               pgtype.Timestamptz `json:"run_at"`
+	NextRunAt           pgtype.Timestamptz `json:"next_run_at"`
+	LastTriggeredAt     pgtype.Timestamptz `json:"last_triggered_at"`
+	DedupWindowSeconds  int32              `json:"dedup_window_seconds"`
+	MaxRuns             pgtype.Int4        `json:"max_runs"`
+	SuccessfulRunsCount int32              `json:"successful_runs_count"`
+	Config              []byte             `json:"config"`
+	Enabled             bool               `json:"enabled"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type RoutineTriggerTokenDraft struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	CreatedByID pgtype.UUID        `json:"created_by_id"`
+	TokenHash   string             `json:"token_hash"`
+	TokenPrefix string             `json:"token_prefix"`
+	ConsumedAt  pgtype.Timestamptz `json:"consumed_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type RuntimeUsage struct {

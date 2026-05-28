@@ -257,6 +257,23 @@ func TestIssueCRUD(t *testing.T) {
 		t.Fatalf("UpdateIssue: priority should be preserved, got '%s'", updated.Priority)
 	}
 
+	// Update - GitHub auto-fix switch should be a live issue property.
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/issues/"+issueID, map[string]any{
+		"github_auto_fix_enabled": true,
+	})
+	req = withURLParam(req, "id", issueID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue github auto-fix: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var autoFixUpdated IssueResponse
+	json.NewDecoder(w.Body).Decode(&autoFixUpdated)
+	if !autoFixUpdated.GithubAutoFixEnabled {
+		t.Fatalf("UpdateIssue: expected github_auto_fix_enabled to be true")
+	}
+
 	// List
 	w = httptest.NewRecorder()
 	req = newRequest("GET", "/api/issues?workspace_id="+testWorkspaceID, nil)
