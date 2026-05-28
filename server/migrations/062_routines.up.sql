@@ -169,3 +169,15 @@ FROM webhook;
 INSERT INTO routine_action (routine_id, action_type, config, enabled, position, created_at, updated_at)
 SELECT webhook_id, action_type, config, enabled, position, created_at, updated_at
 FROM webhook_action;
+
+-- Disable legacy automation sources after backfill so routines are the only
+-- active execution path.
+UPDATE recurring_issue_template
+SET enabled = FALSE,
+    updated_at = now()
+WHERE enabled = TRUE;
+
+UPDATE webhook
+SET status = 'inactive',
+    updated_at = now()
+WHERE status = 'active';
