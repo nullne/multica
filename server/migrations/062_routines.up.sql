@@ -178,6 +178,6 @@ SET enabled = FALSE,
 WHERE enabled = TRUE;
 
 UPDATE webhook
-SET status = 'inactive',
+SET status = 'paused',
     updated_at = now()
 WHERE status = 'active';
