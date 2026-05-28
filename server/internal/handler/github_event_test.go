@@ -80,7 +80,7 @@ func TestReceiveGitHubEvent_RejectsBadSignature(t *testing.T) {
 	t.Cleanup(func() { testHandler.GitHubApp = prev })
 
 	body := []byte(`{"installation":{"id":1}}`)
-	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "ping")
 	req.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
 	w := httptest.NewRecorder()
@@ -105,7 +105,7 @@ func TestReceiveGitHubEvent_PingShortCircuits(t *testing.T) {
 	t.Cleanup(func() { testHandler.GitHubApp = prev })
 
 	body := []byte(`{"zen":"keep it logically awesome"}`)
-	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "ping")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w := httptest.NewRecorder()
@@ -131,7 +131,7 @@ func TestReceiveGitHubEvent_UnknownInstallation(t *testing.T) {
 
 	// installation_id 99999 has no webhook → handler returns 200 (silent drop)
 	body := []byte(`{"action":"opened","installation":{"id":99999},"pull_request":{"number":1,"html_url":"https://x"},"repository":{"full_name":"a/b"}}`)
-	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w := httptest.NewRecorder()
@@ -192,7 +192,7 @@ func TestReceiveGitHubEvent_PullRequestCreatesIssueAndLink(t *testing.T) {
 		"repository":{"full_name":"acme/widgets"}
 	}`, installationID, prURL))
 
-	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w := httptest.NewRecorder()
@@ -299,7 +299,7 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 			"issue":{"number":123,"title":"Review feedback","html_url":%q,"pull_request":{"html_url":%q}},
 			"repository":{"full_name":"acme/widgets"}
 		}`, installationID, bodyText, prURL, prURL, prURL))
-		req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 		req.Header.Set("X-GitHub-Event", "issue_comment")
 		req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 		w := httptest.NewRecorder()
@@ -320,7 +320,7 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 			"pull_request":{"number":123,"title":"Review feedback","html_url":%q},
 			"repository":{"full_name":"acme/widgets"}
 		}`, installationID, bodyText, prURL, prURL))
-		req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 		req.Header.Set("X-GitHub-Event", "pull_request_review_comment")
 		req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 		w := httptest.NewRecorder()
@@ -378,7 +378,7 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 		},
 		"repository":{"full_name":"acme/widgets"}
 	}`, installationID, enabledPR, enabledPR))
-	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "check_run")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w := httptest.NewRecorder()
@@ -411,7 +411,7 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 		},
 		"repository":{"full_name":"acme/widgets"}
 	}`, installationID, enabledPR, enabledPR))
-	req = httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req = httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "check_run")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w = httptest.NewRecorder()
@@ -434,7 +434,7 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 		},
 		"repository":{"full_name":"acme/widgets"}
 	}`, installationID, enabledPR, enabledPRNumber))
-	req = httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req = httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "workflow_run")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w = httptest.NewRecorder()
@@ -571,7 +571,7 @@ func TestReceiveGitHubEvent_PullRequestReusesLinkedGitHubIssue(t *testing.T) {
 		"repository":{"full_name":"acme/widgets"}
 	}`, installationID, prURL, linkedIssueURL))
 
-	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w := httptest.NewRecorder()
@@ -673,7 +673,7 @@ func TestReceiveGitHubEvent_MultipleCreateActionsStillCreateSeparateIssues(t *te
 		"repository":{"full_name":"acme/widgets"}
 	}`, installationID, prURL))
 
-	req := httptest.NewRequest("POST", "/api/github/events", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", "pull_request")
 	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
 	w := httptest.NewRecorder()

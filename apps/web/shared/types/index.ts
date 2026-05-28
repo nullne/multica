@@ -39,7 +39,6 @@ export type * from "./api";
 export type { Attachment } from "./attachment";
 export type { NotificationChannel, NotificationChannelType, UpsertTelegramChannelRequest } from "./notification_channel";
 export type { WorkspaceTelegramSettings, UpsertWorkspaceTelegramRequest } from "./workspace_telegram";
-export type { RecurringTemplate, CreateRecurringTemplateRequest, UpdateRecurringTemplateRequest } from "./recurring_template";
 export type {
   Routine,
   RoutineTrigger,
@@ -54,23 +53,6 @@ export type {
   RoutineActionRequest,
 } from "./routine";
 export type {
-  Webhook,
-  WebhookAction,
-  WebhookActionType,
-  CreateIssueActionConfig,
-  CommentIssueActionConfig,
-  WebhookWithActions,
-  WebhookSourceType,
-  WebhookStatus,
-  CreateWebhookRequest,
-  CreateWebhookResponse,
-  UpdateWebhookRequest,
-  CreateWebhookActionRequest,
-  UpdateWebhookActionRequest,
-  WebhookEvent,
-  WebhookEventStatus,
-  AdapterKey,
-  AdapterInfo,
   BotUser,
   CreateBotUserRequest,
 } from "./webhook";

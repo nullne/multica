@@ -649,7 +649,7 @@ describe("RoutinesPage", () => {
     expect(screen.getByText("API URL")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Generate token/i }));
 
-    expect(await screen.findByDisplayValue(/\/api\/routine-triggers\/draft-api/)).toBeInTheDocument();
+    expect(await screen.findByDisplayValue(/\/api\/webhook\/draft-api/)).toBeInTheDocument();
     expect(screen.getByDisplayValue("sk-draft-token...")).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "API token generated" })).toBeInTheDocument();
     expect(screen.getByText("sk-draft-token-full")).toBeInTheDocument();
@@ -711,7 +711,7 @@ describe("RoutinesPage", () => {
 
     render(<RoutinesPage />);
 
-    expect(await screen.findByDisplayValue(/\/api\/routine-triggers\/trigger-api/)).toBeInTheDocument();
+    expect(await screen.findByDisplayValue(/\/api\/webhook\/trigger-api/)).toBeInTheDocument();
     expect(screen.getByDisplayValue("sk-old-token...")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Regenerate token/i }));

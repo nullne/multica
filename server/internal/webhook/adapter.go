@@ -62,7 +62,7 @@ func ListAdapters() []AdapterInfo {
 	descriptions := map[string]string{
 		"standard":  "Multica standard format. Send events using our schema — no adapter needed.",
 		"oss-alert": "Prometheus AlertManager style alerts. Parses labels, annotations, startsAt, endsAt, generatorURL.",
-		"github":    "GitHub App webhook events. Receives push, pull_request, issues, and issue_comment events via /api/github/events.",
+		"github":    "GitHub App webhook events. Receives push, pull_request, issues, and issue_comment events via /api/webhook/github.",
 	}
 	order := []string{"standard", "oss-alert", "github"}
 	result := make([]AdapterInfo, 0, len(order))

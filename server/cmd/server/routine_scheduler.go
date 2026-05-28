@@ -13,8 +13,13 @@ import (
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
+const (
+	routineSchedulerInterval  = 60 * time.Second
+	routineSchedulerBatchSize = int32(50)
+)
+
 func runRoutineScheduler(ctx context.Context, pool *pgxpool.Pool, queries *db.Queries, taskSvc *service.TaskService) {
-	ticker := time.NewTicker(schedulerInterval)
+	ticker := time.NewTicker(routineSchedulerInterval)
 	defer ticker.Stop()
 
 	fireRoutineScheduleTriggers(ctx, pool, queries, taskSvc)
@@ -30,7 +35,7 @@ func runRoutineScheduler(ctx context.Context, pool *pgxpool.Pool, queries *db.Qu
 }
 
 func fireRoutineScheduleTriggers(ctx context.Context, pool *pgxpool.Pool, queries *db.Queries, taskSvc *service.TaskService) {
-	due, err := queries.ListDueRoutineScheduleTriggers(ctx, schedulerBatchSize)
+	due, err := queries.ListDueRoutineScheduleTriggers(ctx, routineSchedulerBatchSize)
 	if err != nil {
 		slog.Warn("routine scheduler: list due triggers failed", "error", err)
 		return
