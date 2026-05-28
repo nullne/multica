@@ -82,6 +82,10 @@ const workspaceNav = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+function isNavItemActive(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 function DraftDot() {
   const hasDraft = useIssueDraftStore((s) => !!(s.draft.title || s.draft.description));
   if (!hasDraft) return null;
@@ -623,7 +627,7 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
                 {primaryNav.map((item) => {
-                  const isActive = pathname === item.href;
+                  const isActive = isNavItemActive(pathname, item.href);
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
@@ -650,7 +654,7 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
                 {workspaceNav.map((item) => {
-                  const isActive = pathname === item.href;
+                  const isActive = isNavItemActive(pathname, item.href);
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
