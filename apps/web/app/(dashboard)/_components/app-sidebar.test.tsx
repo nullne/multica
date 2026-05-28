@@ -219,6 +219,18 @@ describe("AppSidebar user menu", () => {
     expect(allLinks.indexOf(routinesLink)).toBe(allLinks.indexOf(issuesLink) + 1);
   });
 
+  it("keeps Routines active on routine detail routes", () => {
+    mockPathname = "/routines/routine-1";
+    renderSidebar();
+
+    const routinesLink = screen.getByRole("link", { name: /Routines/i });
+    expect(routinesLink).toHaveAttribute("data-active");
+
+    expect(screen.getByRole("link", { name: "Issues" })).not.toHaveAttribute(
+      "data-active",
+    );
+  });
+
   it("opens the bottom user menu without throwing", async () => {
     const user = userEvent.setup();
     renderSidebar();

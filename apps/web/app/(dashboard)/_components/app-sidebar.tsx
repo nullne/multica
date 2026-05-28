@@ -72,7 +72,7 @@ const primaryNav = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/my-issues", label: "My Issues", icon: CircleUser },
   { href: "/issues", label: "Issues", icon: ListTodo },
-  { href: "/routines", label: "Routines", icon: RefreshCw },
+  { href: "/routines", label: "Routines", icon: RefreshCw, matchChildren: true },
 ];
 
 const workspaceNav = [
@@ -623,7 +623,9 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
                 {primaryNav.map((item) => {
-                  const isActive = pathname === item.href;
+                  const isActive =
+                    pathname === item.href ||
+                    (item.matchChildren && pathname.startsWith(`${item.href}/`));
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
