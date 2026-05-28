@@ -72,9 +72,19 @@ type verificationFailedCheck struct {
 }
 
 // EnqueueTaskForIssue creates a queued task for an agent-assigned issue.
-// No context snapshot is stored — the agent fetches all data it needs at
+// By default no context snapshot is stored — the agent fetches issue data at
 // runtime via the multica CLI.
 func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, triggerCommentID ...pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueTaskForIssue(ctx, issue, nil, triggerCommentID...)
+}
+
+// EnqueueTaskForIssueWithContext includes supplemental task context that is not
+// represented on the issue itself, such as the raw payload that created it.
+func (s *TaskService) EnqueueTaskForIssueWithContext(ctx context.Context, issue db.Issue, contextData []byte, triggerCommentID ...pgtype.UUID) (db.AgentTaskQueue, error) {
+	return s.enqueueTaskForIssue(ctx, issue, contextData, triggerCommentID...)
+}
+
+func (s *TaskService) enqueueTaskForIssue(ctx context.Context, issue db.Issue, contextData []byte, triggerCommentID ...pgtype.UUID) (db.AgentTaskQueue, error) {
 	if !issue.AssigneeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "issue has no assignee")
 		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
@@ -93,14 +103,14 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 		criteria := decodeAcceptanceCriteria(issue.AcceptanceCriteria)
 		if len(criteria) == 0 || !issue.CriteriaStatus.Valid {
 			// No criteria yet — enqueue criteria generation to verifier.
-			contextData := buildVerificationTaskContext(verificationTaskContext{
+			verificationContext := buildVerificationTaskContext(verificationTaskContext{
 				Flow:            verificationFlowName,
 				Role:            taskRoleCriteria,
 				Round:           1,
 				ExecutorAgentID: util.UUIDToString(issue.AssigneeID),
 				VerifierAgentID: util.UUIDToString(issue.VerifierAgentID),
 			})
-			return s.enqueueTaskToAgent(ctx, issue, issue.VerifierAgentID, commentID, contextData, "criteria task enqueued")
+			return s.enqueueTaskToAgent(ctx, issue, issue.VerifierAgentID, commentID, mergeTaskContext(verificationContext, contextData), "criteria task enqueued")
 		}
 		if issue.CriteriaStatus.String == "pending" {
 			// Criteria exist but not yet approved — wait for human approval.
@@ -109,7 +119,7 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 		}
 
 		// Criteria approved — enqueue executor.
-		contextData := buildVerificationTaskContext(verificationTaskContext{
+		verificationContext := buildVerificationTaskContext(verificationTaskContext{
 			Flow:               verificationFlowName,
 			Role:               taskRoleExecutor,
 			Round:              1,
@@ -117,10 +127,10 @@ func (s *TaskService) EnqueueTaskForIssue(ctx context.Context, issue db.Issue, t
 			VerifierAgentID:    util.UUIDToString(issue.VerifierAgentID),
 			AcceptanceCriteria: criteria,
 		})
-		return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, contextData, "executor task enqueued")
+		return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, mergeTaskContext(verificationContext, contextData), "executor task enqueued")
 	}
 
-	return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, nil, "task enqueued")
+	return s.enqueueTaskToAgent(ctx, issue, issue.AssigneeID, commentID, contextData, "task enqueued")
 }
 
 // EnqueueExecutorForApprovedCriteria enqueues the executor task after criteria
@@ -708,6 +718,31 @@ func buildVerificationTaskContext(ctx verificationTaskContext) []byte {
 	b, err := json.Marshal(ctx)
 	if err != nil {
 		return nil
+	}
+	return b
+}
+
+func mergeTaskContext(base, extra []byte) []byte {
+	if len(base) == 0 {
+		return extra
+	}
+	if len(extra) == 0 {
+		return base
+	}
+	var merged map[string]any
+	if err := json.Unmarshal(base, &merged); err != nil {
+		return base
+	}
+	var additional map[string]any
+	if err := json.Unmarshal(extra, &additional); err != nil {
+		return base
+	}
+	for k, v := range additional {
+		merged[k] = v
+	}
+	b, err := json.Marshal(merged)
+	if err != nil {
+		return base
 	}
 	return b
 }

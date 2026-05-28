@@ -210,6 +210,7 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 				Ref string `json:"ref"`
 			} `json:"base"`
 			Merged bool `json:"merged"`
+			Draft  bool `json:"draft"`
 			Labels []struct {
 				Name string `json:"name"`
 			} `json:"labels"`
@@ -244,6 +245,8 @@ func parseGitHubPullRequest(body []byte) map[string]string {
 		"html_url":    pr.HTMLURL,
 		"head_branch": pr.Head.Ref,
 		"base_branch": pr.Base.Ref,
+		"is_merged":   fmt.Sprintf("%t", pr.Merged),
+		"is_draft":    fmt.Sprintf("%t", pr.Draft),
 		"labels":      strings.Join(labelNames, ", "),
 		"source_url":  pr.HTMLURL,
 		"source_urls": strings.Join(sourceURLs, "\n"),

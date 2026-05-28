@@ -6,64 +6,77 @@ import (
 	"net/http"
 )
 
-// standardAdapter handles payloads that conform to Multica's own standard schema.
+// standardAdapter handles arbitrary JSON payloads sent to Multica API triggers.
 type standardAdapter struct{}
 
-type standardPayload struct {
-	Title    string            `json:"title"`
-	Body     string            `json:"body"`
-	Type     string            `json:"type"`
-	DedupKey string            `json:"dedup_key"`
-	Priority string            `json:"priority"`
-	Fields   map[string]string `json:"fields"`
-}
-
 func (a *standardAdapter) Parse(payload json.RawMessage, _ http.Header) ([]Event, error) {
-	var p standardPayload
-	if err := json.Unmarshal(payload, &p); err != nil {
-		return nil, fmt.Errorf("parse standard payload: %w", err)
+	if !json.Valid(payload) {
+		return nil, fmt.Errorf("parse standard payload: invalid JSON")
 	}
-	if p.Title == "" {
-		return nil, fmt.Errorf("standard payload: title is required")
-	}
-
-	eventType := p.Type
-	if eventType == "" {
-		eventType = "custom"
-	}
-
 	data := map[string]string{
-		"title": p.Title,
+		"raw_payload": string(payload),
 	}
-	if p.Body != "" {
-		data["body"] = p.Body
-	}
-	if p.Priority != "" {
-		data["priority"] = p.Priority
-	}
-	for k, v := range p.Fields {
-		data["fields."+k] = v
-	}
-	for _, key := range []string{"source_url", "source_kind", "external_id"} {
-		if value := p.Fields[key]; value != "" {
-			data[key] = value
+
+	eventType := "custom"
+	dedupKey := ""
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err == nil && object != nil {
+		if value := rawJSONString(object["title"]); value != "" {
+			data["title"] = value
+		}
+		if value := rawJSONString(object["body"]); value != "" {
+			data["body"] = value
+		}
+		if value := rawJSONString(object["priority"]); value != "" {
+			data["priority"] = value
+		}
+		if value := rawJSONString(object["type"]); value != "" {
+			eventType = value
+		}
+		dedupKey = rawJSONString(object["dedup_key"])
+
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(object["fields"], &fields); err == nil {
+			for k, raw := range fields {
+				value := rawJSONString(raw)
+				if value == "" {
+					continue
+				}
+				data["fields."+k] = value
+				switch k {
+				case "source_url", "source_kind", "external_id":
+					data[k] = value
+				}
+			}
 		}
 	}
 
 	return []Event{{
 		Type:       eventType,
-		DedupKey:   p.DedupKey,
+		DedupKey:   dedupKey,
 		Data:       data,
 		RawPayload: payload,
 	}}, nil
 }
 
+func rawJSONString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return value
+}
+
 func (a *standardAdapter) Keys() []AdapterKey {
 	return []AdapterKey{
-		{Key: "title", Description: "Event title", Required: true},
+		{Key: "title", Description: "Event title", Required: false},
 		{Key: "body", Description: "Detailed description (markdown)", Required: false},
 		{Key: "priority", Description: "Priority hint (urgent, high, medium, low)", Required: false},
 		{Key: "fields.*", Description: "Custom key-value pairs from the fields object", Required: false},
+		{Key: "raw_payload", Description: "Original JSON request body", Required: false},
 	}
 }
 

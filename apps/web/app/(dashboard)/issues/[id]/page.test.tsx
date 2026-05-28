@@ -265,6 +265,7 @@ describe("IssueDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (stableStoreIssues[0] as Issue).links = undefined;
+    delete (stableStoreIssues[0] as any).routine_origin;
     (stableStoreIssues[0] as Issue).github_auto_fix_enabled = false;
     workspaceState.workspace = wsOne;
   });
@@ -296,6 +297,31 @@ describe("IssueDetailPage", () => {
 
     expect(screen.getByText("In Progress")).toBeInTheDocument();
     expect(screen.getByText("High")).toBeInTheDocument();
+  });
+
+  it("shows the routine trigger that created the issue", async () => {
+    (stableStoreIssues[0] as any).routine_origin = {
+      run_id: "run-1",
+      routine_id: "routine-1",
+      routine_name: "Triage GitHub bugs",
+      trigger_id: "trigger-1",
+      trigger_type: "api",
+      action_id: "action-1",
+      action_type: "create_issue",
+      event_type: "custom",
+      triggered_at: "2026-01-20T00:00:00Z",
+    };
+    mockGetIssue.mockResolvedValueOnce(mockIssue);
+    mockListTimeline.mockResolvedValueOnce(mockTimeline);
+
+    await renderPage();
+
+    expect(await screen.findByText("Triage GitHub bugs")).toBeInTheDocument();
+    expect(screen.getByText("API call")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open API endpoint" })).toHaveAttribute(
+      "href",
+      `${window.location.origin}/api/webhook/trigger-1`,
+    );
   });
 
   it("updates the GitHub auto-fix switch as a live issue property", async () => {

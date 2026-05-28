@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 )
 
 var errRoutineTriggerTokenRequired = errors.New("routine trigger token must be generated before saving")
+
+const routineTriggerMaxPayloadBytes = 1 << 20
 
 type RoutineResponse struct {
 	ID                   string                   `json:"id"`
@@ -596,9 +599,17 @@ func (h *Handler) IngestRoutineTrigger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid routine trigger token")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, routineTriggerMaxPayloadBytes+1))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	if len(body) > routineTriggerMaxPayloadBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "payload exceeds 1MB limit")
+		return
+	}
+	if !json.Valid(body) {
+		writeError(w, http.StatusBadRequest, "invalid JSON payload")
 		return
 	}
 	sourceType := "standard"
@@ -633,6 +644,10 @@ func (h *Handler) ingestRoutineTriggers(ctx context.Context, triggers []db.Routi
 			continue
 		}
 		for _, evt := range events {
+			if !routineTriggerMatchesEvent(trigger, evt) {
+				_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, pgtype.UUID{}, evt, "filtered", pgtype.UUID{}, pgtype.UUID{}, "trigger filters did not match")
+				continue
+			}
 			if evt.DedupKey != "" && trigger.DedupWindowSeconds > 0 {
 				if _, err := h.Queries.FindRecentRoutineRun(ctx, db.FindRecentRoutineRunParams{
 					TriggerID:     trigger.ID,
@@ -684,6 +699,109 @@ func routineActionMatchesEvent(action db.RoutineAction, evt wh.Event) bool {
 	default:
 		return false
 	}
+}
+
+type routineGitHubTriggerConfig struct {
+	EventTypes []string               `json:"event_types"`
+	Filters    []routineTriggerFilter `json:"filters"`
+}
+
+type routineTriggerFilter struct {
+	Field    string `json:"field"`
+	Operator string `json:"operator"`
+	Value    string `json:"value"`
+}
+
+func routineTriggerMatchesEvent(trigger db.RoutineTrigger, evt wh.Event) bool {
+	if trigger.TriggerType != "github" || len(trigger.Config) == 0 {
+		return true
+	}
+	var cfg routineGitHubTriggerConfig
+	if err := json.Unmarshal(trigger.Config, &cfg); err != nil {
+		return false
+	}
+	if !routineTriggerEventTypesMatch(cfg.EventTypes, evt.Type) {
+		return false
+	}
+	for _, filter := range cfg.Filters {
+		if strings.TrimSpace(filter.Value) == "" {
+			continue
+		}
+		if !routineTriggerFilterMatches(evt.Data[filter.Field], filter.Operator, filter.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func routineTriggerEventTypesMatch(eventTypes []string, eventType string) bool {
+	if len(eventTypes) == 0 {
+		return true
+	}
+	for _, want := range eventTypes {
+		want = strings.TrimSpace(want)
+		if want == "" {
+			continue
+		}
+		if want == eventType || strings.HasPrefix(eventType, want+".") {
+			return true
+		}
+		if want == "github.pull_request.closed" && eventType == "github.pull_request.merged" {
+			return true
+		}
+	}
+	return false
+}
+
+func routineTriggerFilterMatches(actual, operator, expected string) bool {
+	operator = strings.TrimSpace(strings.ToLower(operator))
+	if operator == "" {
+		operator = "is one of"
+	}
+	actual = strings.TrimSpace(actual)
+	expected = strings.TrimSpace(expected)
+	switch operator {
+	case "equals":
+		return actual == expected
+	case "contains":
+		return strings.Contains(actual, expected)
+	case "starts with":
+		return strings.HasPrefix(actual, expected)
+	case "matches regex (whole string)":
+		re, err := regexp.Compile("^(?:" + expected + ")$")
+		return err == nil && re.MatchString(actual)
+	case "is not one of":
+		return !routineTriggerValueInList(actual, expected)
+	case "is one of":
+		return routineTriggerValueInList(actual, expected)
+	default:
+		return routineTriggerValueInList(actual, expected)
+	}
+}
+
+func routineTriggerValueInList(actual, expected string) bool {
+	actualValues := splitRoutineTriggerFilterValues(actual)
+	expectedValues := splitRoutineTriggerFilterValues(expected)
+	for _, actualValue := range actualValues {
+		for _, expectedValue := range expectedValues {
+			if actualValue == expectedValue {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func splitRoutineTriggerFilterValues(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (h *Handler) logRoutineRun(ctx context.Context, routineID, triggerID, actionID pgtype.UUID, evt wh.Event, status string, issueID, commentID pgtype.UUID, errorMessage string) error {

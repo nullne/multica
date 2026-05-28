@@ -119,6 +119,27 @@ func TestPrepareDirectoryMode(t *testing.T) {
 	}
 }
 
+func TestRenderIssueContextIncludesRoutineEvent(t *testing.T) {
+	t.Parallel()
+
+	content := renderIssueContext("codex", TaskContextForEnv{
+		IssueID: "issue-1",
+		RoutineEvent: map[string]any{
+			"type":        "custom",
+			"raw_payload": `{"deployment":{"service":"api"}}`,
+		},
+	})
+	for _, want := range []string{
+		"## Routine Trigger Event",
+		"raw_payload",
+		"deployment",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("issue context missing %q", want)
+		}
+	}
+}
+
 func TestPrepareWithRepoContext(t *testing.T) {
 	t.Parallel()
 	workspacesRoot := t.TempDir()

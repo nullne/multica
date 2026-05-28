@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +260,152 @@ func TestRoutineAPITriggerIngestCreatesIssue(t *testing.T) {
 	}
 	if len(runs) == 0 || runs[0].Status != "processed" {
 		t.Fatalf("expected processed routine run, got %+v", runs)
+	}
+}
+
+func TestRoutineAPITriggerAcceptsFlexibleJSONPayload(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine flexible payload",
+		"instructions":  "Investigate raw payload",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	payload := []byte(`{"deployment":{"service":"api","status":"failed"},"metadata":{"source":"curl"}}`)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, bytes.NewReader(payload))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var issueID, title, description string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, title, COALESCE(description, '')
+		FROM issue
+		WHERE workspace_id = $1 AND description = 'Investigate raw payload'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID, &title, &description); err != nil {
+		t.Fatalf("query created issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+	if title != "" {
+		t.Fatalf("issue title = %q, want empty", title)
+	}
+	if description != "Investigate raw payload" {
+		t.Fatalf("issue description = %q", description)
+	}
+
+	runs, err := testHandler.Queries.ListRoutineRuns(ctx, db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns: %v", err)
+	}
+	if len(runs) == 0 || runs[0].Status != "processed" {
+		t.Fatalf("expected processed routine run, got %+v", runs)
+	}
+	var storedPayload map[string]any
+	if err := json.Unmarshal(runs[0].Payload, &storedPayload); err != nil {
+		t.Fatalf("unmarshal run payload: %v", err)
+	}
+	deployment, ok := storedPayload["deployment"].(map[string]any)
+	if !ok || deployment["service"] != "api" {
+		t.Fatalf("stored payload missing deployment.service: %#v", storedPayload)
+	}
+
+	var taskContext []byte
+	if err := testPool.QueryRow(ctx, `
+		SELECT context FROM agent_task_queue
+		WHERE issue_id = $1
+		ORDER BY created_at DESC LIMIT 1
+	`, issueID).Scan(&taskContext); err != nil {
+		t.Fatalf("query task context: %v", err)
+	}
+	var contextData map[string]any
+	if err := json.Unmarshal(taskContext, &contextData); err != nil {
+		t.Fatalf("unmarshal task context: %v", err)
+	}
+	routineEvent, ok := contextData["routine_event"].(map[string]any)
+	if !ok {
+		t.Fatalf("routine_event missing from task context: %#v", contextData)
+	}
+	if routineEvent["raw_payload"] != string(payload) {
+		t.Fatalf("raw_payload = %q, want %q", routineEvent["raw_payload"], string(payload))
+	}
+
+	arrayPayload := []byte(`[{"status":"failed"},{"status":"retrying"}]`)
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, bytes.NewReader(arrayPayload))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("array payload: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+	runs, err = testHandler.Queries.ListRoutineRuns(ctx, db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     1,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns after array payload: %v", err)
+	}
+	var storedArray []any
+	if len(runs) == 0 || json.Unmarshal(runs[0].Payload, &storedArray) != nil || len(storedArray) != 2 {
+		t.Fatalf("expected array payload in latest run, got %+v", runs)
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, bytes.NewBufferString(`{"event":`))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid JSON: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, strings.NewReader(`"`+strings.Repeat("x", 1<<20)+`"`))
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized JSON: expected 413, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -945,6 +1093,93 @@ func TestRoutineGitHubTriggerEvents(t *testing.T) {
 			t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
 		})
 	}
+}
+
+func TestRoutineGitHubTriggerConfigFiltersEventsBeforeActions(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	installationID := time.Now().UnixNano()
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET github_installation_id = $1 WHERE id = $2`, installationID, testWorkspaceID); err != nil {
+		t.Fatalf("set github installation: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `UPDATE workspace SET github_installation_id = NULL WHERE id = $1`, testWorkspaceID)
+	})
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine GitHub trigger config",
+		"instructions":  "Created from matching GitHub trigger",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "github",
+				"config": map[string]any{
+					"event_types": []string{"github.pull_request.closed"},
+					"filters": []map[string]any{
+						{
+							"field":    "is_merged",
+							"operator": "equals",
+							"value":    "true",
+						},
+					},
+				},
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	trigger, err := testHandler.Queries.GetRoutineTrigger(ctx, parseUUID(routine.Triggers[0].ID))
+	if err != nil {
+		t.Fatalf("GetRoutineTrigger: %v", err)
+	}
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "pull_request")
+
+	openedBody := []byte(`{"action":"opened","pull_request":{"number":1,"title":"Open target","merged":false,"html_url":"https://github.com/acme/widgets/pull/901","user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`)
+	received, ran := testHandler.ingestRoutineTriggers(ctx, []db.RoutineTrigger{trigger}, "github", openedBody, headers)
+	if received != 1 || ran != 0 {
+		t.Fatalf("opened PR received=%d ran=%d, want 1/0", received, ran)
+	}
+
+	mergedBody := []byte(`{"action":"closed","pull_request":{"number":2,"title":"Merge target","merged":true,"html_url":"https://github.com/acme/widgets/pull/902","user":{"login":"bob"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`)
+	received, ran = testHandler.ingestRoutineTriggers(ctx, []db.RoutineTrigger{trigger}, "github", mergedBody, headers)
+	if received != 1 || ran != 1 {
+		t.Fatalf("merged PR received=%d ran=%d, want 1/1", received, ran)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text FROM issue
+		WHERE workspace_id = $1 AND title = 'Merge target'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID); err != nil {
+		t.Fatalf("query merged issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
 }
 
 func TestManualTriggerRoutineCreatesIssue(t *testing.T) {

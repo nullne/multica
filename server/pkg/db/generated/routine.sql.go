@@ -618,6 +618,80 @@ func (q *Queries) GetRoutineInWorkspace(ctx context.Context, arg GetRoutineInWor
 	return i, err
 }
 
+const getRoutineOriginForIssue = `-- name: GetRoutineOriginForIssue :one
+SELECT
+    rr.issue_id,
+    rr.id AS run_id,
+    rr.routine_id,
+    r.name AS routine_name,
+    rr.trigger_id,
+    rt.trigger_type,
+    rt.source_type,
+    rt.token_prefix,
+    rt.schedule,
+    rt.timezone,
+    rt.run_at,
+    rr.action_id,
+    ra.action_type,
+    rr.event_type,
+    rr.created_at
+FROM routine_run rr
+JOIN routine r ON r.id = rr.routine_id
+LEFT JOIN routine_trigger rt ON rt.id = rr.trigger_id
+LEFT JOIN routine_action ra ON ra.id = rr.action_id
+WHERE rr.issue_id = $1
+  AND r.workspace_id = $2
+  AND rr.status = 'processed'
+ORDER BY rr.created_at ASC
+LIMIT 1
+`
+
+type GetRoutineOriginForIssueParams struct {
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type GetRoutineOriginForIssueRow struct {
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	RunID       pgtype.UUID        `json:"run_id"`
+	RoutineID   pgtype.UUID        `json:"routine_id"`
+	RoutineName string             `json:"routine_name"`
+	TriggerID   pgtype.UUID        `json:"trigger_id"`
+	TriggerType pgtype.Text        `json:"trigger_type"`
+	SourceType  pgtype.Text        `json:"source_type"`
+	TokenPrefix pgtype.Text        `json:"token_prefix"`
+	Schedule    pgtype.Text        `json:"schedule"`
+	Timezone    pgtype.Text        `json:"timezone"`
+	RunAt       pgtype.Timestamptz `json:"run_at"`
+	ActionID    pgtype.UUID        `json:"action_id"`
+	ActionType  pgtype.Text        `json:"action_type"`
+	EventType   string             `json:"event_type"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetRoutineOriginForIssue(ctx context.Context, arg GetRoutineOriginForIssueParams) (GetRoutineOriginForIssueRow, error) {
+	row := q.db.QueryRow(ctx, getRoutineOriginForIssue, arg.IssueID, arg.WorkspaceID)
+	var i GetRoutineOriginForIssueRow
+	err := row.Scan(
+		&i.IssueID,
+		&i.RunID,
+		&i.RoutineID,
+		&i.RoutineName,
+		&i.TriggerID,
+		&i.TriggerType,
+		&i.SourceType,
+		&i.TokenPrefix,
+		&i.Schedule,
+		&i.Timezone,
+		&i.RunAt,
+		&i.ActionID,
+		&i.ActionType,
+		&i.EventType,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getRoutineTrigger = `-- name: GetRoutineTrigger :one
 SELECT id, routine_id, trigger_type, source_type, token_hash, token_prefix, installation_id, schedule, timezone, run_at, next_run_at, last_triggered_at, dedup_window_seconds, max_runs, successful_runs_count, config, enabled, created_at, updated_at FROM routine_trigger
 WHERE id = $1
@@ -900,6 +974,92 @@ func (q *Queries) ListRoutineLabels(ctx context.Context, routineID pgtype.UUID) 
 	for rows.Next() {
 		var i RoutineLabel
 		if err := rows.Scan(&i.RoutineID, &i.LabelID, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoutineOriginsByIssues = `-- name: ListRoutineOriginsByIssues :many
+SELECT DISTINCT ON (rr.issue_id)
+    rr.issue_id,
+    rr.id AS run_id,
+    rr.routine_id,
+    r.name AS routine_name,
+    rr.trigger_id,
+    rt.trigger_type,
+    rt.source_type,
+    rt.token_prefix,
+    rt.schedule,
+    rt.timezone,
+    rt.run_at,
+    rr.action_id,
+    ra.action_type,
+    rr.event_type,
+    rr.created_at
+FROM routine_run rr
+JOIN routine r ON r.id = rr.routine_id
+LEFT JOIN routine_trigger rt ON rt.id = rr.trigger_id
+LEFT JOIN routine_action ra ON ra.id = rr.action_id
+WHERE rr.issue_id = ANY($1::uuid[])
+  AND r.workspace_id = $2
+  AND rr.status = 'processed'
+ORDER BY rr.issue_id, rr.created_at ASC
+`
+
+type ListRoutineOriginsByIssuesParams struct {
+	IssueIds    []pgtype.UUID `json:"issue_ids"`
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+}
+
+type ListRoutineOriginsByIssuesRow struct {
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	RunID       pgtype.UUID        `json:"run_id"`
+	RoutineID   pgtype.UUID        `json:"routine_id"`
+	RoutineName string             `json:"routine_name"`
+	TriggerID   pgtype.UUID        `json:"trigger_id"`
+	TriggerType pgtype.Text        `json:"trigger_type"`
+	SourceType  pgtype.Text        `json:"source_type"`
+	TokenPrefix pgtype.Text        `json:"token_prefix"`
+	Schedule    pgtype.Text        `json:"schedule"`
+	Timezone    pgtype.Text        `json:"timezone"`
+	RunAt       pgtype.Timestamptz `json:"run_at"`
+	ActionID    pgtype.UUID        `json:"action_id"`
+	ActionType  pgtype.Text        `json:"action_type"`
+	EventType   string             `json:"event_type"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListRoutineOriginsByIssues(ctx context.Context, arg ListRoutineOriginsByIssuesParams) ([]ListRoutineOriginsByIssuesRow, error) {
+	rows, err := q.db.Query(ctx, listRoutineOriginsByIssues, arg.IssueIds, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRoutineOriginsByIssuesRow{}
+	for rows.Next() {
+		var i ListRoutineOriginsByIssuesRow
+		if err := rows.Scan(
+			&i.IssueID,
+			&i.RunID,
+			&i.RoutineID,
+			&i.RoutineName,
+			&i.TriggerID,
+			&i.TriggerType,
+			&i.SourceType,
+			&i.TokenPrefix,
+			&i.Schedule,
+			&i.Timezone,
+			&i.RunAt,
+			&i.ActionID,
+			&i.ActionType,
+			&i.EventType,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

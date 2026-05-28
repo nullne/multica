@@ -40,3 +40,35 @@ func TestStandardAdapterPromotesSourceFields(t *testing.T) {
 		}
 	}
 }
+
+func TestStandardAdapterAcceptsArbitraryJSON(t *testing.T) {
+	adapter := &standardAdapter{}
+	payload := json.RawMessage(`[
+		{"event": "deploy", "status": "failed"},
+		{"event": "rollback", "status": "started"}
+	]`)
+	events, err := adapter.Parse(payload, nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.Type != "custom" {
+		t.Fatalf("event type = %q, want custom", event.Type)
+	}
+	if string(event.RawPayload) != string(payload) {
+		t.Fatalf("raw payload = %s, want %s", event.RawPayload, payload)
+	}
+	if event.Data["raw_payload"] != string(payload) {
+		t.Fatalf("raw_payload data = %q", event.Data["raw_payload"])
+	}
+}
+
+func TestStandardAdapterRequiresValidJSON(t *testing.T) {
+	adapter := &standardAdapter{}
+	if _, err := adapter.Parse(json.RawMessage(`{"event":`), nil); err == nil {
+		t.Fatal("expected invalid JSON to be rejected")
+	}
+}

@@ -49,6 +49,23 @@ export interface IssueLink {
   created_at: string;
 }
 
+export interface RoutineOrigin {
+  run_id: string;
+  routine_id: string;
+  routine_name: string;
+  trigger_id: string | null;
+  trigger_type: "schedule" | "api" | "github" | string | null;
+  source_type: string | null;
+  token_prefix: string | null;
+  schedule: string | null;
+  timezone: string | null;
+  run_at: string | null;
+  action_id: string | null;
+  action_type: string | null;
+  event_type: string;
+  triggered_at: string;
+}
+
 export interface Issue {
   id: string;
   workspace_id: string;
@@ -75,6 +92,7 @@ export interface Issue {
   github_auto_fix_enabled: boolean;
   labels: Label[];
   links?: IssueLink[];
+  routine_origin?: RoutineOrigin;
   reactions?: IssueReaction[];
   created_at: string;
   updated_at: string;
