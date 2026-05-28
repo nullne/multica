@@ -274,6 +274,50 @@ func TestActionMatchesFilters_LabeledRequiresExplicitGitHubLabels(t *testing.T) 
 	}
 }
 
+func TestRoutineTriggerMatchesEvent_UsesTriggerConfig(t *testing.T) {
+	trigger := db.RoutineTrigger{
+		TriggerType: "github",
+		Config: mustJSON(map[string]any{
+			"event_types": []string{"github.pull_request.opened"},
+		}),
+	}
+
+	if !routineTriggerMatchesEvent(trigger, wh.Event{Type: "github.pull_request.opened", Data: map[string]string{"repo": "acme/widgets"}}) {
+		t.Error("matching trigger event_type should accept event")
+	}
+	if routineTriggerMatchesEvent(trigger, wh.Event{Type: "github.issues.opened", Data: map[string]string{"repo": "acme/widgets"}}) {
+		t.Error("non-matching trigger event_type should reject event")
+	}
+}
+
+func TestRoutineTriggerMatchesEvent_PRMergedPreset(t *testing.T) {
+	trigger := db.RoutineTrigger{
+		TriggerType: "github",
+		Config: mustJSON(map[string]any{
+			"event_types": []string{"github.pull_request.closed"},
+			"filters": []map[string]string{
+				{"field": "is_merged", "operator": "equals", "value": "true"},
+			},
+		}),
+	}
+
+	merged := wh.Event{
+		Type: "github.pull_request.merged",
+		Data: map[string]string{"repo": "acme/widgets", "action": "merged", "is_merged": "true"},
+	}
+	if !routineTriggerMatchesEvent(trigger, merged) {
+		t.Error("closed + is_merged=true trigger should accept normalized merged PR event")
+	}
+
+	closedWithoutMerge := wh.Event{
+		Type: "github.pull_request.closed",
+		Data: map[string]string{"repo": "acme/widgets", "action": "closed", "is_merged": "false"},
+	}
+	if routineTriggerMatchesEvent(trigger, closedWithoutMerge) {
+		t.Error("closed + is_merged=true trigger should reject unmerged closed PR event")
+	}
+}
+
 func TestValidateActionConfig_CommentIssueRequiresBot(t *testing.T) {
 	webhookNoBot := db.Webhook{}
 	cfg := CommentIssueActionConfig{ContentTemplate: "{{.body}}"}

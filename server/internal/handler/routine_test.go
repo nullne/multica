@@ -947,6 +947,93 @@ func TestRoutineGitHubTriggerEvents(t *testing.T) {
 	}
 }
 
+func TestRoutineGitHubTriggerConfigFiltersEventsBeforeActions(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	installationID := time.Now().UnixNano()
+	if _, err := testPool.Exec(ctx, `UPDATE workspace SET github_installation_id = $1 WHERE id = $2`, installationID, testWorkspaceID); err != nil {
+		t.Fatalf("set github installation: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `UPDATE workspace SET github_installation_id = NULL WHERE id = $1`, testWorkspaceID)
+	})
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine GitHub trigger config",
+		"instructions":  "Created from matching GitHub trigger",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "github",
+				"config": map[string]any{
+					"event_types": []string{"github.pull_request.closed"},
+					"filters": []map[string]any{
+						{
+							"field":    "is_merged",
+							"operator": "equals",
+							"value":    "true",
+						},
+					},
+				},
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	trigger, err := testHandler.Queries.GetRoutineTrigger(ctx, parseUUID(routine.Triggers[0].ID))
+	if err != nil {
+		t.Fatalf("GetRoutineTrigger: %v", err)
+	}
+	headers := http.Header{}
+	headers.Set("X-GitHub-Event", "pull_request")
+
+	openedBody := []byte(`{"action":"opened","pull_request":{"number":1,"title":"Open target","merged":false,"html_url":"https://github.com/acme/widgets/pull/901","user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`)
+	received, ran := testHandler.ingestRoutineTriggers(ctx, []db.RoutineTrigger{trigger}, "github", openedBody, headers)
+	if received != 1 || ran != 0 {
+		t.Fatalf("opened PR received=%d ran=%d, want 1/0", received, ran)
+	}
+
+	mergedBody := []byte(`{"action":"closed","pull_request":{"number":2,"title":"Merge target","merged":true,"html_url":"https://github.com/acme/widgets/pull/902","user":{"login":"bob"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`)
+	received, ran = testHandler.ingestRoutineTriggers(ctx, []db.RoutineTrigger{trigger}, "github", mergedBody, headers)
+	if received != 1 || ran != 1 {
+		t.Fatalf("merged PR received=%d ran=%d, want 1/1", received, ran)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text FROM issue
+		WHERE workspace_id = $1 AND title = 'Merge target'
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID).Scan(&issueID); err != nil {
+		t.Fatalf("query merged issue: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+}
+
 func TestManualTriggerRoutineCreatesIssue(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")
