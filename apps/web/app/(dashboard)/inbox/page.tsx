@@ -8,6 +8,7 @@ import { IssueDetail, StatusIcon, PriorityIcon } from "@/features/issues/compone
 import { STATUS_CONFIG, PRIORITY_CONFIG } from "@/features/issues/config";
 import { useActorName } from "@/features/workspace";
 import { ActorAvatar } from "@/components/common/actor-avatar";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import { toast } from "sonner";
 import {
   ArrowRight,
@@ -69,14 +70,6 @@ function timeAgo(dateStr: string): string {
   return `${days}d`;
 }
 
-function shortDate(dateStr: string): string {
-  if (!dateStr) return "";
-  return new Date(dateStr).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
-
 // ---------------------------------------------------------------------------
 // InboxDetailLabel — renders rich subtitle per notification type
 // ---------------------------------------------------------------------------
@@ -123,7 +116,7 @@ function InboxDetailLabel({ item }: { item: InboxItem }) {
       return <span>{typeLabels[item.type]}</span>;
     }
     case "due_date_changed": {
-      if (details.to) return <span>Set due date to {shortDate(details.to)}</span>;
+      if (details.to) return <span>Set due date to <AbsoluteTime value={details.to} style="shortDate" /></span>;
       return <span>Removed due date</span>;
     }
     case "new_comment": {

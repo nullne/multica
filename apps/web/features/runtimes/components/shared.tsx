@@ -1,5 +1,6 @@
 import { Monitor, Cloud, Wifi, WifiOff, RefreshCw, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import type { ReactNode } from "react";
 import type { ProviderAuthStatus } from "@/shared/types";
 
 export function RuntimeModeIcon({ mode }: { mode: string }) {
@@ -41,7 +42,7 @@ export function InfoField({
   mono,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   mono?: boolean;
 }) {
   return (

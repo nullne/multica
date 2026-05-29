@@ -3,6 +3,7 @@
 import { memo } from "react";
 import Link from "next/link";
 import type { Issue } from "@/shared/types";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { useIssueStore } from "@/features/issues/store";
@@ -11,13 +12,6 @@ import { issueUrl } from "@/features/issues/utils/url";
 import { PriorityIcon } from "./priority-icon";
 import { AgentDispatchBadge } from "./agent-dispatch-badge";
 import { RunningIndicatorRing } from "./running-indicator-ring";
-
-function formatDate(date: string): string {
-  return new Date(date).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
 
 export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
   const selected = useIssueSelectionStore((s) => s.selectedIds.has(issue.id));
@@ -91,9 +85,11 @@ export const ListRow = memo(function ListRow({ issue }: { issue: Issue }) {
           </span>
         )}
         {issue.due_date && (
-          <span className="hidden sm:inline shrink-0 text-xs text-muted-foreground">
-            {formatDate(issue.due_date)}
-          </span>
+          <AbsoluteTime
+            value={issue.due_date}
+            style="shortDate"
+            className="hidden sm:inline shrink-0 text-xs text-muted-foreground"
+          />
         )}
         {issue.assignee_type && issue.assignee_id && (
           issue.assignee_type === "agent" ? (

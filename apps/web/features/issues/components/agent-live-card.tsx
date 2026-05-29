@@ -26,6 +26,7 @@ import type { AgentTask } from "@/shared/types/agent";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import { useActorName } from "@/features/workspace";
 import { useRuntimeStore } from "@/features/runtimes";
 import { redactSecrets } from "../utils/redact";
@@ -308,12 +309,7 @@ export function TaskRunCard({ task, fallbackAgentName }: TaskRunCardProps) {
               <span className="flex items-center gap-1.5 text-xs min-w-0">
                 <span className="font-medium shrink-0">{agentLabel}</span>
                 <span className="text-muted-foreground shrink-0">
-                  {new Date(task.created_at).toLocaleString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  <AbsoluteTime value={task.created_at} style="shortDateTime" />
                 </span>
                 {duration && (
                   <span className="text-muted-foreground shrink-0">· {duration}</span>

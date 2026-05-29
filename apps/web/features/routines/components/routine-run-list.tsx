@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { StatusIcon, RunningIndicatorRing } from "@/features/issues/components";
 import { issueUrl } from "@/features/issues/utils/url";
@@ -77,10 +78,10 @@ function RoutineRunRow({ run }: { run: RoutineRun }) {
         <RoutineRunStatusIcon run={run} />
         <span className="min-w-0">
           <span className="block truncate text-sm font-medium">
-            {run.issue?.title ?? formatDateTime(run.created_at)}
+            {run.issue?.title ?? <AbsoluteTime value={run.created_at} style="shortDateTime" />}
           </span>
           <span className="block truncate text-xs text-muted-foreground">
-            {formatRunSubtitle(run)}
+            <RunSubtitle run={run} />
           </span>
         </span>
       </span>
@@ -151,11 +152,15 @@ function getRoutineRunSource(run: RoutineRun): { filter: Exclude<RoutineRunFilte
   return { filter: "api", label: "API", tooltipTitle: "API call payload" };
 }
 
-function formatRunSubtitle(run: RoutineRun): string {
-  const parts = run.issue ? [run.issue.identifier, formatDateTime(run.created_at)] : [run.event_type || "routine"];
+function RunSubtitle({ run }: { run: RoutineRun }) {
   const eventLabel = formatWebhookEventLabel(run.event_type);
-  if (eventLabel) parts.push(eventLabel);
-  return parts.join(" · ");
+  if (!run.issue) return <>{eventLabel ? `${run.event_type || "routine"} · ${eventLabel}` : run.event_type || "routine"}</>;
+  return (
+    <>
+      {run.issue.identifier} · <AbsoluteTime value={run.created_at} style="shortDateTime" />
+      {eventLabel ? ` · ${eventLabel}` : null}
+    </>
+  );
 }
 
 function formatWebhookEventLabel(eventType: string): string | null {
@@ -178,15 +183,4 @@ function formatRunPayload(payload: unknown): string {
   } catch {
     return String(payload);
   }
-}
-
-function formatDateTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
