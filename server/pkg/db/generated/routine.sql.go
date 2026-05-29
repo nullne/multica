@@ -1073,6 +1073,13 @@ func (q *Queries) ListRoutineOriginsByIssues(ctx context.Context, arg ListRoutin
 const listRoutineRuns = `-- name: ListRoutineRuns :many
 SELECT id, routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id, comment_id, error_message, created_at FROM routine_run
 WHERE routine_id = $1
+  AND (
+    $4::text = ''
+    OR ($4::text = 'scheduled' AND event_type = 'schedule')
+    OR ($4::text = 'manual' AND event_type = 'manual')
+    OR ($4::text = 'webhook' AND (event_type LIKE 'github.%' OR event_type LIKE 'alert.%'))
+    OR ($4::text = 'api' AND event_type <> 'schedule' AND event_type <> 'manual' AND event_type NOT LIKE 'github.%' AND event_type NOT LIKE 'alert.%')
+  )
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
 `
@@ -1081,10 +1088,16 @@ type ListRoutineRunsParams struct {
 	RoutineID pgtype.UUID `json:"routine_id"`
 	Limit     int32       `json:"limit"`
 	Offset    int32       `json:"offset"`
+	Source    string      `json:"source"`
 }
 
 func (q *Queries) ListRoutineRuns(ctx context.Context, arg ListRoutineRunsParams) ([]RoutineRun, error) {
-	rows, err := q.db.Query(ctx, listRoutineRuns, arg.RoutineID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listRoutineRuns,
+		arg.RoutineID,
+		arg.Limit,
+		arg.Offset,
+		arg.Source,
+	)
 	if err != nil {
 		return nil, err
 	}

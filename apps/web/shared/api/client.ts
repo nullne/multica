@@ -50,6 +50,7 @@ import type {
   CreateRoutineRequest,
   UpdateRoutineRequest,
   RoutineRun,
+  ListRoutineRunsParams,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
 
@@ -879,7 +880,12 @@ export class ApiClient {
     });
   }
 
-  async listRoutineRuns(id: string): Promise<RoutineRun[]> {
-    return this.fetch(`/api/routines/${id}/runs`);
+  async listRoutineRuns(id: string, params?: ListRoutineRunsParams): Promise<RoutineRun[]> {
+    const search = new URLSearchParams();
+    if (params?.limit) search.set("limit", String(params.limit));
+    if (params?.offset) search.set("offset", String(params.offset));
+    if (params?.source) search.set("source", params.source);
+    const query = search.toString();
+    return this.fetch(`/api/routines/${id}/runs${query ? `?${query}` : ""}`);
   }
 }

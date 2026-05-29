@@ -1,14 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { StatusIcon, RunningIndicatorRing } from "@/features/issues/components";
 import { issueUrl } from "@/features/issues/utils/url";
 import { useWorkspaceStore } from "@/features/workspace";
-import type { IssueStatus, RoutineRun } from "@/shared/types";
+import { Loader2 } from "lucide-react";
+import type { IssueStatus, RoutineRun, RoutineRunSource } from "@/shared/types";
 
-type RoutineRunFilter = "all" | "scheduled" | "manual" | "api" | "webhook";
+export type RoutineRunFilter = "all" | RoutineRunSource;
 
 const RUN_FILTERS: { value: RoutineRunFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -25,13 +26,23 @@ const RUN_STATUS_TO_ISSUE_STATUS: Record<RoutineRun["status"], IssueStatus> = {
   error: "blocked",
 };
 
-export function RoutineRunList({ runs }: { runs: RoutineRun[] }) {
-  const [filter, setFilter] = useState<RoutineRunFilter>("all");
-  const visibleRuns = useMemo(
-    () => runs.filter((run) => filter === "all" || getRoutineRunSource(run).filter === filter),
-    [filter, runs],
-  );
-
+export function RoutineRunList({
+  runs,
+  filter,
+  onFilterChange,
+  hasMore,
+  loading,
+  loadingMore,
+  onLoadMore,
+}: {
+  runs: RoutineRun[];
+  filter: RoutineRunFilter;
+  onFilterChange: (filter: RoutineRunFilter) => void;
+  hasMore: boolean;
+  loading: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
   return (
     <section className="space-y-3">
       <div>
@@ -46,22 +57,34 @@ export function RoutineRunList({ runs }: { runs: RoutineRun[] }) {
             key={option.value}
             type="button"
             aria-pressed={filter === option.value}
-            onClick={() => setFilter(option.value)}
+            onClick={() => onFilterChange(option.value)}
             className="rounded-lg px-2.5 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
           >
             {option.label}
           </button>
         ))}
       </div>
-      {visibleRuns.length === 0 ? (
+      {loading ? (
+        <div className="rounded-xl border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
+          Loading runs...
+        </div>
+      ) : runs.length === 0 ? (
         <div className="rounded-xl border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
           No runs found
         </div>
       ) : (
         <div className="space-y-2">
-          {visibleRuns.map((run) => (
+          {runs.map((run) => (
             <RoutineRunRow key={run.id} run={run} />
           ))}
+        </div>
+      )}
+      {hasMore && (
+        <div className="flex justify-center">
+          <Button type="button" variant="outline" onClick={onLoadMore} disabled={loadingMore}>
+            {loadingMore && <Loader2 className="size-4 animate-spin" />}
+            Load more
+          </Button>
         </div>
       )}
     </section>

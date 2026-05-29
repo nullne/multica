@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -541,10 +542,37 @@ func (h *Handler) ListRoutineRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "routine not found")
 		return
 	}
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		v, err := strconv.Atoi(l)
+		if err != nil || v <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit parameter")
+			return
+		}
+		limit = v
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := 0
+	if o := r.URL.Query().Get("offset"); o != "" {
+		v, err := strconv.Atoi(o)
+		if err != nil || v < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset parameter")
+			return
+		}
+		offset = v
+	}
+	source := r.URL.Query().Get("source")
+	if !isRoutineRunSource(source) {
+		writeError(w, http.StatusBadRequest, "invalid source parameter")
+		return
+	}
 	runs, err := h.Queries.ListRoutineRuns(r.Context(), db.ListRoutineRunsParams{
 		RoutineID: id,
-		Limit:     100,
-		Offset:    0,
+		Limit:     int32(limit),
+		Offset:    int32(offset),
+		Source:    source,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list routine runs")
@@ -563,6 +591,15 @@ func (h *Handler) ListRoutineRuns(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, row)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func isRoutineRunSource(source string) bool {
+	switch source {
+	case "", "scheduled", "manual", "api", "webhook":
+		return true
+	default:
+		return false
+	}
 }
 
 func routineRunToResponse(run db.RoutineRun) RoutineRunResponse {

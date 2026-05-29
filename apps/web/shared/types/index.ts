@@ -47,6 +47,8 @@ export type {
   RoutineActionType,
   RoutineRun,
   RoutineRunStatus,
+  RoutineRunSource,
+  ListRoutineRunsParams,
   CreateRoutineRequest,
   UpdateRoutineRequest,
   RoutineTriggerRequest,

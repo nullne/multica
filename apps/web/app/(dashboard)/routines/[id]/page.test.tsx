@@ -301,7 +301,7 @@ describe("RoutineDetailPage", () => {
       label_ids: [],
       enabled: true,
     });
-    mocks.api.listRoutineRuns.mockResolvedValue([
+    const runs = [
       makeRun({ id: "run-schedule", event_type: "schedule", issue_id: "issue-1", title: "Scheduled issue" }),
       makeRun({ id: "run-manual", event_type: "manual", issue_id: "issue-2", title: "Manual issue" }),
       makeRun({ id: "run-api", event_type: "custom", issue_id: "issue-3", title: "API issue" }),
@@ -316,7 +316,13 @@ describe("RoutineDetailPage", () => {
           pull_request: { number: 42, title: "Add webhook details" },
         },
       }),
-    ]);
+    ];
+    mocks.api.listRoutineRuns.mockImplementation((_id: string, params?: { source?: string }) => {
+      if (params?.source === "manual") {
+        return Promise.resolve(runs.filter((run) => run.event_type === "manual"));
+      }
+      return Promise.resolve(runs);
+    });
 
     render(<RoutineViewPage routineID="routine-1" />);
 
@@ -336,6 +342,52 @@ describe("RoutineDetailPage", () => {
     expect(screen.getByText("Manual issue")).toBeInTheDocument();
     expect(screen.queryByText("API issue")).not.toBeInTheDocument();
     expect(screen.queryByText("Webhook issue")).not.toBeInTheDocument();
+    expect(mocks.api.listRoutineRuns).toHaveBeenLastCalledWith("routine-1", {
+      limit: 50,
+      source: "manual",
+    });
+  });
+
+  it("loads additional routine run pages", async () => {
+    const user = userEvent.setup();
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Daily code review",
+      priority: "medium",
+      assignee_id: null,
+      assignee_type: null,
+      triggers: [{ id: "trigger-1" }],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+    });
+    mocks.api.listRoutineRuns
+      .mockResolvedValueOnce(Array.from({ length: 50 }, (_, index) => (
+        makeRun({
+          id: `run-${index + 1}`,
+          event_type: "schedule",
+          issue_id: `issue-${index + 1}`,
+          title: `Run ${index + 1}`,
+        })
+      )))
+      .mockResolvedValueOnce([
+        makeRun({ id: "run-51", event_type: "schedule", issue_id: "issue-51", title: "Run 51" }),
+      ]);
+
+    render(<RoutineViewPage routineID="routine-1" />);
+
+    expect(await screen.findByText("Run 1")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+
+    expect(await screen.findByText("Run 51")).toBeInTheDocument();
+    expect(mocks.api.listRoutineRuns).toHaveBeenLastCalledWith("routine-1", {
+      limit: 50,
+      offset: 50,
+      source: undefined,
+    });
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
   it("can manually trigger a routine and refresh runs", async () => {
