@@ -46,6 +46,10 @@ if (typeof window !== "undefined") {
   if (token) {
     api.setToken(token);
   }
+  const refreshToken = localStorage.getItem("multica_refresh_token");
+  if (refreshToken) {
+    api.setRefreshToken(refreshToken);
+  }
   const wsId = localStorage.getItem("multica_workspace_id");
   if (wsId) {
     api.setWorkspaceId(wsId);
