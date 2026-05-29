@@ -1164,6 +1164,17 @@ func TestRoutineGitHubTriggerConfigFiltersEventsBeforeActions(t *testing.T) {
 	if received != 1 || ran != 0 {
 		t.Fatalf("opened PR received=%d ran=%d, want 1/0", received, ran)
 	}
+	runs, err := testHandler.Queries.ListRoutineRuns(ctx, db.ListRoutineRunsParams{
+		RoutineID: parseUUID(routine.ID),
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListRoutineRuns after unmatched trigger event: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("unmatched trigger event should not create routine runs, got %+v", runs)
+	}
 
 	mergedBody := []byte(`{"action":"closed","pull_request":{"number":2,"title":"Merge target","merged":true,"html_url":"https://github.com/acme/widgets/pull/902","user":{"login":"bob"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`)
 	received, ran = testHandler.ingestRoutineTriggers(ctx, []db.RoutineTrigger{trigger}, "github", mergedBody, headers)
