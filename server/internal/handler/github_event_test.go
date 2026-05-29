@@ -290,15 +290,15 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 		t.Fatalf("expected same PR URL to be linked to two issues, got %d links", enabledLinkCount)
 	}
 
-	sendComment := func(prURL string, bodyText string) {
+	sendComment := func(prURL string, commentURL string, bodyText string) {
 		t.Helper()
 		body := []byte(fmt.Sprintf(`{
 			"action":"created",
 			"installation":{"id":%d},
-			"comment":{"body":%q,"html_url":"%s#issuecomment-1","user":{"login":"reviewer"}},
+			"comment":{"body":%q,"html_url":%q,"user":{"login":"reviewer"}},
 			"issue":{"number":123,"title":"Review feedback","html_url":%q,"pull_request":{"html_url":%q}},
 			"repository":{"full_name":"acme/widgets"}
-		}`, installationID, bodyText, prURL, prURL, prURL))
+		}`, installationID, bodyText, commentURL, prURL, prURL))
 		req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
 		req.Header.Set("X-GitHub-Event", "issue_comment")
 		req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
@@ -309,8 +309,9 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 		}
 	}
 
-	sendComment(enabledPR, "Please fix the failing assertion")
-	sendComment(disabledPR, "This should not notify the issue")
+	sendComment(enabledPR, enabledPR+"#issuecomment-1", "Please fix the failing assertion")
+	sendComment(enabledPR, enabledPR+"#issuecomment-2", "Please update the tooltip copy")
+	sendComment(disabledPR, disabledPR+"#issuecomment-1", "This should not notify the issue")
 	sendReviewComment := func(prURL string, bodyText string) {
 		t.Helper()
 		body := []byte(fmt.Sprintf(`{
@@ -335,7 +336,8 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 	if err := testPool.QueryRow(ctx, `
 		SELECT id::text, content FROM comment
 		WHERE issue_id = $1 AND author_id = $2 AND author_type = 'member'
-		ORDER BY created_at DESC LIMIT 1
+		  AND content LIKE '%Please fix the failing assertion%'
+		ORDER BY created_at ASC LIMIT 1
 	`, enabledIssueID, botID).Scan(&enabledCommentID, &enabledContent); err != nil {
 		t.Fatalf("expected bot comment on enabled issue: %v", err)
 	}
@@ -353,15 +355,33 @@ func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 	if enabledTasks != 1 {
 		t.Fatalf("expected bot comment to enqueue one assignee task, got %d", enabledTasks)
 	}
+	var enabledCommentMentions int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM comment
+		WHERE issue_id = $1 AND author_id = $2
+		  AND (
+		    content LIKE '%Please fix the failing assertion%'
+		    OR content LIKE '%Please update the tooltip copy%'
+		  )
+	`, enabledIssueID, botID).Scan(&enabledCommentMentions); err != nil {
+		t.Fatalf("count enabled issue comment syncs: %v", err)
+	}
+	if enabledCommentMentions != 2 {
+		t.Fatalf("expected two distinct PR comments to sync to enabled issue, got %d", enabledCommentMentions)
+	}
 	var secondEnabledComments int
 	if err := testPool.QueryRow(ctx, `
 		SELECT count(*) FROM comment
-		WHERE issue_id = $1 AND author_id = $2 AND content LIKE '%Please fix the failing assertion%'
+		WHERE issue_id = $1 AND author_id = $2
+		  AND (
+		    content LIKE '%Please fix the failing assertion%'
+		    OR content LIKE '%Please update the tooltip copy%'
+		  )
 	`, enabledIssueID2, botID).Scan(&secondEnabledComments); err != nil {
 		t.Fatalf("count second enabled comments: %v", err)
 	}
-	if secondEnabledComments != 1 {
-		t.Fatalf("expected same PR comment to notify second linked issue, got %d comments", secondEnabledComments)
+	if secondEnabledComments != 2 {
+		t.Fatalf("expected both PR comments to notify second linked issue, got %d comments", secondEnabledComments)
 	}
 	sendReviewComment(enabledPR, "Inline review feedback")
 
