@@ -67,6 +67,7 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1142,6 +1143,22 @@ function TriggersTab({
 // Tasks Tab
 // ---------------------------------------------------------------------------
 
+function AgentTaskTime({ task, isRunning }: { task: AgentTask; isRunning: boolean }) {
+  if (isRunning && task.started_at) {
+    return <>Started <AbsoluteTime value={task.started_at} style="localeDateTime" /></>;
+  }
+  if (task.status === "dispatched" && task.dispatched_at) {
+    return <>Dispatched <AbsoluteTime value={task.dispatched_at} style="localeDateTime" /></>;
+  }
+  if (task.status === "completed" && task.completed_at) {
+    return <>Completed <AbsoluteTime value={task.completed_at} style="localeDateTime" /></>;
+  }
+  if (task.status === "failed" && task.completed_at) {
+    return <>Failed <AbsoluteTime value={task.completed_at} style="localeDateTime" /></>;
+  }
+  return <>Queued <AbsoluteTime value={task.created_at} style="localeDateTime" /></>;
+}
+
 function TasksTab({ agent }: { agent: Agent }) {
   const [tasks, setTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1242,15 +1259,7 @@ function TasksTab({ agent }: { agent: Agent }) {
                     </span>
                   </div>
                   <div className="text-xs text-muted-foreground mt-0.5">
-                    {isRunning && task.started_at
-                      ? `Started ${new Date(task.started_at).toLocaleString()}`
-                      : task.status === "dispatched" && task.dispatched_at
-                        ? `Dispatched ${new Date(task.dispatched_at).toLocaleString()}`
-                        : task.status === "completed" && task.completed_at
-                          ? `Completed ${new Date(task.completed_at).toLocaleString()}`
-                          : task.status === "failed" && task.completed_at
-                            ? `Failed ${new Date(task.completed_at).toLocaleString()}`
-                            : `Queued ${new Date(task.created_at).toLocaleString()}`}
+                    <AgentTaskTime task={task} isRunning={isRunning} />
                   </div>
                 </div>
                 <span className={`shrink-0 text-xs font-medium ${config.color}`}>

@@ -7,6 +7,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { toast } from "sonner";
 import type { Issue, UpdateIssueRequest } from "@/shared/types";
 import { CalendarDays } from "lucide-react";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { api } from "@/shared/api";
 import { useIssueStore } from "@/features/issues/store";
@@ -21,13 +22,6 @@ import { PriorityPicker, AssigneePicker, DueDatePicker } from "./pickers";
 import { PRIORITY_CONFIG } from "@/features/issues/config";
 import type { CardProperties } from "@/features/issues/stores/view-store";
 import { useViewStore } from "@/features/issues/stores/view-store-context";
-
-function formatDate(date: string): string {
-  return new Date(date).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
 
 /** Stops event from bubbling to Link/drag handlers */
 function PickerWrapper({ children }: { children: React.ReactNode }) {
@@ -198,7 +192,7 @@ export const BoardCardContent = memo(function BoardCardContent({
                         }`}
                       >
                         <CalendarDays className="size-3" />
-                        {formatDate(issue.due_date!)}
+                        <AbsoluteTime value={issue.due_date} style="shortDate" />
                       </span>
                     }
                   />
@@ -212,7 +206,7 @@ export const BoardCardContent = memo(function BoardCardContent({
                   }`}
                 >
                   <CalendarDays className="size-3" />
-                  {formatDate(issue.due_date!)}
+                  <AbsoluteTime value={issue.due_date} style="shortDate" />
                 </span>
               )}
             </div>

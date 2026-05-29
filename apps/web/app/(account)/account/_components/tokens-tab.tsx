@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Key, Trash2, Copy, Check } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import type { PersonalAccessToken } from "@/shared/types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -154,8 +155,15 @@ export function TokensTab() {
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium truncate">{t.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {t.token_prefix}... · Created {new Date(t.created_at).toLocaleDateString()} · {t.last_used_at ? `Last used ${new Date(t.last_used_at).toLocaleDateString()}` : "Never used"}
-                      {t.expires_at && ` · Expires ${new Date(t.expires_at).toLocaleDateString()}`}
+                      {t.token_prefix}... · Created <AbsoluteTime value={t.created_at} style="localeDate" /> ·{" "}
+                      {t.last_used_at ? (
+                        <>Last used <AbsoluteTime value={t.last_used_at} style="localeDate" /></>
+                      ) : (
+                        "Never used"
+                      )}
+                      {t.expires_at && (
+                        <> · Expires <AbsoluteTime value={t.expires_at} style="localeDate" /></>
+                      )}
                     </div>
                   </div>
                   <Tooltip>

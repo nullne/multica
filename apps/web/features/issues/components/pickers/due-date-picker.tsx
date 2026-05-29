@@ -10,6 +10,7 @@ import {
   PopoverContent,
 } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { formatAbsoluteTime } from "@/shared/utils";
 
 export function DueDatePicker({
   dueDate,
@@ -32,7 +33,7 @@ export function DueDatePicker({
             <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
             {date ? (
               <span className={isOverdue ? "text-destructive" : ""}>
-                {date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                {formatAbsoluteTime(dueDate, "shortDate")}
               </span>
             ) : (
               <span className="text-muted-foreground">Due date</span>

@@ -3,6 +3,7 @@ import { Monitor, Archive, ArchiveRestore, MoreHorizontal, Terminal, Search, Use
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import {
   Dialog,
   DialogContent,
@@ -359,11 +360,11 @@ export function DaemonDetail({
         <div className="grid grid-cols-2 gap-4 border-t pt-4">
           <InfoField
             label="Registered"
-            value={new Date(daemon.created_at).toLocaleString()}
+            value={<AbsoluteTime value={daemon.created_at} style="localeDateTime" />}
           />
           <InfoField
             label="Updated"
-            value={new Date(daemon.updated_at).toLocaleString()}
+            value={<AbsoluteTime value={daemon.updated_at} style="localeDateTime" />}
           />
         </div>
       </div>
