@@ -86,6 +86,10 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	// Dev-only auth bypass — gated by DEV_AUTH_BYPASS env flag inside the
 	// handler so the route is inert in production.
 	r.Post("/auth/dev", h.LoginDev)
+	// Refresh/logout authenticate via the refresh token in the body, not the
+	// (possibly expired) access token, so they stay public.
+	r.Post("/auth/refresh", h.Refresh)
+	r.Post("/auth/logout", h.Logout)
 
 	// Public webhook ingest. Routine triggers use bearer tokens; GitHub uses HMAC.
 	r.Post("/api/webhook/github", h.ReceiveGitHubEvent)

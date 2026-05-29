@@ -7,9 +7,17 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 )
 
 const defaultJWTSecret = "multica-dev-secret-change-in-production"
+
+// Token lifetimes. The access token (JWT) is short-lived; clients silently
+// exchange a long-lived refresh token for a fresh access token via /auth/refresh.
+const (
+	AccessTokenTTL  = 24 * time.Hour
+	RefreshTokenTTL = 60 * 24 * time.Hour
+)
 
 var (
 	jwtSecret     []byte
@@ -35,6 +43,17 @@ func GeneratePATToken() (string, error) {
 		return "", fmt.Errorf("generate PAT token: %w", err)
 	}
 	return "mul_" + hex.EncodeToString(b), nil
+}
+
+// GenerateRefreshToken creates a new opaque refresh token: "mrt_" + 64 random
+// hex chars. It is never sent in the Authorization header (only to
+// /auth/refresh), so it cannot collide with the "mul_" PAT prefix.
+func GenerateRefreshToken() (string, error) {
+	b := make([]byte, 32) // 32 bytes = 64 hex chars
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate refresh token: %w", err)
+	}
+	return "mrt_" + hex.EncodeToString(b), nil
 }
 
 // HashToken returns the hex-encoded SHA-256 hash of a token string.

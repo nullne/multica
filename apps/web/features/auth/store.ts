@@ -10,7 +10,16 @@ import {
   sendFirebaseEmailLink,
   signInWithFirebaseGoogle,
 } from "./firebase";
-import type { LoginResponse } from "@/shared/api/client";
+import { isAuthError, type LoginResponse } from "@/shared/api/client";
+
+// Persists tokens from a successful login into localStorage and the api client.
+function persistCredentials(res: LoginResponse) {
+  localStorage.setItem("multica_token", res.token);
+  localStorage.setItem("multica_refresh_token", res.refresh_token);
+  api.setToken(res.token);
+  api.setRefreshToken(res.refresh_token);
+  setLoggedInCookie();
+}
 
 interface AuthState {
   user: User | null;
@@ -38,16 +47,24 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
 
     api.setToken(token);
+    api.setRefreshToken(localStorage.getItem("multica_refresh_token"));
 
     try {
       const user = await api.getMe();
       set({ user, isLoading: false });
-    } catch {
-      api.setToken(null);
-      api.setWorkspaceId(null);
-      localStorage.removeItem("multica_token");
-      localStorage.removeItem("multica_workspace_id");
-      set({ user: null, isLoading: false });
+    } catch (err) {
+      // Only drop the session on a genuine auth failure. A transient
+      // server/network error must not discard valid credentials.
+      if (isAuthError(err)) {
+        api.setToken(null);
+        api.setRefreshToken(null);
+        api.setWorkspaceId(null);
+        localStorage.removeItem("multica_token");
+        localStorage.removeItem("multica_refresh_token");
+        localStorage.removeItem("multica_workspace_id");
+        set({ user: null });
+      }
+      set({ isLoading: false });
     }
   },
 
@@ -56,12 +73,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (!firebaseToken) {
       return null;
     }
-    const { token, user } = await api.loginWithFirebase(firebaseToken);
-    localStorage.setItem("multica_token", token);
-    api.setToken(token);
-    setLoggedInCookie();
-    set({ user });
-    return { token, user };
+    const res = await api.loginWithFirebase(firebaseToken);
+    persistCredentials(res);
+    set({ user: res.user });
+    return res;
   },
 
   completeGoogleRedirectSignIn: async () => {
@@ -69,12 +84,10 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (!firebaseToken) {
       return null;
     }
-    const { token, user } = await api.loginWithFirebase(firebaseToken);
-    localStorage.setItem("multica_token", token);
-    api.setToken(token);
-    setLoggedInCookie();
-    set({ user });
-    return { token, user };
+    const res = await api.loginWithFirebase(firebaseToken);
+    persistCredentials(res);
+    set({ user: res.user });
+    return res;
   },
 
   sendEmailSignInLink: async (email, returnUrl) => {
@@ -83,27 +96,27 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   signInWithEmailLink: async (email, url) => {
     const firebaseToken = await completeFirebaseEmailLinkSignIn(email, url);
-    const { token, user } = await api.loginWithFirebase(firebaseToken);
-    localStorage.setItem("multica_token", token);
-    api.setToken(token);
-    setLoggedInCookie();
-    set({ user });
-    return { token, user };
+    const res = await api.loginWithFirebase(firebaseToken);
+    persistCredentials(res);
+    set({ user: res.user });
+    return res;
   },
 
   signInAsDev: async (email, name) => {
-    const { token, user } = await api.loginAsDev(email, name);
-    localStorage.setItem("multica_token", token);
-    api.setToken(token);
-    setLoggedInCookie();
-    set({ user });
-    return { token, user };
+    const res = await api.loginAsDev(email, name);
+    persistCredentials(res);
+    set({ user: res.user });
+    return res;
   },
 
   logout: () => {
+    const refreshToken = localStorage.getItem("multica_refresh_token");
+    void api.logout(refreshToken);
     localStorage.removeItem("multica_token");
+    localStorage.removeItem("multica_refresh_token");
     localStorage.removeItem("multica_workspace_id");
     api.setToken(null);
+    api.setRefreshToken(null);
     api.setWorkspaceId(null);
     clearLoggedInCookie();
     set({ user: null });

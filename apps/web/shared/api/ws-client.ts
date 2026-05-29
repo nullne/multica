@@ -7,6 +7,9 @@ export class WSClient {
   private ws: WebSocket | null = null;
   private baseUrl: string;
   private token: string | null = null;
+  // Optional getter for the latest access token. Used on every (re)connect so
+  // reconnections pick up a token refreshed since the initial connect.
+  private tokenProvider: (() => string | null) | null = null;
   private workspaceId: string | null = null;
   private handlers = new Map<WSEventType, Set<EventHandler>>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -20,14 +23,20 @@ export class WSClient {
     this.logger = options?.logger ?? noopLogger;
   }
 
-  setAuth(token: string, workspaceId: string) {
-    this.token = token;
+  setAuth(token: string | (() => string | null), workspaceId: string) {
+    if (typeof token === "function") {
+      this.tokenProvider = token;
+      this.token = token();
+    } else {
+      this.token = token;
+    }
     this.workspaceId = workspaceId;
   }
 
   connect() {
+    const token = this.tokenProvider ? this.tokenProvider() : this.token;
     const url = new URL(this.baseUrl);
-    if (this.token) url.searchParams.set("token", this.token);
+    if (token) url.searchParams.set("token", token);
     if (this.workspaceId)
       url.searchParams.set("workspace_id", this.workspaceId);
 
