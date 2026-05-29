@@ -55,4 +55,10 @@ export type {
 export type {
   BotUser,
   CreateBotUserRequest,
+  Webhook,
+  WebhookAction,
+  WebhookListItem,
+  WebhookEvent,
+  WebhookSourceType,
+  WebhookEventStatus,
 } from "./webhook";
