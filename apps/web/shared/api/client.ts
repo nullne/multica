@@ -46,6 +46,8 @@ import type {
   Attachment,
   BotUser,
   CreateBotUserRequest,
+  WebhookListItem,
+  WebhookEvent,
   Routine,
   CreateRoutineRequest,
   UpdateRoutineRequest,
@@ -660,6 +662,16 @@ export class ApiClient {
 
   async deleteLabel(id: string): Promise<void> {
     await this.fetch(`/api/labels/${id}`, { method: "DELETE" });
+  }
+
+  // Webhooks (read-only). Both endpoints resolve the workspace from the
+  // X-Workspace-ID header set by the client.
+  async listWebhooks(): Promise<WebhookListItem[]> {
+    return this.fetch("/api/webhooks");
+  }
+
+  async listWebhookEvents(): Promise<WebhookEvent[]> {
+    return this.fetch("/api/webhooks/events");
   }
 
   async setIssueLabels(issueId: string, labelIds: string[]): Promise<Label[]> {

@@ -243,6 +243,13 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				})
 			})
 
+			// Webhooks (read-only views over configured webhooks and the
+			// events they have received).
+			r.Route("/api/webhooks", func(r chi.Router) {
+				r.Get("/", h.ListWebhooks)
+				r.Get("/events", h.ListWorkspaceWebhookEvents)
+			})
+
 			// Attachments
 			r.Delete("/api/attachments/{id}", h.DeleteAttachment)
 
