@@ -38,8 +38,9 @@ func userToResponse(u db.User) UserResponse {
 }
 
 type LoginResponse struct {
-	Token string       `json:"token"`
-	User  UserResponse `json:"user"`
+	Token        string       `json:"token"`
+	RefreshToken string       `json:"refresh_token"`
+	User         UserResponse `json:"user"`
 }
 
 type FirebaseLoginRequest struct {
@@ -49,6 +50,19 @@ type FirebaseLoginRequest struct {
 type DevLoginRequest struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
+}
+
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+type RefreshResponse struct {
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+type LogoutRequest struct {
+	RefreshToken string `json:"refresh_token"`
 }
 
 // devAuthBypassEnabled reports whether the DEV_AUTH_BYPASS env flag is set to a
@@ -67,7 +81,7 @@ func setAuthCookie(w http.ResponseWriter, r *http.Request, token string) {
 		Name:     middleware.AuthCookieName,
 		Value:    token,
 		Path:     "/api/attachments/",
-		MaxAge:   int((72 * time.Hour).Seconds()),
+		MaxAge:   int(auth.AccessTokenTTL.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") || os.Getenv("APP_ENV") == "production",
@@ -190,10 +204,27 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 		"sub":   uuidToString(user.ID),
 		"email": user.Email,
 		"name":  user.Name,
-		"exp":   time.Now().Add(72 * time.Hour).Unix(),
+		"exp":   time.Now().Add(auth.AccessTokenTTL).Unix(),
 		"iat":   time.Now().Unix(),
 	})
 	return token.SignedString(auth.JWTSecret())
+}
+
+// issueRefreshToken generates a new opaque refresh token, stores its hash, and
+// returns the raw token to hand back to the client.
+func (h *Handler) issueRefreshToken(ctx context.Context, user db.User) (string, error) {
+	raw, err := auth.GenerateRefreshToken()
+	if err != nil {
+		return "", err
+	}
+	if _, err := h.Queries.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+		UserID:    user.ID,
+		TokenHash: auth.HashToken(raw),
+		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(auth.RefreshTokenTTL), Valid: true},
+	}); err != nil {
+		return "", err
+	}
+	return raw, nil
 }
 
 func (h *Handler) findOrCreateUser(ctx context.Context, email, name string, avatarURL *string) (db.User, error) {
@@ -311,9 +342,16 @@ func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshToken, err := h.issueRefreshToken(r.Context(), user)
+	if err != nil {
+		slog.Warn("login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
 	// Set CloudFront signed cookies for CDN access.
 	if h.CFSigner != nil {
-		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(72 * time.Hour)) {
+		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(auth.AccessTokenTTL)) {
 			http.SetCookie(w, cookie)
 		}
 	}
@@ -321,8 +359,9 @@ func (h *Handler) LoginWithFirebase(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("user logged in", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
-		Token: tokenString,
-		User:  userToResponse(user),
+		Token:        tokenString,
+		RefreshToken: refreshToken,
+		User:         userToResponse(user),
 	})
 }
 
@@ -366,12 +405,92 @@ func (h *Handler) LoginDev(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	refreshToken, err := h.issueRefreshToken(r.Context(), user)
+	if err != nil {
+		slog.Warn("dev login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
 	setAuthCookie(w, r, tokenString)
 	slog.Info("dev login", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
-		Token: tokenString,
-		User:  userToResponse(user),
+		Token:        tokenString,
+		RefreshToken: refreshToken,
+		User:         userToResponse(user),
 	})
+}
+
+// Refresh exchanges a valid refresh token for a fresh access token. The refresh
+// token is rotated: the presented token is revoked and a new one is issued, so a
+// stolen refresh token is only usable until the legitimate client refreshes next.
+func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req RefreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	raw := strings.TrimSpace(req.RefreshToken)
+	if raw == "" {
+		writeError(w, http.StatusBadRequest, "refresh_token is required")
+		return
+	}
+
+	stored, err := h.Queries.GetRefreshTokenByHash(r.Context(), auth.HashToken(raw))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
+	user, err := h.Queries.GetUser(r.Context(), stored.UserID)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid refresh token")
+		return
+	}
+
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	newRefresh, err := h.issueRefreshToken(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	// Rotate: revoke the token that was just used.
+	if err := h.Queries.RevokeRefreshToken(r.Context(), stored.TokenHash); err != nil {
+		slog.Warn("refresh token revoke failed", append(logger.RequestAttrs(r), "error", err)...)
+	}
+
+	if h.CFSigner != nil {
+		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(auth.AccessTokenTTL)) {
+			http.SetCookie(w, cookie)
+		}
+	}
+	setAuthCookie(w, r, tokenString)
+
+	writeJSON(w, http.StatusOK, RefreshResponse{
+		Token:        tokenString,
+		RefreshToken: newRefresh,
+	})
+}
+
+// Logout revokes the supplied refresh token. It is best-effort and always
+// returns 204 so clients can clear local state regardless of the outcome.
+func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	var req LogoutRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err == nil {
+		if raw := strings.TrimSpace(req.RefreshToken); raw != "" {
+			if err := h.Queries.RevokeRefreshToken(r.Context(), auth.HashToken(raw)); err != nil {
+				slog.Warn("logout revoke failed", append(logger.RequestAttrs(r), "error", err)...)
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, memo, type ReactNode } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -61,6 +61,7 @@ import { Switch } from "@/components/ui/switch";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { ActorAvatar } from "@/components/common/actor-avatar";
+import { AbsoluteTime } from "@/components/common/absolute-time";
 import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
@@ -97,7 +98,7 @@ import { issueUrl } from "@/features/issues/utils/url";
 import { ReactionBar } from "@/components/common/reaction-bar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { timeAgo } from "@/shared/utils";
+import { formatAbsoluteTimeTooltip, timeAgo } from "@/shared/utils";
 
 function CriteriaApprovalActions({ issueId, onUpdate }: { issueId: string; onUpdate: (issue: Issue) => void }) {
   const [rejecting, setRejecting] = useState(false);
@@ -311,14 +312,6 @@ function CriteriaSection({ issue, issueId, criteriaOpen, setCriteriaOpen }: {
   );
 }
 
-function shortDate(date: string | null): string {
-  if (!date) return "—";
-  return new Date(date).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
-
 function statusLabel(status: string): string {
   return STATUS_CONFIG[status as IssueStatus]?.label ?? status;
 }
@@ -327,14 +320,14 @@ function priorityLabel(priority: string): string {
   return PRIORITY_CONFIG[priority as IssuePriority]?.label ?? priority;
 }
 
-function routineTriggerLabel(issue: Issue): string {
+function routineTriggerLabel(issue: Issue): ReactNode {
   const origin = issue.routine_origin;
   if (!origin?.trigger_type) return "Deleted trigger";
   if (origin.trigger_type === "api") return "API call";
   if (origin.trigger_type === "github") return origin.event_type || "GitHub webhook";
   if (origin.trigger_type === "schedule") {
     if (origin.schedule) return `Schedule ${origin.schedule}`;
-    if (origin.run_at) return `Schedule ${shortDate(origin.run_at)}`;
+    if (origin.run_at) return <>Schedule <AbsoluteTime value={origin.run_at} style="shortDate" /></>;
     return "Schedule";
   }
   return origin.trigger_type;
@@ -353,7 +346,7 @@ function humanizeActivityAction(action?: string): string {
 function formatActivity(
   entry: TimelineEntry,
   resolveActorName?: (type: string, id: string) => string,
-): string {
+): ReactNode {
   const details = (entry.details ?? {}) as Record<string, string>;
   switch (entry.action) {
     case "created":
@@ -374,8 +367,7 @@ function formatActivity(
     }
     case "due_date_changed": {
       if (!details.to) return "removed due date";
-      const formatted = new Date(details.to).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      return `set due date to ${formatted}`;
+      return <>set due date to <AbsoluteTime value={details.to} style="shortDate" /></>;
     }
     case "title_changed":
       return `renamed this issue from "${details.from ?? "?"}" to "${details.to ?? "?"}"`;
@@ -1647,7 +1639,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                                   }
                                 />
                                 <TooltipContent side="top">
-                                  {new Date(entry.created_at).toLocaleString()}
+                                  {formatAbsoluteTimeTooltip(entry.created_at)}
                                 </TooltipContent>
                               </Tooltip>
                             </div>
@@ -1907,10 +1899,10 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     <span className="truncate">{getActorName(issue.creator_type, issue.creator_id)}</span>
                   </PropRow>
                   <PropRow label="Created">
-                    <span className="text-muted-foreground">{shortDate(issue.created_at)}</span>
+                    <AbsoluteTime value={issue.created_at} style="shortDate" className="text-muted-foreground" />
                   </PropRow>
                   <PropRow label="Updated">
-                    <span className="text-muted-foreground">{shortDate(issue.updated_at)}</span>
+                    <AbsoluteTime value={issue.updated_at} style="shortDate" className="text-muted-foreground" />
                   </PropRow>
                   {issue.routine_origin && (
                     <>

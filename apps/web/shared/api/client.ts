@@ -56,7 +56,27 @@ import { type Logger, noopLogger } from "@/shared/logger";
 
 export interface LoginResponse {
   token: string;
+  refresh_token: string;
   user: User;
+}
+
+const TOKEN_KEY = "multica_token";
+const REFRESH_TOKEN_KEY = "multica_refresh_token";
+const WORKSPACE_KEY = "multica_workspace_id";
+
+// ApiError carries the HTTP status so callers can distinguish an
+// authentication failure (401) from a transient server/network error.
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+export function isAuthError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
 }
 
 // makeRequestId returns a short identifier for log correlation. We can't
@@ -82,8 +102,11 @@ function makeRequestId(): string {
 export class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
+  private refreshToken: string | null = null;
   private workspaceId: string | null = null;
   private logger: Logger;
+  // Single-flight guard so concurrent 401s trigger only one refresh.
+  private refreshPromise: Promise<boolean> | null = null;
 
   constructor(baseUrl: string, options?: { logger?: Logger }) {
     this.baseUrl = baseUrl;
@@ -92,6 +115,10 @@ export class ApiClient {
 
   setToken(token: string | null) {
     this.token = token;
+  }
+
+  setRefreshToken(token: string | null) {
+    this.refreshToken = token;
   }
 
   setWorkspaceId(id: string | null) {
@@ -105,11 +132,54 @@ export class ApiClient {
     return headers;
   }
 
+  // tryRefresh exchanges the stored refresh token for a fresh access token.
+  // Concurrent callers share one in-flight request.
+  private tryRefresh(): Promise<boolean> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.doRefresh().finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+    return this.refreshPromise;
+  }
+
+  private async doRefresh(): Promise<boolean> {
+    // Read the latest refresh token from storage so rotation stays consistent
+    // across tabs (localStorage is shared; in-memory copies may be stale).
+    const refreshToken =
+      typeof window !== "undefined"
+        ? localStorage.getItem(REFRESH_TOKEN_KEY)
+        : this.refreshToken;
+    if (!refreshToken) return false;
+
+    try {
+      const res = await fetch(`${this.baseUrl}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        credentials: "include",
+      });
+      if (!res.ok) return false;
+      const data = (await res.json()) as { token: string; refresh_token: string };
+      this.token = data.token;
+      this.refreshToken = data.refresh_token;
+      if (typeof window !== "undefined") {
+        localStorage.setItem(TOKEN_KEY, data.token);
+        localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private handleUnauthorized() {
     if (typeof window !== "undefined") {
-      localStorage.removeItem("multica_token");
-      localStorage.removeItem("multica_workspace_id");
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(REFRESH_TOKEN_KEY);
+      localStorage.removeItem(WORKSPACE_KEY);
       this.token = null;
+      this.refreshToken = null;
       this.workspaceId = null;
       if (window.location.pathname !== "/") {
         window.location.href = "/";
@@ -127,7 +197,7 @@ export class ApiClient {
     return fallback;
   }
 
-  private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
+  private async fetch<T>(path: string, init?: RequestInit, allowRefresh = true): Promise<T> {
     const rid = makeRequestId();
     const start = Date.now();
     const method = init?.method ?? "GET";
@@ -148,10 +218,19 @@ export class ApiClient {
     });
 
     if (!res.ok) {
-      if (res.status === 401) this.handleUnauthorized();
+      // On 401, try to silently refresh the access token once and retry the
+      // request. Only if that fails do we treat the session as ended.
+      if (res.status === 401 && allowRefresh) {
+        if (await this.tryRefresh()) {
+          return this.fetch<T>(path, init, false);
+        }
+        this.handleUnauthorized();
+      } else if (res.status === 401) {
+        this.handleUnauthorized();
+      }
       const message = await this.parseErrorMessage(res, `API error: ${res.status} ${res.statusText}`);
       this.logger.error(`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
-      throw new Error(message);
+      throw new ApiError(message, res.status);
     }
 
     this.logger.info(`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms` });
@@ -180,6 +259,22 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({ email, name: name ?? "" }),
     });
+  }
+
+  // Revokes the given refresh token server-side. Best-effort: never throws so
+  // the client can always clear local state on logout.
+  async logout(refreshToken: string | null): Promise<void> {
+    if (!refreshToken) return;
+    try {
+      await fetch(`${this.baseUrl}/auth/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        credentials: "include",
+      });
+    } catch {
+      // Ignore — logout is best-effort.
+    }
   }
 
   async getMe(): Promise<User> {
@@ -796,7 +891,7 @@ export class ApiClient {
   }
 
   // File Upload & Attachments
-  async uploadFile(file: File, opts?: { issueId?: string; commentId?: string }): Promise<Attachment> {
+  async uploadFile(file: File, opts?: { issueId?: string; commentId?: string }, allowRefresh = true): Promise<Attachment> {
     const formData = new FormData();
     formData.append("file", file);
     if (opts?.issueId) formData.append("issue_id", opts.issueId);
@@ -818,10 +913,17 @@ export class ApiClient {
     });
 
     if (!res.ok) {
-      if (res.status === 401) this.handleUnauthorized();
+      if (res.status === 401 && allowRefresh) {
+        if (await this.tryRefresh()) {
+          return this.uploadFile(file, opts, false);
+        }
+        this.handleUnauthorized();
+      } else if (res.status === 401) {
+        this.handleUnauthorized();
+      }
       const message = await this.parseErrorMessage(res, `Upload failed: ${res.status}`);
       this.logger.error(`← ${res.status} /api/upload-file`, { rid, duration: `${Date.now() - start}ms`, error: message });
-      throw new Error(message);
+      throw new ApiError(message, res.status);
     }
 
     this.logger.info(`← ${res.status} /api/upload-file`, { rid, duration: `${Date.now() - start}ms` });

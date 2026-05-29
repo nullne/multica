@@ -44,7 +44,8 @@ export function WSProvider({ children }: { children: ReactNode }) {
     if (!token) return;
 
     const ws = new WSClient(WS_URL, { logger: createLogger("ws") });
-    ws.setAuth(token, workspace.id);
+    // Pass a getter so reconnects use the freshest token after a silent refresh.
+    ws.setAuth(() => localStorage.getItem("multica_token"), workspace.id);
     wsRef.current = ws;
     setWsClient(ws);
     ws.connect();

@@ -30,7 +30,7 @@ import { AttachmentList } from "@/components/common/attachment-list";
 import { QuickEmojiPicker } from "@/components/common/quick-emoji-picker";
 import { cn } from "@/lib/utils";
 import { useActorName } from "@/features/workspace";
-import { timeAgo } from "@/shared/utils";
+import { formatAbsoluteTimeTooltip, timeAgo } from "@/shared/utils";
 import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
 import { ReadonlyEditor } from "@/components/common/readonly-editor";
 import { FileUploadButton } from "@/components/common/file-upload-button";
@@ -190,7 +190,7 @@ function CommentRow({
             }
           />
           <TooltipContent side="top">
-            {new Date(entry.created_at).toLocaleString()}
+            {formatAbsoluteTimeTooltip(entry.created_at)}
           </TooltipContent>
         </Tooltip>
 
@@ -393,7 +393,7 @@ function CommentCard({
                 }
               />
               <TooltipContent side="top">
-                {new Date(entry.created_at).toLocaleString()}
+                {formatAbsoluteTimeTooltip(entry.created_at)}
               </TooltipContent>
             </Tooltip>
 

@@ -412,6 +412,7 @@ func parseGitHubIssueComment(body []byte) map[string]string {
 		"source_url":   parentURL,
 		"source_kind":  parentKind,
 		"external_id":  fmt.Sprintf("%s#%d", ev.Repository.FullName, ev.Issue.Number),
+		"dedup_key":    fmt.Sprintf("github:issue_comment:%s:%s", ev.Action, ev.Comment.HTMLURL),
 		"title":        fmt.Sprintf("Comment on %s#%d", ev.Repository.FullName, ev.Issue.Number),
 		"body":         fmt.Sprintf("**Comment on [%s#%d](%s): %s**\n**By:** %s\n\n%s", ev.Repository.FullName, ev.Issue.Number, ev.Issue.HTMLURL, ev.Issue.Title, ev.Comment.User.Login, ev.Comment.Body),
 	}
@@ -450,6 +451,7 @@ func parseGitHubPullRequestReviewComment(body []byte) map[string]string {
 		"source_url":   ev.PullRequest.HTMLURL,
 		"source_kind":  "pr",
 		"external_id":  fmt.Sprintf("%s#%d", ev.Repository.FullName, ev.PullRequest.Number),
+		"dedup_key":    fmt.Sprintf("github:pull_request_review_comment:%s:%s", ev.Action, ev.Comment.HTMLURL),
 		"title":        fmt.Sprintf("Review comment on %s#%d", ev.Repository.FullName, ev.PullRequest.Number),
 		"body":         fmt.Sprintf("**Review comment on [%s#%d](%s): %s**\n**File:** `%s`\n**By:** %s\n\n%s", ev.Repository.FullName, ev.PullRequest.Number, ev.PullRequest.HTMLURL, ev.PullRequest.Title, ev.Comment.Path, ev.Comment.User.Login, ev.Comment.Body),
 	}
@@ -488,6 +490,7 @@ func parseGitHubPullRequestReview(body []byte) map[string]string {
 		"source_url":   ev.PullRequest.HTMLURL,
 		"source_kind":  "pr",
 		"external_id":  fmt.Sprintf("%s#%d", ev.Repository.FullName, ev.PullRequest.Number),
+		"dedup_key":    fmt.Sprintf("github:pull_request_review:%s:%s", ev.Action, ev.Review.HTMLURL),
 		"title":        fmt.Sprintf("Review %s on %s#%d", ev.Review.State, ev.Repository.FullName, ev.PullRequest.Number),
 		"body":         fmt.Sprintf("**Review on [%s#%d](%s): %s**\n**State:** %s\n**By:** %s\n\n%s", ev.Repository.FullName, ev.PullRequest.Number, ev.PullRequest.HTMLURL, ev.PullRequest.Title, ev.Review.State, ev.Review.User.Login, ev.Review.Body),
 	}

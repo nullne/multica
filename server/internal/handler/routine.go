@@ -682,7 +682,6 @@ func (h *Handler) ingestRoutineTriggers(ctx context.Context, triggers []db.Routi
 		}
 		for _, evt := range events {
 			if !routineTriggerMatchesEvent(trigger, evt) {
-				_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, pgtype.UUID{}, evt, "filtered", pgtype.UUID{}, pgtype.UUID{}, "trigger filters did not match")
 				continue
 			}
 			if evt.DedupKey != "" && trigger.DedupWindowSeconds > 0 {

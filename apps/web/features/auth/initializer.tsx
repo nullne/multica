@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { useAuthStore } from "./store";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
+import { isAuthError } from "@/shared/api/client";
 import { createLogger } from "@/shared/logger";
 import { setLoggedInCookie, clearLoggedInCookie } from "./auth-cookie";
 
@@ -23,6 +24,7 @@ export function AuthInitializer({ children }: { children: ReactNode }) {
     }
 
     api.setToken(token);
+    api.setRefreshToken(localStorage.getItem("multica_refresh_token"));
     const wsId = localStorage.getItem("multica_workspace_id");
 
     // Fire getMe and listWorkspaces in parallel
@@ -37,12 +39,21 @@ export function AuthInitializer({ children }: { children: ReactNode }) {
       })
       .catch((err) => {
         logger.error("auth init failed", err);
-        api.setToken(null);
-        api.setWorkspaceId(null);
-        localStorage.removeItem("multica_token");
-        localStorage.removeItem("multica_workspace_id");
-        clearLoggedInCookie();
-        useAuthStore.setState({ user: null, isLoading: false });
+        // Only clear credentials on a real auth failure (the access token
+        // expired and the refresh token could not renew it). Transient
+        // server/network errors must keep the session so a later reload
+        // restores it instead of forcing a re-login.
+        if (isAuthError(err)) {
+          api.setToken(null);
+          api.setRefreshToken(null);
+          api.setWorkspaceId(null);
+          localStorage.removeItem("multica_token");
+          localStorage.removeItem("multica_refresh_token");
+          localStorage.removeItem("multica_workspace_id");
+          clearLoggedInCookie();
+          useAuthStore.setState({ user: null });
+        }
+        useAuthStore.setState({ isLoading: false });
       });
   }, []);
 

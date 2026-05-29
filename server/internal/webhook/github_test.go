@@ -194,6 +194,10 @@ func TestGitHubAdapter_IssueCommentOnPR(t *testing.T) {
 	if !strings.Contains(ev.Data["comment_body"], "LGTM") {
 		t.Errorf("comment_body missing content: %q", ev.Data["comment_body"])
 	}
+	wantDedup := "github:issue_comment:created:https://github.com/org/repo/issues/42#issuecomment-1"
+	if ev.DedupKey != wantDedup {
+		t.Errorf("dedup_key = %q, want %q", ev.DedupKey, wantDedup)
+	}
 }
 
 func TestGitHubAdapter_IssueCommentOnIssue(t *testing.T) {
@@ -256,6 +260,10 @@ func TestGitHubAdapter_PullRequestReviewComment(t *testing.T) {
 	if ev.Data["source_kind"] != "pr" {
 		t.Fatalf("source_kind = %q", ev.Data["source_kind"])
 	}
+	wantDedup := "github:pull_request_review_comment:created:https://github.com/org/repo/pull/42#discussion_r1"
+	if ev.DedupKey != wantDedup {
+		t.Fatalf("dedup_key = %q, want %q", ev.DedupKey, wantDedup)
+	}
 	if !strings.Contains(ev.Data["body"], "Please simplify this branch") {
 		t.Fatalf("body = %q", ev.Data["body"])
 	}
@@ -297,6 +305,10 @@ func TestGitHubAdapter_PullRequestReviewSubmitted(t *testing.T) {
 	}
 	if ev.Data["review_state"] != "changes_requested" {
 		t.Fatalf("review_state = %q", ev.Data["review_state"])
+	}
+	wantDedup := "github:pull_request_review:submitted:https://github.com/org/repo/pull/42#pullrequestreview-1"
+	if ev.DedupKey != wantDedup {
+		t.Fatalf("dedup_key = %q, want %q", ev.DedupKey, wantDedup)
 	}
 }
 

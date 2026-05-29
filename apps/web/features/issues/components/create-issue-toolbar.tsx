@@ -38,6 +38,7 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useLabelStore } from "@/features/labels";
 import { useRuntimeStore } from "@/features/runtimes";
+import { formatAbsoluteTime } from "@/shared/utils";
 import { canAssignAgent, AssigneePicker } from "./pickers/assignee-picker";
 import { StatusIcon } from "./status-icon";
 import { PriorityIcon } from "./priority-icon";
@@ -481,10 +482,7 @@ export function CreateIssueToolbar({
                 <CalendarDays className="size-4 text-muted-foreground" />
                 {dueDateObj && (
                   <span>
-                    {dueDateObj.toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                    })}
+                    {formatAbsoluteTime(dueDate, "shortDate")}
                   </span>
                 )}
               </CreateIssuePillButton>

@@ -305,6 +305,16 @@ type RecurringTemplateSubscriber struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type RefreshToken struct {
+	ID         pgtype.UUID        `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	TokenHash  string             `json:"token_hash"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	Revoked    bool               `json:"revoked"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type Routine struct {
 	ID                   pgtype.UUID        `json:"id"`
 	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
