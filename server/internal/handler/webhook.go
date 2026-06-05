@@ -980,7 +980,7 @@ func (h *Handler) ingestWithWebhook(ctx context.Context, webhook db.Webhook, bod
 }
 
 func (h *Handler) processGitHubAutoFixEvents(ctx context.Context, webhook db.Webhook, body []byte, headers http.Header) int {
-	if webhook.SourceType != "github" || webhook.Status != "active" {
+	if webhook.SourceType != "github" {
 		return 0
 	}
 	adapter, err := wh.GetAdapter("github")

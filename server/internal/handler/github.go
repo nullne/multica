@@ -76,8 +76,19 @@ func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Idempotency: if a webhook is already bound to this installation (e.g.
-	// the user re-runs the install flow), skip creation.
-	if _, err := qtx.GetWebhookByInstallationID(r.Context(), installationID); err != nil {
+	// the user re-runs the install flow), make sure reconnect leaves it active.
+	existingWebhook, err := qtx.GetWebhookByInstallationID(r.Context(), installationID)
+	if err == nil {
+		if existingWebhook.Status != "active" {
+			if _, err := qtx.UpdateWebhook(r.Context(), db.UpdateWebhookParams{
+				ID:     existingWebhook.ID,
+				Status: pgtype.Text{String: "active", Valid: true},
+			}); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to reactivate github webhook")
+				return
+			}
+		}
+	} else {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "failed to check existing webhook")
 			return

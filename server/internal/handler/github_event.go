@@ -71,9 +71,12 @@ func (h *Handler) ReceiveGitHubEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	received, created, autoFixComments := 0, 0, 0
+	hasRoutineTriggers := routineErr == nil && len(routineTriggers) > 0
 	if err == nil {
 		autoFixComments = h.processGitHubAutoFixEvents(r.Context(), webhook, body, r.Header)
-		received, created = h.ingestWithWebhook(r.Context(), webhook, body, r.Header)
+		if !hasRoutineTriggers {
+			received, created = h.ingestWithWebhook(r.Context(), webhook, body, r.Header)
+		}
 	}
 	routineReceived, routineRan := h.ingestRoutineTriggers(r.Context(), routineTriggers, "github", body, r.Header)
 

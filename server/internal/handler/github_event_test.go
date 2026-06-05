@@ -226,6 +226,152 @@ func TestReceiveGitHubEvent_PullRequestCreatesIssueAndLink(t *testing.T) {
 	})
 }
 
+func TestReceiveGitHubEvent_PrefersRoutineTriggerWhenLegacyWebhookPaused(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+	ctx := context.Background()
+	secret := []byte("test-secret")
+
+	app, err := gh.NewApp(12345, testRSAKeyPEM)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	app.SetWebhookSecret(secret)
+	prev := testHandler.GitHubApp
+	testHandler.GitHubApp = app
+	t.Cleanup(func() { testHandler.GitHubApp = prev })
+
+	installationID := time.Now().UnixNano()
+	webhookID := setupGitHubWebhookFixture(t, installationID)
+	if _, err := testPool.Exec(ctx, `UPDATE webhook SET status = 'paused' WHERE id = $1`, uuidToString(webhookID)); err != nil {
+		t.Fatalf("pause legacy webhook: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(ctx,
+		`SELECT id::text FROM agent WHERE workspace_id = $1 AND name = $2`,
+		testWorkspaceID, "Handler Test Agent",
+	).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	legacyCfg, _ := json.Marshal(CreateIssueActionConfig{
+		AgentID:       agentID,
+		TitleTemplate: "Legacy: {{.title}}",
+	})
+	if _, err := testHandler.Queries.CreateWebhookAction(ctx, db.CreateWebhookActionParams{
+		WebhookID:  webhookID,
+		ActionType: "create_issue",
+		Config:     legacyCfg,
+		Enabled:    true,
+		Position:   0,
+	}); err != nil {
+		t.Fatalf("create legacy action: %v", err)
+	}
+
+	var routineID, triggerID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO routine (
+			workspace_id, name, instructions, priority, assignee_type, assignee_id,
+			dispatch_provider, enabled, created_by_id, created_by_type
+		)
+		VALUES ($1, 'Migrated GitHub routine', '', 'medium', 'agent', $2, 'codex', true, $3, 'member')
+		RETURNING id::text
+	`, testWorkspaceID, agentID, testUserID).Scan(&routineID); err != nil {
+		t.Fatalf("create routine: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM routine WHERE id = $1`, routineID) })
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO routine_trigger (routine_id, trigger_type, source_type, installation_id, config, enabled)
+		VALUES ($1, 'github', 'github', $2, '{}'::jsonb, true)
+		RETURNING id::text
+	`, routineID, installationID).Scan(&triggerID); err != nil {
+		t.Fatalf("create routine trigger: %v", err)
+	}
+	routineCfg, _ := json.Marshal(CreateIssueActionConfig{
+		AgentID:       agentID,
+		TitleTemplate: "Routine: {{.title}}",
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO routine_action (routine_id, action_type, config, enabled, position)
+		VALUES ($1, 'create_issue', $2, true, 0)
+	`, routineID, routineCfg); err != nil {
+		t.Fatalf("create routine action: %v", err)
+	}
+
+	prURL := fmt.Sprintf("https://github.com/acme/widgets/pull/%d", uniqueIssueNumber())
+	body := []byte(fmt.Sprintf(`{
+		"action":"opened",
+		"installation":{"id":%d},
+		"pull_request":{"number":780,"title":"Migrated PR","html_url":%q,"user":{"login":"alice"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"x"},
+		"repository":{"full_name":"acme/widgets"}
+	}`, installationID, prURL))
+
+	req := httptest.NewRequest("POST", "/api/webhook/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-Hub-Signature-256", signGitHubBody(secret, body))
+	w := httptest.NewRecorder()
+	testHandler.ReceiveGitHubEvent(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("PR opened: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Received        int `json:"received"`
+		Created         int `json:"created"`
+		RoutineReceived int `json:"routine_received"`
+		RoutineRan      int `json:"routine_ran"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Received != 1 || resp.Created != 0 || resp.RoutineReceived != 1 || resp.RoutineRan != 1 {
+		t.Fatalf("response = %+v, want routine-only processing", resp)
+	}
+
+	var legacyLogs int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM webhook_event_log
+		WHERE webhook_id = $1 AND error_message = 'webhook is paused'
+	`, uuidToString(webhookID)).Scan(&legacyLogs); err != nil {
+		t.Fatalf("count legacy logs: %v", err)
+	}
+	if legacyLogs != 0 {
+		t.Fatalf("expected no paused legacy webhook log, got %d", legacyLogs)
+	}
+
+	var routineRuns int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM routine_run
+		WHERE trigger_id = $1 AND status = 'processed'
+	`, triggerID).Scan(&routineRuns); err != nil {
+		t.Fatalf("count routine runs: %v", err)
+	}
+	if routineRuns != 1 {
+		t.Fatalf("expected one processed routine run, got %d", routineRuns)
+	}
+
+	link, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Url:         prURL,
+	})
+	if err != nil {
+		t.Fatalf("routine-created issue_link not found: %v", err)
+	}
+	t.Cleanup(func() {
+		testHandler.Queries.DeleteIssue(ctx, link.IssueID)
+		testHandler.Queries.DeleteIssueLink(ctx, link.ID)
+	})
+	var createdTitle string
+	if err := testPool.QueryRow(ctx, `SELECT title FROM issue WHERE id = $1`, uuidToString(link.IssueID)).Scan(&createdTitle); err != nil {
+		t.Fatalf("load created issue: %v", err)
+	}
+	if createdTitle != "Routine: Migrated PR" {
+		t.Fatalf("created title = %q, want routine action title", createdTitle)
+	}
+}
+
 func TestReceiveGitHubEvent_AutoFixIssueSwitchControlsBotComment(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")
