@@ -297,6 +297,14 @@ WHERE rr.routine_id = $1
   AND il.workspace_id = $2
   AND il.url = $3
   AND rr.status = 'processed'
+  AND rr.id = (
+    SELECT rr_origin.id
+    FROM routine_run rr_origin
+    WHERE rr_origin.issue_id = il.issue_id
+      AND rr_origin.status = 'processed'
+    ORDER BY rr_origin.created_at ASC
+    LIMIT 1
+  )
 ORDER BY rr.created_at ASC
 LIMIT 1;
 

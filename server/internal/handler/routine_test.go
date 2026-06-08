@@ -646,6 +646,20 @@ func TestRoutineAPITriggerCreatesSeparateIssuesPerRoutineForSameSourceURL(t *tes
 	}); err != nil {
 		t.Fatalf("expected first routine to create source link: %v", err)
 	}
+	var stagingIssueID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text
+		FROM issue
+		WHERE workspace_id = $1 AND title = $2
+	`, testWorkspaceID, stagingTitle).Scan(&stagingIssueID); err != nil {
+		t.Fatalf("query staging issue: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO routine_run (routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id)
+		VALUES ($1, $2, $3, 'custom', 'legacy-collapsed-prod-run', '{}'::jsonb, 'processed', $4)
+	`, prodRoutine.ID, prodRoutine.Triggers[0].ID, prodRoutine.Actions[0].ID, stagingIssueID); err != nil {
+		t.Fatalf("insert legacy collapsed prod run: %v", err)
+	}
 	ingest(prodRoutine, prodToken, "routine-scoped-prod")
 
 	assertIssueCount(t, stagingTitle, 1)
