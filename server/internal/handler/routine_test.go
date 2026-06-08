@@ -559,6 +559,125 @@ func TestRoutineIssueTemplateFieldsAreApplied(t *testing.T) {
 	}
 }
 
+func TestRoutineAPITriggerCreatesSeparateIssuesPerRoutineForSameSourceURL(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+
+	createRoutine := func(name, title string) (RoutineResponse, string) {
+		t.Helper()
+		apiTrigger, apiToken := routineAPITokenDraft(t)
+		w := httptest.NewRecorder()
+		req := routineRequest(t, "POST", "/api/routines", map[string]any{
+			"name":          name,
+			"instructions":  "Create routine-scoped issue",
+			"assignee_type": "agent",
+			"assignee_id":   agentID,
+			"triggers":      []map[string]any{apiTrigger},
+			"actions": []map[string]any{
+				{
+					"action_type": "create_issue",
+					"config": map[string]any{
+						"title_template": title,
+					},
+				},
+			},
+		})
+		testHandler.CreateRoutine(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("CreateRoutine %s: expected 201, got %d: %s", name, w.Code, w.Body.String())
+		}
+		var routine RoutineResponse
+		if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+			t.Fatalf("decode routine: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+				ID:          parseUUID(routine.ID),
+				WorkspaceID: parseUUID(testWorkspaceID),
+			})
+		})
+		return routine, apiToken
+	}
+
+	suffix := time.Now().Format("150405000000000")
+	stagingTitle := "Routine scoped links staging " + suffix
+	prodTitle := "Routine scoped links prod " + suffix
+	stagingRoutine, stagingToken := createRoutine("Routine scoped staging", stagingTitle)
+	prodRoutine, prodToken := createRoutine("Routine scoped prod", prodTitle)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `
+			DELETE FROM issue
+			WHERE workspace_id = $1
+			  AND title = ANY($2::text[])
+		`, testWorkspaceID, []string{stagingTitle, prodTitle})
+	})
+
+	sourceURL := "https://github.com/nullne/multica/pull/routine-scoped-" + suffix
+	ingest := func(routine RoutineResponse, token, dedupKey string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, map[string]any{
+			"title":     "ignored by template",
+			"dedup_key": dedupKey,
+			"fields": map[string]string{
+				"source_url":  sourceURL,
+				"source_kind": "pr",
+			},
+		})
+		req = withURLParam(req, "id", routine.Triggers[0].ID)
+		req.Header.Set("Authorization", "Bearer "+token)
+		testHandler.IngestRoutineTrigger(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+		}
+	}
+
+	ingest(stagingRoutine, stagingToken, "routine-scoped-staging")
+	if _, err := testHandler.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		Url:         sourceURL,
+	}); err != nil {
+		t.Fatalf("expected first routine to create source link: %v", err)
+	}
+	var stagingIssueID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text
+		FROM issue
+		WHERE workspace_id = $1 AND title = $2
+	`, testWorkspaceID, stagingTitle).Scan(&stagingIssueID); err != nil {
+		t.Fatalf("query staging issue: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO routine_run (routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id)
+		VALUES ($1, $2, $3, 'custom', 'legacy-collapsed-prod-run', '{}'::jsonb, 'processed', $4)
+	`, prodRoutine.ID, prodRoutine.Triggers[0].ID, prodRoutine.Actions[0].ID, stagingIssueID); err != nil {
+		t.Fatalf("insert legacy collapsed prod run: %v", err)
+	}
+	ingest(prodRoutine, prodToken, "routine-scoped-prod")
+
+	assertIssueCount(t, stagingTitle, 1)
+	assertIssueCount(t, prodTitle, 1)
+
+	var linkCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*)
+		FROM issue_link
+		WHERE workspace_id = $1 AND url = $2
+	`, testWorkspaceID, sourceURL).Scan(&linkCount); err != nil {
+		t.Fatalf("count issue links: %v", err)
+	}
+	if linkCount != 2 {
+		t.Fatalf("issue link count = %d, want 2", linkCount)
+	}
+}
+
 func TestRoutineAPITriggerCanAssignIssueToMember(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")

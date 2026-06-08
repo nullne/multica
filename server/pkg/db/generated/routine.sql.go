@@ -618,6 +618,49 @@ func (q *Queries) GetRoutineInWorkspace(ctx context.Context, arg GetRoutineInWor
 	return i, err
 }
 
+const getRoutineIssueLinkByURL = `-- name: GetRoutineIssueLinkByURL :one
+SELECT il.id, il.issue_id, il.workspace_id, il.source_type, il.kind, il.direction, il.url, il.external_id, il.created_at
+FROM issue_link il
+JOIN routine_run rr ON rr.issue_id = il.issue_id
+WHERE rr.routine_id = $1
+  AND il.workspace_id = $2
+  AND il.url = $3
+  AND rr.status = 'processed'
+  AND rr.id = (
+    SELECT rr_origin.id
+    FROM routine_run rr_origin
+    WHERE rr_origin.issue_id = il.issue_id
+      AND rr_origin.status = 'processed'
+    ORDER BY rr_origin.created_at ASC
+    LIMIT 1
+  )
+ORDER BY rr.created_at ASC
+LIMIT 1
+`
+
+type GetRoutineIssueLinkByURLParams struct {
+	RoutineID   pgtype.UUID `json:"routine_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Url         string      `json:"url"`
+}
+
+func (q *Queries) GetRoutineIssueLinkByURL(ctx context.Context, arg GetRoutineIssueLinkByURLParams) (IssueLink, error) {
+	row := q.db.QueryRow(ctx, getRoutineIssueLinkByURL, arg.RoutineID, arg.WorkspaceID, arg.Url)
+	var i IssueLink
+	err := row.Scan(
+		&i.ID,
+		&i.IssueID,
+		&i.WorkspaceID,
+		&i.SourceType,
+		&i.Kind,
+		&i.Direction,
+		&i.Url,
+		&i.ExternalID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getRoutineOriginForIssue = `-- name: GetRoutineOriginForIssue :one
 SELECT
     rr.issue_id,
