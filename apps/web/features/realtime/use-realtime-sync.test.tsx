@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { Issue } from "@/shared/types";
+import type { AgentTask } from "@/shared/types/agent";
 
 const listRecentIssuesMock = vi.fn();
 const listActiveTasksMock = vi.fn();
@@ -10,6 +11,7 @@ const listAgentsMock = vi.fn();
 const listSkillsMock = vi.fn();
 const listInboxMock = vi.fn();
 const listLabelsMock = vi.fn();
+const getActiveTaskForIssueMock = vi.fn();
 
 vi.mock("@/shared/api", () => ({
   api: {
@@ -22,6 +24,7 @@ vi.mock("@/shared/api", () => ({
     listSkills: (...args: unknown[]) => listSkillsMock(...args),
     listInbox: (...args: unknown[]) => listInboxMock(...args),
     listLabels: (...args: unknown[]) => listLabelsMock(...args),
+    getActiveTaskForIssue: (...args: unknown[]) => getActiveTaskForIssueMock(...args),
   },
 }));
 
@@ -31,6 +34,7 @@ vi.mock("sonner", () => ({
 
 import { useRecentsStore } from "@/features/navigation/recents-store";
 import { useIssueStore } from "@/features/issues";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useRealtimeSync } from "./use-realtime-sync";
 
@@ -104,10 +108,53 @@ function makeIssue(id: string, workspaceId: string, title = id): Issue {
   };
 }
 
+function makeTask(issueId: string): AgentTask {
+  return {
+    id: `task-${issueId}`,
+    agent_id: "agent-1",
+    runtime_id: "rt-1",
+    issue_id: issueId,
+    status: "running",
+    priority: 0,
+    dispatched_at: null,
+    started_at: null,
+    completed_at: null,
+    result: null,
+    error: null,
+    created_at: "2026-06-01T00:00:00Z",
+    trigger_comment_id: null,
+  };
+}
+
+function makeWorkspace(id: string) {
+  return {
+    id,
+    name: id,
+    slug: id,
+    description: null,
+    context: null,
+    settings: {},
+    repos: [],
+    issue_prefix: "MUL",
+    github_connected: false,
+    created_at: "2026-06-01T00:00:00Z",
+    updated_at: "2026-06-01T00:00:00Z",
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   useRecentsStore.getState().clear();
   useIssueStore.setState({ issues: [], loading: true, activeIssueId: null });
+  useActiveTaskStore.setState({ tasks: new Map() });
   useWorkspaceStore.setState({ workspace: null });
   // The hook fires off many parallel refetches on reconnect — give every
   // one a safe noop default so the awaited Promise.all settles.
@@ -119,6 +166,7 @@ beforeEach(() => {
   listSkillsMock.mockResolvedValue([]);
   listInboxMock.mockResolvedValue([]);
   listLabelsMock.mockResolvedValue([]);
+  getActiveTaskForIssueMock.mockResolvedValue({ task: null });
 });
 
 describe("useRealtimeSync reconnect", () => {
@@ -193,5 +241,39 @@ describe("useRealtimeSync workspace filtering", () => {
     });
 
     expect(useIssueStore.getState().issues[0]?.title).toBe("Current title");
+  });
+
+  it("ignores stale initial active-task fetches after workspace changes", async () => {
+    const activeTasks = deferred<AgentTask[]>();
+    listActiveTasksMock.mockReturnValueOnce(activeTasks.promise);
+    useWorkspaceStore.setState({ workspace: makeWorkspace("ws-old") });
+
+    const ws = makeFakeWS();
+    renderHook(() => useRealtimeSync(ws as unknown as Parameters<typeof useRealtimeSync>[0]));
+    await waitFor(() => expect(listActiveTasksMock).toHaveBeenCalled());
+
+    useWorkspaceStore.setState({ workspace: makeWorkspace("ws-new") });
+    activeTasks.resolve([makeTask("issue-old")]);
+    await Promise.resolve();
+
+    expect(useActiveTaskStore.getState().tasks.size).toBe(0);
+  });
+
+  it("ignores stale task dispatch lookups after workspace changes", async () => {
+    const activeTask = deferred<{ task: AgentTask | null }>();
+    getActiveTaskForIssueMock.mockReturnValueOnce(activeTask.promise);
+    useWorkspaceStore.setState({ workspace: makeWorkspace("ws-old") });
+
+    const ws = makeFakeWS();
+    renderHook(() => useRealtimeSync(ws as unknown as Parameters<typeof useRealtimeSync>[0]));
+
+    ws.emit("task:dispatch", { task_id: "task-1", issue_id: "issue-old" });
+    await waitFor(() => expect(getActiveTaskForIssueMock).toHaveBeenCalledWith("issue-old"));
+
+    useWorkspaceStore.setState({ workspace: makeWorkspace("ws-new") });
+    activeTask.resolve({ task: makeTask("issue-old") });
+    await Promise.resolve();
+
+    expect(useActiveTaskStore.getState().tasks.size).toBe(0);
   });
 });

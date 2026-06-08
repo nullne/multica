@@ -36,6 +36,16 @@ function isCurrentWorkspace(workspaceId?: string | null): boolean {
   return Boolean(workspaceId && workspaceId === currentWsId);
 }
 
+function currentWorkspaceId(): string | null {
+  return useWorkspaceStore.getState().workspace?.id ?? null;
+}
+
+async function refreshActiveTasksForWorkspace(workspaceId: string | null) {
+  const tasks = await api.listActiveTasks();
+  if (currentWorkspaceId() !== workspaceId) return;
+  useActiveTaskStore.getState().setTasks(tasks);
+}
+
 /**
  * Centralized WS → store sync. Called once from WSProvider.
  *
@@ -162,7 +172,9 @@ export function useRealtimeSync(ws: WSClient | null) {
     const unsubTaskDispatch = ws.on("task:dispatch", (p) => {
       const { task_id, issue_id } = p as TaskDispatchPayload;
       if (!issue_id || !task_id) return;
+      const workspaceId = currentWorkspaceId();
       api.getActiveTaskForIssue(issue_id).then(({ task }) => {
+        if (currentWorkspaceId() !== workspaceId) return;
         if (task) useActiveTaskStore.getState().setTask(issue_id, task);
       }).catch(console.error);
     });
@@ -239,7 +251,7 @@ export function useRealtimeSync(ws: WSClient | null) {
   // Initial fetch of active tasks so board/list views show the correct state on load
   useEffect(() => {
     if (!ws) return;
-    api.listActiveTasks().then((tasks) => useActiveTaskStore.getState().setTasks(tasks)).catch(console.error);
+    refreshActiveTasksForWorkspace(currentWorkspaceId()).catch(console.error);
   }, [ws]);
 
   // Reconnect → refetch all data to recover missed events
@@ -261,7 +273,7 @@ export function useRealtimeSync(ws: WSClient | null) {
           // event missed during disconnect would leave stale rows until
           // the user manually toggles a filter or re-enters /home.
           useRecentsStore.getState().refresh(),
-          api.listActiveTasks().then((tasks) => useActiveTaskStore.getState().setTasks(tasks)).catch(console.error),
+          refreshActiveTasksForWorkspace(currentWorkspaceId()).catch(console.error),
         ]);
       } catch (e) {
         logger.error("reconnect refetch failed", e);
