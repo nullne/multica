@@ -82,6 +82,15 @@ const workspaceNav = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+function workspaceSwitchRoot(pathname: string): string | null {
+  if (pathname === "/inbox" || pathname.startsWith("/inbox/")) return "/inbox";
+  if (pathname === "/routines" || pathname.startsWith("/routines/")) return "/routines";
+  if (pathname === "/issues" || pathname.startsWith("/issues/")) return "/issues";
+  if (pathname === "/my-issues" || pathname.startsWith("/my-issues/")) return "/my-issues";
+  if (/^\/w\/[^/]+\/issues(?:\/|$)/.test(pathname)) return "/issues";
+  return null;
+}
+
 function DraftDot() {
   const hasDraft = useIssueDraftStore((s) => !!(s.draft.title || s.draft.description));
   if (!hasDraft) return null;
@@ -586,9 +595,11 @@ export function AppSidebar() {
                     {workspaces.map((ws) => (
                       <DropdownMenuItem
                         key={ws.id}
-                        onClick={() => {
+                        onClick={async () => {
                           if (ws.id !== workspace?.id) {
-                            switchWorkspace(ws.id);
+                            await switchWorkspace(ws.id);
+                            const root = workspaceSwitchRoot(pathname);
+                            if (root) router.push(root);
                           }
                         }}
                       >

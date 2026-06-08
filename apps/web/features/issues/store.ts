@@ -26,14 +26,23 @@ export const useIssueStore = create<IssueState>((set, get) => ({
   activeIssueId: null,
 
   fetch: async () => {
+    const workspaceId = api.getWorkspaceId();
     logger.debug("fetch start");
     const isInitialLoad = get().issues.length === 0;
     if (isInitialLoad) set({ loading: true });
     try {
       const res = await api.listIssues({ limit: 200 });
+      if (api.getWorkspaceId() !== workspaceId) {
+        logger.debug("skip stale fetch result", workspaceId);
+        return;
+      }
       logger.info("fetched", res.issues.length, "issues");
       set({ issues: res.issues, loading: false });
     } catch (err) {
+      if (api.getWorkspaceId() !== workspaceId) {
+        logger.debug("skip stale fetch error", workspaceId);
+        return;
+      }
       logger.error("fetch failed", err);
       toast.error("Failed to load issues");
       if (isInitialLoad) set({ loading: false });

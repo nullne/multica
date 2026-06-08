@@ -124,6 +124,10 @@ export class ApiClient {
     this.workspaceId = id;
   }
 
+  getWorkspaceId(): string | null {
+    return this.workspaceId;
+  }
+
   private authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {};
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;

@@ -1908,7 +1908,7 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                     <>
                       <PropRow label="Routine">
                         <Link
-                          href={`/routines/${issue.routine_origin.routine_id}`}
+                          href={`/routines?routine=${issue.routine_origin.routine_id}`}
                           className="truncate text-primary hover:underline"
                         >
                           {issue.routine_origin.routine_name}

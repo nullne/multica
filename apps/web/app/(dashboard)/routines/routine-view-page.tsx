@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RoutineRunList } from "@/features/routines";
+import { useRoutineStore } from "@/features/routines";
 import { useAuthStore } from "@/features/auth";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
 import { MoreHorizontal, Pencil, Play, Sparkles, Trash2 } from "lucide-react";
@@ -32,6 +33,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const currentUser = useAuthStore((s) => s.user);
   const { getActorName } = useActorName();
   const members = useWorkspaceStore((s) => s.members);
+  const workspaceId = useWorkspaceStore((s) => s.workspace?.id ?? null);
   const [routine, setRoutine] = useState<Routine | null>(null);
   const [runs, setRuns] = useState<RoutineRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +63,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     return () => {
       cancelled = true;
     };
-  }, [routineID]);
+  }, [routineID, workspaceId]);
 
   async function handleTrigger() {
     if (!routine) return;
@@ -82,6 +84,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     setDeleting(true);
     try {
       await api.deleteRoutine(routine.id);
+      useRoutineStore.getState().remove(routine.id);
       toast.success("Routine deleted");
       router.push("/routines");
     } catch (error) {
@@ -97,6 +100,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     try {
       await api.updateRoutine(routine.id, routineToUpdatePayload(routine, nextEnabled));
       setRoutine({ ...routine, enabled: nextEnabled });
+      useRoutineStore.getState().patch(routine.id, { enabled: nextEnabled });
       toast.success(nextEnabled ? "Routine enabled" : "Routine paused");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update routine");
@@ -124,7 +128,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                   <Play className="size-4" />
                   {triggering ? "Running..." : "Run now"}
                 </Button>
-                <a href={`/routines?new=1&id=${routine.id}`} className={buttonVariants({ variant: "outline" })}>
+                <a href={`/routines?edit=${routine.id}`} className={buttonVariants({ variant: "outline" })}>
                   <Pencil className="size-4" />
                   Edit routine
                 </a>

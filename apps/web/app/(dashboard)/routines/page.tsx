@@ -1,12 +1,14 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useDefaultLayout } from "react-resizable-panels";
 import {
   AlertTriangle,
   Bell,
   CalendarClock,
   Check,
+  ChevronLeft,
   ChevronDown,
   Clock,
   Code2,
@@ -21,7 +23,7 @@ import {
 } from "lucide-react";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -61,14 +63,22 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { useAuthStore } from "@/features/auth";
 import { PriorityPicker } from "@/features/issues/components/pickers/priority-picker";
 import { AssigneePicker } from "@/features/issues/components/pickers";
 import { useLabelStore } from "@/features/labels";
+import { useRoutineStore } from "@/features/routines";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { api, generateRoutineTriggerTokenDraft, regenerateRoutineTriggerToken } from "@/shared/api";
 import type { CreateRoutineRequest, IssueAssigneeType, IssuePriority, Routine, RoutineTriggerRequest, UpdateIssueRequest } from "@/shared/types";
 import { toast } from "sonner";
+import { RoutineViewPage } from "./routine-view-page";
 
 type TriggerType = "schedule" | "github" | "api";
 type ScheduleMode = "once" | "hourly" | "daily" | "weekdays" | "weekly" | "custom";
@@ -110,6 +120,12 @@ interface TriggerOption {
   description: string;
   icon: typeof CalendarClock;
 }
+
+type RoutinePaneState =
+  | { type: "empty"; routineId: null }
+  | { type: "new"; routineId: null }
+  | { type: "edit"; routineId: string }
+  | { type: "detail"; routineId: string };
 
 const triggerOptions: TriggerOption[] = [
   {
@@ -405,102 +421,141 @@ function EmptyHint({ children }: { children: React.ReactNode }) {
 }
 
 export default function RoutinesPage() {
+  const isMobile = useIsMobile();
   const searchParams = useSearchParams();
-  const editRoutineID = searchParams.get("id");
-  const mode = searchParams.get("new") === "1" ? "new" : "list";
-
-  if (mode === "new") {
-    return <RoutineCreatePage routineID={editRoutineID} />;
-  }
-  return <RoutineListPage />;
-}
-
-function RoutineListPage() {
   const currentUser = useAuthStore((s) => s.user);
   const members = useWorkspaceStore((s) => s.members);
-  const [routines, setRoutines] = useState<Routine[]>([]);
-  const [loading, setLoading] = useState(true);
+  const workspaceId = useWorkspaceStore((s) => s.workspace?.id ?? null);
+  const routines = useRoutineStore((s) => s.routines);
+  const loading = useRoutineStore((s) => s.loading);
+  const fetchRoutines = useRoutineStore((s) => s.fetch);
+  const selectRoutine = useRoutineStore((s) => s.select);
   const [showSystemRoutines, setShowSystemRoutines] = useState(false);
   const currentMember = members.find((member) => member.user_id === currentUser?.id);
   const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
   const managedCount = routines.filter((routine) => routine.managed).length;
   const visibleRoutines = showSystemRoutines ? routines : routines.filter((routine) => !routine.managed);
+  const urlRoutine = searchParams.get("routine");
+  const editRoutineID = searchParams.get("edit") ?? searchParams.get("id");
+  const isCreateMode = searchParams.get("new") === "1";
+  const queryPane: RoutinePaneState = editRoutineID
+    ? { type: "edit", routineId: editRoutineID }
+    : isCreateMode
+      ? { type: "new", routineId: null }
+      : urlRoutine
+        ? { type: "detail", routineId: urlRoutine }
+        : { type: "empty", routineId: null };
+  const [pane, setPaneState] = useState<RoutinePaneState>(queryPane);
+  const activePane = queryPane.type === "empty" ? pane : queryPane;
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api.listRoutines()
-      .then((result) => {
-        if (!cancelled) setRoutines(result);
-      })
-      .catch((error) => {
-        if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routines");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    setPaneState(queryPane);
+    selectRoutine(queryPane.type === "detail" ? queryPane.routineId : null);
+  }, [queryPane.type, queryPane.routineId, selectRoutine]);
 
-  return (
-    <main className="h-full min-h-0 overflow-y-auto bg-background">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-6 py-5">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Routines</h1>
-            <p className="text-sm text-muted-foreground">
-              Automate recurring work, GitHub events, and API-triggered issue creation.
-            </p>
-          </div>
-          {canManageRoutines && (
-            <a href="/routines?new=1" className={buttonVariants()}>
-              <Plus className="size-4" />
-              New routine
-            </a>
-          )}
+  useEffect(() => {
+    if (!workspaceId) return;
+    void fetchRoutines();
+  }, [fetchRoutines, workspaceId]);
+
+  const setPane = useCallback(
+    (next: RoutinePaneState) => {
+      setPaneState(next);
+      selectRoutine(next.type === "detail" ? next.routineId : null);
+      const url =
+        next.type === "detail" && next.routineId
+          ? `/routines?routine=${next.routineId}`
+          : next.type === "new"
+            ? "/routines?new=1"
+            : next.type === "edit" && next.routineId
+              ? `/routines?edit=${next.routineId}`
+              : "/routines";
+      window.history.replaceState(null, "", url);
+    },
+    [selectRoutine],
+  );
+
+  const handleSaved = useCallback(
+    async (routineId: string) => {
+      await fetchRoutines();
+      setPane({ type: "detail", routineId });
+    },
+    [fetchRoutines, setPane],
+  );
+
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "multica_routines_layout",
+  });
+
+  if (queryPane.type === "new") {
+    return <RoutineCreatePage routineID={null} />;
+  }
+
+  if (queryPane.type === "edit" && queryPane.routineId) {
+    return <RoutineCreatePage routineID={queryPane.routineId} />;
+  }
+
+  const listPane = (
+    <div className="flex h-full flex-col border-r">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+        <div className="min-w-0">
+          <h1 className="truncate text-sm font-semibold">Routines</h1>
         </div>
-
+        {canManageRoutines && (
+          <Button size="sm" onClick={() => setPane({ type: "new", routineId: null })}>
+            <Plus className="size-4" />
+            New
+          </Button>
+        )}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto">
         {loading ? (
-          <div className="rounded-xl border bg-muted/20 p-8 text-center text-sm text-muted-foreground">
-            Loading routines...
-          </div>
+          <div className="p-4 text-sm text-muted-foreground">Loading routines...</div>
         ) : visibleRoutines.length === 0 ? (
-          <div className="rounded-xl border bg-muted/20 p-8 text-center">
-            <div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-              <Sparkles className="size-5" />
-            </div>
-            <h2 className="text-sm font-medium">No routines yet</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
+          <div className="flex flex-col items-center justify-center px-4 py-16 text-center text-muted-foreground">
+            <Sparkles className="mb-3 size-8 text-muted-foreground/50" />
+            <p className="text-sm font-medium text-foreground">No routines yet</p>
+            <p className="mt-1 max-w-64 text-xs">
               {canManageRoutines
                 ? "Create your first routine to schedule work or react to external events."
                 : "Ask an owner or admin to create routines for this workspace."}
             </p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {visibleRoutines.map((routine) => (
-              <a
-                key={routine.id}
-                href={`/routines/${routine.id}`}
-                className="flex items-center justify-between rounded-xl border px-4 py-3 transition-colors hover:bg-accent/50"
-              >
-                <span className="min-w-0">
-                  <span className="flex items-center gap-2">
-                    <span className="truncate text-sm font-medium">{routine.name}</span>
-                    {routine.managed && (
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">System</Badge>
-                    )}
+          <div>
+            {visibleRoutines.map((routine) => {
+              const isSelected = activePane.routineId === routine.id;
+              return (
+                <button
+                  key={routine.id}
+                  type="button"
+                  aria-current={isSelected ? "true" : undefined}
+                  data-active={isSelected || undefined}
+                  onClick={() => setPane({ type: "detail", routineId: routine.id })}
+                  className={`group relative flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors ${
+                    isSelected
+                      ? "bg-accent text-accent-foreground before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[3px] before:rounded-r before:bg-primary"
+                      : "hover:bg-accent/50"
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-medium">{routine.name}</span>
+                      {routine.managed && (
+                        <Badge variant="secondary" className="shrink-0 text-[10px]">
+                          System
+                        </Badge>
+                      )}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {routine.triggers.length} trigger{routine.triggers.length === 1 ? "" : "s"}
+                      {" · "}
+                      {routine.enabled ? "Enabled" : "Paused"}
+                    </span>
                   </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {routine.triggers.length} trigger{routine.triggers.length === 1 ? "" : "s"}
-                    {" · "}
-                    {routine.enabled ? "Enabled" : "Paused"}
-                  </span>
-                </span>
-              </a>
-            ))}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -516,11 +571,71 @@ function RoutineListPage() {
           </button>
         )}
       </div>
-    </main>
+    </div>
+  );
+
+  const detailPane = (
+    <div className="flex h-full min-h-0 flex-col">
+      {activePane.type === "new" ? (
+        <RoutineCreatePage routineID={null} onSaved={handleSaved} />
+      ) : activePane.type === "edit" && activePane.routineId ? (
+        <RoutineCreatePage routineID={activePane.routineId} onSaved={handleSaved} />
+      ) : activePane.type === "detail" && activePane.routineId ? (
+        <RoutineViewPage routineID={activePane.routineId} />
+      ) : (
+        <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+          <Sparkles className="mb-3 size-10 text-muted-foreground/30" />
+          <p className="text-sm">Select a routine to view details</p>
+        </div>
+      )}
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        {activePane.type !== "empty" ? (
+          <>
+            <div className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+              <Button variant="ghost" size="icon-xs" onClick={() => setPane({ type: "empty", routineId: null })}>
+                <ChevronLeft className="size-4" />
+              </Button>
+              <span className="truncate text-sm font-medium">Routines</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">{detailPane}</div>
+          </>
+        ) : (
+          listPane
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <ResizablePanelGroup
+      orientation="horizontal"
+      className="min-h-0 flex-1"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
+    >
+      <ResizablePanel id="list" defaultSize={320} minSize={240} maxSize={480} groupResizeBehavior="preserve-pixel-size">
+        {listPane}
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel id="detail" minSize="40%">
+        {detailPane}
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
 
-function RoutineCreatePage({ routineID }: { routineID: string | null }) {
+function RoutineCreatePage({
+  routineID,
+  onSaved,
+}: {
+  routineID: string | null;
+  onSaved?: (routineId: string) => void | Promise<void>;
+}) {
   const currentUser = useAuthStore((s) => s.user);
   const members = useWorkspaceStore((s) => s.members);
   const labels = useLabelStore((s) => s.labels);
@@ -732,7 +847,11 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
       if (savedRoutineID) {
         await api.updateRoutine(savedRoutineID, payload);
         toast.success("Routine updated");
-        window.location.href = `/routines/${savedRoutineID}`;
+        if (onSaved) {
+          await onSaved(savedRoutineID);
+        } else {
+          window.location.href = `/routines?routine=${savedRoutineID}`;
+        }
       } else {
         const created = await api.createRoutine(payload);
         toast.success("Routine created");
@@ -761,9 +880,13 @@ function RoutineCreatePage({ routineID }: { routineID: string | null }) {
           if (tokenTrigger?.token) {
             setApiTokenReveal({ token: tokenTrigger.token, url: getRoutineTriggerURL(tokenTrigger.id) });
           }
-          window.history.replaceState(null, "", `/routines?new=1&id=${created.id}`);
+          window.history.replaceState(null, "", `/routines?edit=${created.id}`);
         } else {
-          window.location.href = "/routines";
+          if (onSaved) {
+            await onSaved(created.id);
+          } else {
+            window.location.href = "/routines";
+          }
         }
       }
     } catch (error) {
