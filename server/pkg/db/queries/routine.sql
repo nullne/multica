@@ -289,6 +289,17 @@ WHERE rr.issue_id = ANY(sqlc.arg('issue_ids')::uuid[])
   AND rr.status = 'processed'
 ORDER BY rr.issue_id, rr.created_at ASC;
 
+-- name: GetRoutineIssueLinkByURL :one
+SELECT il.*
+FROM issue_link il
+JOIN routine_run rr ON rr.issue_id = il.issue_id
+WHERE rr.routine_id = $1
+  AND il.workspace_id = $2
+  AND il.url = $3
+  AND rr.status = 'processed'
+ORDER BY rr.created_at ASC
+LIMIT 1;
+
 -- name: FindRecentRoutineRun :one
 SELECT id FROM routine_run
 WHERE trigger_id = $1

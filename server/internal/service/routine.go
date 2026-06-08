@@ -77,7 +77,7 @@ func (s *RoutineService) executeCreateIssue(ctx context.Context, routine db.Rout
 		}
 	}
 
-	if link, ok, err := s.findIssueLinkForEvent(ctx, routine.WorkspaceID, evt); err != nil {
+	if link, ok, err := s.findIssueLinkForEvent(ctx, routine.ID, routine.WorkspaceID, evt); err != nil {
 		_ = s.logRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, err.Error())
 		return RoutineActionResult{}, err
 	} else if ok {
@@ -208,7 +208,7 @@ func (s *RoutineService) executeCommentIssue(ctx context.Context, routine db.Rou
 		return RoutineActionResult{}, err
 	}
 
-	link, ok, err := s.findIssueLinkForEvent(ctx, routine.WorkspaceID, evt)
+	link, ok, err := s.findIssueLinkForEvent(ctx, routine.ID, routine.WorkspaceID, evt)
 	if err != nil {
 		_ = s.logRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, err.Error())
 		return RoutineActionResult{}, err
@@ -252,9 +252,13 @@ func (s *RoutineService) executeCommentIssue(ctx context.Context, routine db.Rou
 	return RoutineActionResult{Ran: true, IssueID: link.IssueID, CommentID: comment.ID}, nil
 }
 
-func (s *RoutineService) findIssueLinkForEvent(ctx context.Context, workspaceID pgtype.UUID, evt RoutineEvent) (db.IssueLink, bool, error) {
+func (s *RoutineService) findIssueLinkForEvent(ctx context.Context, routineID, workspaceID pgtype.UUID, evt RoutineEvent) (db.IssueLink, bool, error) {
 	for _, sourceURL := range routineEventSourceURLs(evt) {
-		link, err := s.Queries.GetIssueLinkByURL(ctx, db.GetIssueLinkByURLParams{WorkspaceID: workspaceID, Url: sourceURL})
+		link, err := s.Queries.GetRoutineIssueLinkByURL(ctx, db.GetRoutineIssueLinkByURLParams{
+			RoutineID:   routineID,
+			WorkspaceID: workspaceID,
+			Url:         sourceURL,
+		})
 		if err == nil {
 			return link, true, nil
 		}

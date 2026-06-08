@@ -82,6 +82,12 @@ func TestRoutineServiceCommentIssueCreatesCommentOnLinkedIssue(t *testing.T) {
 	`, routineID, cfg).Scan(&actionID); err != nil {
 		t.Fatalf("insert action: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO routine_run (routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id)
+		VALUES ($1, $2, $3, 'github.pull_request.opened', 'routine-comment-linked-issue', '{}'::jsonb, 'processed', $4)
+	`, routineID, triggerID, actionID, issueID); err != nil {
+		t.Fatalf("insert routine run: %v", err)
+	}
 
 	routine, err := queries.GetRoutine(ctx, parseUUID(routineID))
 	if err != nil {
