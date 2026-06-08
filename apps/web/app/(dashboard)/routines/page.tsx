@@ -430,8 +430,11 @@ export default function RoutinesPage() {
   const loading = useRoutineStore((s) => s.loading);
   const fetchRoutines = useRoutineStore((s) => s.fetch);
   const selectRoutine = useRoutineStore((s) => s.select);
+  const [showSystemRoutines, setShowSystemRoutines] = useState(false);
   const currentMember = members.find((member) => member.user_id === currentUser?.id);
   const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
+  const managedCount = routines.filter((routine) => routine.managed).length;
+  const visibleRoutines = showSystemRoutines ? routines : routines.filter((routine) => !routine.managed);
   const urlRoutine = searchParams.get("routine");
   const editRoutineID = searchParams.get("edit") ?? searchParams.get("id");
   const isCreateMode = searchParams.get("new") === "1";
@@ -508,7 +511,7 @@ export default function RoutinesPage() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         {loading ? (
           <div className="p-4 text-sm text-muted-foreground">Loading routines...</div>
-        ) : routines.length === 0 ? (
+        ) : visibleRoutines.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-4 py-16 text-center text-muted-foreground">
             <Sparkles className="mb-3 size-8 text-muted-foreground/50" />
             <p className="text-sm font-medium text-foreground">No routines yet</p>
@@ -520,7 +523,7 @@ export default function RoutinesPage() {
           </div>
         ) : (
           <div>
-            {routines.map((routine) => {
+            {visibleRoutines.map((routine) => {
               const isSelected = activePane.routineId === routine.id;
               return (
                 <button
@@ -536,7 +539,14 @@ export default function RoutinesPage() {
                   }`}
                 >
                   <span className="min-w-0">
-                    <span className="block truncate text-sm font-medium">{routine.name}</span>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-medium">{routine.name}</span>
+                      {routine.managed && (
+                        <Badge variant="secondary" className="shrink-0 text-[10px]">
+                          System
+                        </Badge>
+                      )}
+                    </span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {routine.triggers.length} trigger{routine.triggers.length === 1 ? "" : "s"}
                       {" · "}
@@ -547,6 +557,18 @@ export default function RoutinesPage() {
               );
             })}
           </div>
+        )}
+
+        {managedCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowSystemRoutines((value) => !value)}
+            className="self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {showSystemRoutines
+              ? "Hide system routines"
+              : `Show system routines (${managedCount})`}
+          </button>
         )}
       </div>
     </div>
@@ -638,6 +660,7 @@ function RoutineCreatePage({
   const [addingTrigger, setAddingTrigger] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [githubAutoFixEnabled, setGithubAutoFixEnabled] = useState(false);
+  const [isManaged, setIsManaged] = useState(false);
   const [saving, setSaving] = useState(false);
   const [regeneratingApiToken, setRegeneratingApiToken] = useState(false);
   const [loadingRoutine, setLoadingRoutine] = useState(Boolean(routineID));
@@ -736,6 +759,7 @@ function RoutineCreatePage({
         setSelectedLabelIds(routine.label_ids ?? []);
         setEnabled(routine.enabled);
         setGithubAutoFixEnabled(routine.github_auto_fix_enabled);
+        setIsManaged(routine.managed);
         const drafts = sortTriggerDrafts(routine.triggers.map(routineTriggerToDraft));
         setTriggerDrafts(drafts);
         setOpenTriggerId(drafts[0]?.clientId ?? null);
@@ -893,6 +917,14 @@ function RoutineCreatePage({
             <h2 className="text-sm font-medium">Read-only</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Ask an owner or admin to create or edit routines for this workspace.
+            </p>
+          </div>
+        ) : isManaged ? (
+          <div className="rounded-xl border bg-muted/20 p-8 text-center">
+            <h2 className="text-sm font-medium">System routine</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              This routine is managed by Multica and cannot be edited. It is provisioned
+              automatically by the GitHub App connection.
             </p>
           </div>
         ) : loadingRoutine ? (

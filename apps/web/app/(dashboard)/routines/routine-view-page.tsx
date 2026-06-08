@@ -42,7 +42,8 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const currentMember = members.find((member) => member.user_id === currentUser?.id);
-  const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
+  const canManageRoutines =
+    (currentMember?.role === "owner" || currentMember?.role === "admin") && !routine?.managed;
 
   useEffect(() => {
     let cancelled = false;
@@ -168,13 +169,19 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
             </div>
           ) : (
             <>
-              {!canManageRoutines && (
+              {routine.managed ? (
+                <div className="rounded-xl border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">System routine</span>
+                  {" · "}
+                  Managed by Multica and provisioned by the GitHub App connection. It cannot be edited or deleted.
+                </div>
+              ) : !canManageRoutines ? (
                 <div className="rounded-xl border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
                   <span className="font-medium text-foreground">Read-only</span>
                   {" · "}
                   Ask an owner or admin to change or run this routine.
                 </div>
-              )}
+              ) : null}
               <section className="grid gap-3 rounded-xl border bg-muted/20 p-4 md:grid-cols-3">
                 <OverviewItem
                   label="Status"

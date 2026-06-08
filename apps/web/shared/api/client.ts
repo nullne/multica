@@ -46,8 +46,6 @@ import type {
   Attachment,
   BotUser,
   CreateBotUserRequest,
-  WebhookListItem,
-  WebhookEvent,
   Routine,
   CreateRoutineRequest,
   UpdateRoutineRequest,
@@ -668,16 +666,6 @@ export class ApiClient {
     await this.fetch(`/api/labels/${id}`, { method: "DELETE" });
   }
 
-  // Webhooks (read-only). Both endpoints resolve the workspace from the
-  // X-Workspace-ID header set by the client.
-  async listWebhooks(): Promise<WebhookListItem[]> {
-    return this.fetch("/api/webhooks");
-  }
-
-  async listWebhookEvents(): Promise<WebhookEvent[]> {
-    return this.fetch("/api/webhooks/events");
-  }
-
   async setIssueLabels(issueId: string, labelIds: string[]): Promise<Label[]> {
     return this.fetch(`/api/issues/${issueId}/labels`, {
       method: "PUT",
@@ -789,7 +777,7 @@ export class ApiClient {
     });
   }
 
-  // Bot users (non-human members used as the author for webhook-driven comments)
+  // Bot users (non-human members used as the author for routine-driven comments)
   async listBotUsers(workspaceId: string): Promise<BotUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/bot-users`);
   }

@@ -51,6 +51,7 @@ export interface Routine {
   dispatch_daemon_label?: string | null;
   github_auto_fix_enabled: boolean;
   enabled: boolean;
+  managed: boolean;
   created_by_id: string;
   created_by_type: string;
   subscriber_ids: string[];
