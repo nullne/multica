@@ -16,18 +16,14 @@ import (
 )
 
 // BotUserResponse describes a bot user — a non-human "member" used as the
-// author for system-driven comments (e.g. webhook triggered comments).
-//
-// WebhookCount is the number of webhooks currently bound to this bot via
-// webhook.bot_user_id; surfaced to the UI so it can warn before deletion.
+// author for system-driven comments (e.g. routine comment_issue actions).
 type BotUserResponse struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Email        string  `json:"email"`
-	AvatarURL    *string `json:"avatar_url"`
-	Kind         string  `json:"kind"`
-	WebhookCount int32   `json:"webhook_count"`
-	CreatedAt    string  `json:"created_at"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Email     string  `json:"email"`
+	AvatarURL *string `json:"avatar_url"`
+	Kind      string  `json:"kind"`
+	CreatedAt string  `json:"created_at"`
 }
 
 func botUserToResponse(u db.User) BotUserResponse {
@@ -44,7 +40,7 @@ func botUserToResponse(u db.User) BotUserResponse {
 func (h *Handler) ListBotUsers(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
 
-	bots, err := h.Queries.ListBotsInWorkspaceWithUsage(r.Context(), parseUUID(workspaceID))
+	bots, err := h.Queries.ListBotsInWorkspace(r.Context(), parseUUID(workspaceID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list bot users")
 		return
@@ -52,15 +48,7 @@ func (h *Handler) ListBotUsers(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]BotUserResponse, len(bots))
 	for i, b := range bots {
-		resp[i] = BotUserResponse{
-			ID:           uuidToString(b.ID),
-			Name:         b.Name,
-			Email:        b.Email,
-			AvatarURL:    textToPtr(b.AvatarUrl),
-			Kind:         b.Kind,
-			WebhookCount: b.WebhookCount,
-			CreatedAt:    timestampToString(b.CreatedAt),
-		}
+		resp[i] = botUserToResponse(b)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -132,10 +120,9 @@ func (h *Handler) CreateBotUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, botUserToResponse(user))
 }
 
-// DeleteBotUser removes a bot user. Webhook actions referencing this bot
-// (via webhook.bot_user_id) will have the column set to NULL automatically
-// (ON DELETE SET NULL), but their comment_issue actions will fail validation
-// until a new bot is bound.
+// DeleteBotUser removes a bot user. Routine comment_issue actions that
+// reference this bot (via config.bot_user_id) will fail until a new bot is
+// bound.
 func (h *Handler) DeleteBotUser(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
 	userID := chi.URLParam(r, "userId")
@@ -159,8 +146,7 @@ func (h *Handler) DeleteBotUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CASCADE: deleting the user removes the member row and sets
-	// webhook.bot_user_id to NULL on the partial-FK column.
+	// CASCADE: deleting the user removes its member rows.
 	if err := h.Queries.DeleteUser(r.Context(), user.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete bot user")
 		return
