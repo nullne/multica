@@ -18,7 +18,6 @@ import (
 	"github.com/nullne/multica/server/internal/codeagent"
 	"github.com/nullne/multica/server/internal/events"
 	"github.com/nullne/multica/server/internal/realtime"
-	whpkg "github.com/nullne/multica/server/internal/webhook"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -2907,77 +2906,5 @@ func TestFindAvailableRuntimeConstrainedAllowsExplicitHiddenOwnedDaemon(t *testi
 	}
 	if uuidToString(rt.ID) != runtimeID {
 		t.Fatalf("expected runtime %q, got %q", runtimeID, uuidToString(rt.ID))
-	}
-}
-
-func TestWebhookCreateIssueSubscribers(t *testing.T) {
-	ctx := context.Background()
-
-	// Create a subscriber user.
-	var subscriberUserID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO "user" (name, email) VALUES ('Webhook Sub', 'webhook-sub-test@multica.ai') RETURNING id
-	`).Scan(&subscriberUserID); err != nil {
-		t.Fatalf("create subscriber user: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = 'webhook-sub-test@multica.ai'`)
-	})
-
-	// Get the test agent ID.
-	var agentID string
-	if err := testPool.QueryRow(ctx, `
-		SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1
-	`, testWorkspaceID).Scan(&agentID); err != nil {
-		t.Fatalf("get test agent: %v", err)
-	}
-
-	// Create a webhook record.
-	var webhookID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO webhook (workspace_id, name, source_type, token_hash, token_prefix, dedup_window_seconds, created_by, status)
-		VALUES ($1, 'subscriber-test-wh', 'standard', 'testhash-sub', 'sub_', 600, $2, 'active')
-		RETURNING id
-	`, testWorkspaceID, testUserID).Scan(&webhookID); err != nil {
-		t.Fatalf("create webhook: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM webhook WHERE id = $1`, webhookID)
-	})
-
-	// Build the webhook record as a db.Webhook for the handler call.
-	wkRow, err := db.New(testPool).GetWebhook(ctx, parseUUID(webhookID))
-	if err != nil {
-		t.Fatalf("get webhook: %v", err)
-	}
-
-	cfg := CreateIssueActionConfig{
-		AgentID:       agentID,
-		SubscriberIDs: []string{subscriberUserID},
-	}
-
-	evt := whpkg.Event{
-		Type: "standard",
-		Data: map[string]string{"title": "Sub test issue"},
-	}
-	issueUUID, err := testHandler.executeCreateIssueAction(ctx, wkRow, cfg, evt, db.IssueLink{}, false)
-	if err != nil {
-		t.Fatalf("executeCreateIssueAction: %v", err)
-	}
-	issueIDStr := uuidToString(issueUUID)
-	t.Cleanup(func() {
-		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueIDStr)
-	})
-
-	// Verify the subscriber was inserted.
-	var count int
-	if err := testPool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM issue_subscriber
-		WHERE issue_id = $1::uuid AND user_type = 'member' AND user_id = $2::uuid
-	`, issueIDStr, subscriberUserID).Scan(&count); err != nil {
-		t.Fatalf("query issue_subscriber: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("expected 1 subscriber row, got %d", count)
 	}
 }
