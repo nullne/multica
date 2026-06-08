@@ -40,6 +40,7 @@ function makeRoutine(id: string, workspaceId: string): Routine {
     dispatch_daemon_label: null,
     github_auto_fix_enabled: false,
     enabled: true,
+    managed: false,
     created_by_id: "user-1",
     created_by_type: "member",
     subscriber_ids: [],
