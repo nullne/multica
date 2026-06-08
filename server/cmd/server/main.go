@@ -77,6 +77,10 @@ func main() {
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	go runRuntimeSweeper(sweepCtx, queries, bus)
 
+	// Backfill the managed GitHub auto-fix routine for already-connected
+	// workspaces (idempotent).
+	reconcileGitHubAutoFixRoutines(ctx, pool, queries)
+
 	// Start routine scheduler.
 	schedCtx, schedCancel := context.WithCancel(context.Background())
 	taskSvc := service.NewTaskService(queries, hub, bus)

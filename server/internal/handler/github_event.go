@@ -11,8 +11,8 @@ import (
 
 // ReceiveGitHubEvent is the public ingest endpoint for GitHub App webhooks.
 // Authentication is via HMAC signature (X-Hub-Signature-256). Once the
-// signature passes, the request is forwarded to the unified webhook pipeline
-// by looking up the matching webhook record via installation_id.
+// signature passes, the event is routed to every github routine trigger
+// bound to the installation (including the managed auto-fix routine).
 func (h *Handler) ReceiveGitHubEvent(w http.ResponseWriter, r *http.Request) {
 	if h.GitHubApp == nil {
 		writeError(w, http.StatusNotImplemented, "GitHub App not configured")
@@ -57,33 +57,23 @@ func (h *Handler) ReceiveGitHubEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	webhook, err := h.Queries.GetWebhookByInstallationID(r.Context(), pgtype.Int8{Int64: envelope.Installation.ID, Valid: true})
-	routineTriggers, routineErr := h.Queries.ListRoutineTriggersByInstallationID(r.Context(), pgtype.Int8{Int64: envelope.Installation.ID, Valid: true})
-	if err != nil {
-		if routineErr != nil || len(routineTriggers) == 0 {
-			// No webhook or routine is registered for this installation. We deliberately
-			// return 200 so GitHub does not retry: the workspace either hasn't
-			// completed the connect flow yet, or has disconnected the App.
-			slog.Debug("github event: no webhook or routine for installation", "installation_id", envelope.Installation.ID)
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	installationID := pgtype.Int8{Int64: envelope.Installation.ID, Valid: true}
+	routineTriggers, err := h.Queries.ListRoutineTriggersByInstallationID(r.Context(), installationID)
+	if err != nil || len(routineTriggers) == 0 {
+		// No routine is registered for this installation. We deliberately
+		// return 200 so GitHub does not retry: the workspace either hasn't
+		// completed the connect flow yet, or has disconnected the App.
+		slog.Debug("github event: no routine for installation", "installation_id", envelope.Installation.ID)
+		w.WriteHeader(http.StatusOK)
+		return
 	}
 
-	received, created, autoFixComments := 0, 0, 0
-	if err == nil {
-		autoFixComments = h.processGitHubAutoFixEvents(r.Context(), webhook, body, r.Header)
-		received, created = h.ingestWithWebhook(r.Context(), webhook, body, r.Header)
-	}
-	routineReceived, routineRan := h.ingestRoutineTriggers(r.Context(), routineTriggers, "github", body, r.Header)
+	received, ran := h.ingestRoutineTriggers(r.Context(), routineTriggers, "github", body, r.Header)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]any{
-		"received":          received + routineReceived,
-		"created":           created,
-		"auto_fix_comments": autoFixComments,
-		"routine_received":  routineReceived,
-		"routine_ran":       routineRan,
+		"received": received,
+		"ran":      ran,
 	})
 }

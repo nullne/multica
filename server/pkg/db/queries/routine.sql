@@ -9,6 +9,24 @@ INSERT INTO routine (
 )
 RETURNING *;
 
+-- name: CreateManagedRoutine :one
+INSERT INTO routine (
+    workspace_id, name, priority, enabled, managed, created_by_id, created_by_type
+) VALUES (
+    $1, $2, 'medium', TRUE, TRUE, $3, $4
+)
+RETURNING *;
+
+-- name: GetManagedRoutineByWorkspace :one
+SELECT * FROM routine
+WHERE workspace_id = $1 AND managed = TRUE
+ORDER BY created_at ASC
+LIMIT 1;
+
+-- name: DeleteManagedRoutineByWorkspace :exec
+DELETE FROM routine
+WHERE workspace_id = $1 AND managed = TRUE;
+
 -- name: GetRoutineInWorkspace :one
 SELECT * FROM routine
 WHERE id = $1 AND workspace_id = $2;

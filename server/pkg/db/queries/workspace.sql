@@ -42,6 +42,11 @@ RETURNING *;
 -- name: GetWorkspaceByInstallationID :one
 SELECT * FROM workspace WHERE github_installation_id = $1;
 
+-- name: ListConnectedGitHubWorkspaces :many
+SELECT * FROM workspace
+WHERE github_installation_id IS NOT NULL
+ORDER BY created_at ASC;
+
 -- name: ClearGitHubInstallation :one
 UPDATE workspace SET github_installation_id = NULL, updated_at = now()
 WHERE id = $1

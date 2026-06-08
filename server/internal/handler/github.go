@@ -2,15 +2,11 @@ package handler
 
 import (
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/nullne/multica/server/internal/auth"
 	gh "github.com/nullne/multica/server/internal/github"
-	wh "github.com/nullne/multica/server/internal/webhook"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
@@ -32,17 +28,16 @@ func (h *Handler) GitHubInstallURL(w http.ResponseWriter, r *http.Request) {
 //
 // Side effects (in one transaction):
 //  1. Persist installation_id on the workspace.
-//  2. Upsert a source_type='github' webhook record bound to installation_id.
-//     This is what /api/webhook/github looks up to route incoming events
-//     through the unified webhook pipeline.
+//  2. Provision the managed GitHub auto-fix routine (github triggers +
+//     comment_issue action + bot user) bound to the installation. This is
+//     what /api/webhook/github routes incoming events through.
 func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 	if h.GitHubApp == nil {
 		writeError(w, http.StatusNotImplemented, "GitHub App not configured")
 		return
 	}
 
-	userID, ok := requireUserID(w, r)
-	if !ok {
+	if _, ok := requireUserID(w, r); !ok {
 		return
 	}
 
@@ -75,40 +70,10 @@ func (h *Handler) GitHubConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Idempotency: if a webhook is already bound to this installation (e.g.
-	// the user re-runs the install flow), skip creation.
-	if _, err := qtx.GetWebhookByInstallationID(r.Context(), installationID); err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusInternalServerError, "failed to check existing webhook")
-			return
-		}
-		// No existing webhook — create one. token_hash is required+unique by
-		// schema even though GitHub webhooks authenticate via HMAC, so we
-		// generate a random token to satisfy the constraint. The token is
-		// never returned to the client.
-		rawToken, tokErr := wh.GenerateToken()
-		if tokErr != nil {
-			writeError(w, http.StatusInternalServerError, "failed to generate token")
-			return
-		}
-		prefix := rawToken
-		if len(prefix) > 12 {
-			prefix = prefix[:12]
-		}
-		if _, err := qtx.CreateWebhook(r.Context(), db.CreateWebhookParams{
-			WorkspaceID:        ws.ID,
-			Name:               "GitHub App",
-			SourceType:         "github",
-			TokenHash:          auth.HashToken(rawToken),
-			TokenPrefix:        prefix,
-			DedupWindowSeconds: 600,
-			CreatedBy:          parseUUID(userID),
-			InstallationID:     installationID,
-		}); err != nil {
-			slog.Warn("github connect: create webhook failed", "workspace_id", workspaceID, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to create github webhook")
-			return
-		}
+	if err := EnsureGitHubAutoFixRoutine(r.Context(), qtx, tx, ws.ID, installationID); err != nil {
+		slog.Warn("github connect: provision auto-fix routine failed", "workspace_id", workspaceID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to provision github routine")
+		return
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
@@ -141,7 +106,7 @@ func (h *Handler) GitHubStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // GitHubDisconnect removes the GitHub App installation from the workspace
-// and the matching webhook record (so /api/webhook/github stops routing
+// and the managed auto-fix routine (so /api/webhook/github stops routing
 // events for this installation).
 func (h *Handler) GitHubDisconnect(w http.ResponseWriter, r *http.Request) {
 	workspaceID := resolveWorkspaceID(r)
@@ -155,20 +120,16 @@ func (h *Handler) GitHubDisconnect(w http.ResponseWriter, r *http.Request) {
 
 	qtx := h.Queries.WithTx(tx)
 
-	current, err := qtx.GetWorkspace(r.Context(), parseUUID(workspaceID))
-	if err != nil {
+	if _, err := qtx.GetWorkspace(r.Context(), parseUUID(workspaceID)); err != nil {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
 	}
 
-	if current.GithubInstallationID.Valid {
-		if err := qtx.DeleteWebhookByInstallationID(r.Context(), current.GithubInstallationID); err != nil {
-			slog.Warn("github disconnect: delete webhook failed",
-				"workspace_id", workspaceID,
-				"installation_id", current.GithubInstallationID.Int64,
-				"error", err,
-			)
-		}
+	if err := qtx.DeleteManagedRoutineByWorkspace(r.Context(), parseUUID(workspaceID)); err != nil {
+		slog.Warn("github disconnect: delete managed routine failed",
+			"workspace_id", workspaceID,
+			"error", err,
+		)
 	}
 
 	ws, err := qtx.ClearGitHubInstallation(r.Context(), parseUUID(workspaceID))
