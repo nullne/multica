@@ -9,6 +9,14 @@ const mockIssueFetch = vi.fn();
 const mockInboxFetch = vi.fn();
 const mockLabelFetch = vi.fn();
 const mockSetRuntimes = vi.fn();
+const mockRuntimeReset = vi.fn();
+const mockSetIssues = vi.fn();
+const mockSetActiveIssue = vi.fn();
+const mockSetInboxItems = vi.fn();
+const mockSetLabels = vi.fn();
+const mockSetActiveTasks = vi.fn();
+const mockClearIssueSelection = vi.fn();
+const mockRoutineReset = vi.fn();
 
 vi.mock("sonner", () => ({
   toast: {
@@ -29,7 +37,8 @@ vi.mock("@/features/issues", () => ({
   useIssueStore: {
     getState: () => ({
       fetch: mockIssueFetch,
-      setIssues: vi.fn(),
+      setIssues: mockSetIssues,
+      setActiveIssue: mockSetActiveIssue,
     }),
   },
 }));
@@ -38,7 +47,7 @@ vi.mock("@/features/inbox", () => ({
   useInboxStore: {
     getState: () => ({
       fetch: mockInboxFetch,
-      setItems: vi.fn(),
+      setItems: mockSetInboxItems,
     }),
   },
 }));
@@ -47,7 +56,7 @@ vi.mock("@/features/labels", () => ({
   useLabelStore: {
     getState: () => ({
       fetch: mockLabelFetch,
-      setLabels: vi.fn(),
+      setLabels: mockSetLabels,
     }),
   },
 }));
@@ -56,6 +65,31 @@ vi.mock("@/features/runtimes", () => ({
   useRuntimeStore: {
     getState: () => ({
       setRuntimes: mockSetRuntimes,
+      reset: mockRuntimeReset,
+    }),
+  },
+}));
+
+vi.mock("@/features/routines", () => ({
+  useRoutineStore: {
+    getState: () => ({
+      reset: mockRoutineReset,
+    }),
+  },
+}));
+
+vi.mock("@/features/issues/stores/active-task-store", () => ({
+  useActiveTaskStore: {
+    getState: () => ({
+      setTasks: mockSetActiveTasks,
+    }),
+  },
+}));
+
+vi.mock("@/features/issues/stores/selection-store", () => ({
+  useIssueSelectionStore: {
+    getState: () => ({
+      clear: mockClearIssueSelection,
     }),
   },
 }));
@@ -160,5 +194,39 @@ describe("useWorkspaceStore hydrateWorkspace", () => {
     expect(useWorkspaceStore.getState().members).toEqual([{ id: "member-new" }]);
     expect(useWorkspaceStore.getState().agents).toEqual([{ id: "agent-new" }]);
     expect(useWorkspaceStore.getState().skills).toEqual([{ id: "skill-new" }]);
+  });
+});
+
+describe("useWorkspaceStore switchWorkspace", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    useWorkspaceStore.setState({
+      workspace: makeWorkspace("ws-old"),
+      workspaces: [makeWorkspace("ws-old"), makeWorkspace("ws-new")],
+      members: [{ id: "member-old" }] as never,
+      agents: [{ id: "agent-old" }] as never,
+      skills: [{ id: "skill-old" }] as never,
+    });
+    mockIssueFetch.mockResolvedValue(undefined);
+    mockInboxFetch.mockResolvedValue(undefined);
+    mockLabelFetch.mockResolvedValue(undefined);
+    mockListMembers.mockResolvedValue([]);
+    mockListAgents.mockResolvedValue([]);
+    mockListSkills.mockResolvedValue([]);
+  });
+
+  it("clears workspace-scoped stores before hydrating the next workspace", async () => {
+    await useWorkspaceStore.getState().switchWorkspace("ws-new");
+
+    expect(mockSetIssues).toHaveBeenCalledWith([]);
+    expect(mockSetActiveIssue).toHaveBeenCalledWith(null);
+    expect(mockSetInboxItems).toHaveBeenCalledWith([]);
+    expect(mockSetLabels).toHaveBeenCalledWith([]);
+    expect(mockRuntimeReset).toHaveBeenCalledOnce();
+    expect(mockRoutineReset).toHaveBeenCalledOnce();
+    expect(mockSetActiveTasks).toHaveBeenCalledWith([]);
+    expect(mockClearIssueSelection).toHaveBeenCalledOnce();
+    expect(useWorkspaceStore.getState().workspace?.id).toBe("ws-new");
   });
 });

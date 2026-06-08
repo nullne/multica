@@ -64,14 +64,23 @@ export const useInboxStore = create<InboxState>((set, get) => ({
   loading: true,
 
   fetch: async () => {
+    const workspaceId = api.getWorkspaceId();
     logger.debug("fetch start");
     const isInitialLoad = get().items.length === 0;
     if (isInitialLoad) set({ loading: true });
     try {
       const data = await api.listInbox();
+      if (api.getWorkspaceId() !== workspaceId) {
+        logger.debug("skip stale fetch result", workspaceId);
+        return;
+      }
       logger.info("fetched", data.length, "items");
       set({ items: data, loading: false });
     } catch (err) {
+      if (api.getWorkspaceId() !== workspaceId) {
+        logger.debug("skip stale fetch error", workspaceId);
+        return;
+      }
       logger.error("fetch failed", err);
       toast.error("Failed to load inbox");
       if (isInitialLoad) set({ loading: false });

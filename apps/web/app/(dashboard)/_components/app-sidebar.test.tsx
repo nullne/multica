@@ -219,6 +219,19 @@ describe("AppSidebar user menu", () => {
     expect(allLinks.indexOf(routinesLink)).toBe(allLinks.indexOf(issuesLink) + 1);
   });
 
+  it("routes workspace-specific pages back to their module root after switching workspace", async () => {
+    mockPathname = "/inbox";
+    mockSearchParams = new URLSearchParams("issue=issue-1");
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(screen.getByText("Test Workspace"));
+    await user.click(await screen.findByRole("menuitem", { name: /Prod Debug/i }));
+
+    expect(switchWorkspaceMock).toHaveBeenCalledWith("ws-2");
+    expect(pushMock).toHaveBeenCalledWith("/inbox");
+  });
+
   it("opens the bottom user menu without throwing", async () => {
     const user = userEvent.setup();
     renderSidebar();

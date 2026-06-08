@@ -6,6 +6,9 @@ import { useIssueStore } from "@/features/issues";
 import { useInboxStore } from "@/features/inbox";
 import { useLabelStore } from "@/features/labels";
 import { useRuntimeStore } from "@/features/runtimes";
+import { useRoutineStore } from "@/features/routines";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
+import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { toast } from "sonner";
 import { api } from "@/shared/api";
 import { createLogger } from "@/shared/logger";
@@ -122,9 +125,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     // Clear ALL stale data across every store before hydrating.
     useIssueStore.getState().setIssues([]);
+    useIssueStore.getState().setActiveIssue(null);
     useInboxStore.getState().setItems([]);
     useLabelStore.getState().setLabels([]);
-    useRuntimeStore.getState().setRuntimes([]);
+    useRuntimeStore.getState().reset();
+    useRoutineStore.getState().reset();
+    useActiveTaskStore.getState().setTasks([]);
+    useIssueSelectionStore.getState().clear();
     set({ workspace: ws, members: [], agents: [], skills: [] });
 
     await hydrateWorkspace(workspaces, ws.id);

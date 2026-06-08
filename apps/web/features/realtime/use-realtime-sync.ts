@@ -31,6 +31,11 @@ import type {
 
 const logger = createLogger("realtime-sync");
 
+function isCurrentWorkspace(workspaceId?: string | null): boolean {
+  const currentWsId = useWorkspaceStore.getState().workspace?.id;
+  return Boolean(workspaceId && workspaceId === currentWsId);
+}
+
 /**
  * Centralized WS → store sync. Called once from WSProvider.
  *
@@ -104,6 +109,7 @@ export function useRealtimeSync(ws: WSClient | null) {
     const unsubIssueUpdated = ws.on("issue:updated", (p) => {
       const { issue } = p as IssueUpdatedPayload;
       if (!issue?.id) return;
+      if (!isCurrentWorkspace(issue.workspace_id)) return;
       useIssueStore.getState().updateIssue(issue.id, issue);
       useRecentsStore.getState().upsertIssue(issue);
       if (issue.status) {
@@ -114,6 +120,7 @@ export function useRealtimeSync(ws: WSClient | null) {
     const unsubIssueCreated = ws.on("issue:created", (p) => {
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
+      if (!isCurrentWorkspace(issue.workspace_id)) return;
       useIssueStore.getState().addIssue(issue);
       useRecentsStore.getState().upsertIssue(issue);
     });
@@ -127,11 +134,13 @@ export function useRealtimeSync(ws: WSClient | null) {
 
     const unsubLabelCreated = ws.on("label:created", (p) => {
       const { label } = p as LabelCreatedPayload;
+      if (label && !isCurrentWorkspace(label.workspace_id)) return;
       if (label) useLabelStore.getState().addLabel(label);
     });
 
     const unsubLabelUpdated = ws.on("label:updated", (p) => {
       const { label } = p as LabelUpdatedPayload;
+      if (label && !isCurrentWorkspace(label.workspace_id)) return;
       if (label?.id) useLabelStore.getState().updateLabel(label.id, label);
     });
 

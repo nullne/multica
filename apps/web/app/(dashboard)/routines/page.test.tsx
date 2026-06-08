@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useAuthStore } from "@/features/auth";
+import { useRoutineStore } from "@/features/routines";
 import { useWorkspaceStore } from "@/features/workspace";
 
 const mocks = vi.hoisted(() => ({
@@ -51,7 +52,10 @@ vi.mock("@/features/issues/components/pickers", () => ({
 }));
 
 vi.mock("@/shared/api", () => ({
-  api: mocks.api,
+  api: {
+    ...mocks.api,
+    getWorkspaceId: () => "ws-1",
+  },
   generateRoutineTriggerTokenDraft: mocks.generateRoutineTriggerTokenDraft,
   regenerateRoutineTriggerToken: mocks.regenerateRoutineTriggerToken,
 }));
@@ -62,7 +66,16 @@ vi.mock("sonner", () => ({
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => mocks.searchParams,
+  useRouter: () => ({ push: vi.fn() }),
 }));
+
+vi.mock("react-resizable-panels", async (importOriginal) => {
+  const actual: object = await importOriginal();
+  return {
+    ...actual,
+    useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: () => {} }),
+  };
+});
 
 import RoutinesPage from "./page";
 
@@ -87,6 +100,19 @@ describe("RoutinesPage", () => {
       isLoading: false,
     });
     useWorkspaceStore.setState({
+      workspace: {
+        id: "ws-1",
+        name: "Workspace",
+        slug: "workspace",
+        description: null,
+        context: null,
+        settings: {},
+        repos: [],
+        issue_prefix: "MUL",
+        github_connected: false,
+        created_at: "2026-05-22T08:00:00Z",
+        updated_at: "2026-05-22T08:00:00Z",
+      },
       members: [
         {
           id: "member-1",
@@ -102,6 +128,7 @@ describe("RoutinesPage", () => {
       ],
       agents: [],
     });
+    useRoutineStore.setState({ routines: [], loading: true, selectedId: null });
     mocks.api.listRoutines.mockResolvedValue([]);
     mocks.api.getRoutine.mockResolvedValue(null);
     mocks.api.listRoutineRuns.mockResolvedValue([]);
@@ -228,7 +255,7 @@ describe("RoutinesPage", () => {
 
     expect(screen.getByRole("heading", { name: "Routines" })).toBeInTheDocument();
     expect(screen.getByText("Loading routines...")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /New routine/i })).toHaveAttribute("href", "/routines?new=1");
+    expect(screen.getByRole("button", { name: /New/i })).toBeInTheDocument();
   });
 
   it("renders routines returned by the API", async () => {
@@ -246,12 +273,30 @@ describe("RoutinesPage", () => {
         github_auto_fix_enabled: false,
       },
     ]);
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Daily code review",
+      instructions: "Review incoming work",
+      priority: "medium",
+      triggers: [{ id: "trigger-1", trigger_type: "schedule", schedule: "0 9 * * 1", timezone: "UTC", config: {} }],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+      github_auto_fix_enabled: false,
+    });
+    const user = userEvent.setup();
     render(<RoutinesPage />);
 
-    expect(await screen.findByText("Daily code review")).toBeInTheDocument();
+    const row = await screen.findByRole("button", { name: /Daily code review/i });
+    expect(row).toBeInTheDocument();
     expect(screen.getByText("1 trigger · Enabled")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Daily code review/i })).toHaveAttribute("href", "/routines/routine-1");
     expect(screen.queryByText("View")).not.toBeInTheDocument();
+
+    await user.click(row);
+
+    expect(await screen.findByText("Review incoming work")).toBeInTheDocument();
   });
 
   it("hides creation entry points for regular members", async () => {
@@ -276,7 +321,7 @@ describe("RoutinesPage", () => {
     render(<RoutinesPage />);
 
     await screen.findByText("No routines yet");
-    expect(screen.queryByRole("link", { name: /New routine/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /New/i })).not.toBeInTheDocument();
     expect(screen.getByText("Ask an owner or admin to create routines for this workspace.")).toBeInTheDocument();
   });
 
