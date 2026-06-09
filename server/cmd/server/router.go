@@ -305,6 +305,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 
 			// Routines
 			r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/api/routine-trigger-token-drafts", h.GenerateRoutineTriggerTokenDraft)
+			r.Get("/api/routine-events", h.ListRoutineEvents)
 			r.Route("/api/routines", func(r chi.Router) {
 				r.Get("/", h.ListRoutines)
 				r.With(middleware.RequireWorkspaceRole(queries, "owner", "admin")).Post("/", h.CreateRoutine)

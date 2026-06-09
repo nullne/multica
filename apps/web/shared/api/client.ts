@@ -49,6 +49,7 @@ import type {
   Routine,
   CreateRoutineRequest,
   UpdateRoutineRequest,
+  RoutineEvent,
   RoutineRun,
 } from "@/shared/types";
 import { type Logger, noopLogger } from "@/shared/logger";
@@ -985,7 +986,28 @@ export class ApiClient {
     });
   }
 
-  async listRoutineRuns(id: string): Promise<RoutineRun[]> {
-    return this.fetch(`/api/routines/${id}/runs`);
+  async listRoutineRuns(id: string, params: { limit?: number; offset?: number } = {}): Promise<RoutineRun[]> {
+    const searchParams = new URLSearchParams();
+    if (params.limit !== undefined) searchParams.set("limit", String(params.limit));
+    if (params.offset !== undefined) searchParams.set("offset", String(params.offset));
+    const query = searchParams.toString();
+    return this.fetch(`/api/routines/${id}/runs${query ? `?${query}` : ""}`);
+  }
+
+  async listRoutineEvents(params: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    source_type?: string;
+    event_type?: string;
+  } = {}): Promise<RoutineEvent[]> {
+    const searchParams = new URLSearchParams();
+    if (params.limit !== undefined) searchParams.set("limit", String(params.limit));
+    if (params.offset !== undefined) searchParams.set("offset", String(params.offset));
+    if (params.status) searchParams.set("status", params.status);
+    if (params.source_type) searchParams.set("source_type", params.source_type);
+    if (params.event_type) searchParams.set("event_type", params.event_type);
+    const query = searchParams.toString();
+    return this.fetch(`/api/routine-events${query ? `?${query}` : ""}`);
   }
 }

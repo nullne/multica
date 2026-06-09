@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useAuthStore } from "@/features/auth";
 import { useRoutineStore } from "@/features/routines";
@@ -256,6 +256,7 @@ describe("RoutinesPage", () => {
     expect(screen.getByRole("heading", { name: "Routines" })).toBeInTheDocument();
     expect(screen.getByText("Loading routines...")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /New/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Events/i })).toHaveAttribute("href", "/routines/events");
   });
 
   it("renders routines returned by the API", async () => {
@@ -297,6 +298,166 @@ describe("RoutinesPage", () => {
     await user.click(row);
 
     expect(await screen.findByText("Review incoming work")).toBeInTheDocument();
+    expect(mocks.api.listRoutineRuns).toHaveBeenCalledWith("routine-1", { limit: 10, offset: 0 });
+    expect(screen.getByRole("switch", { name: "Routine enabled" })).toBeChecked();
+    expect(screen.queryByRole("button", { name: /Pause routine/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps inactive routines hidden until the inactive filter is enabled", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams();
+    mocks.api.listRoutines.mockResolvedValue([
+      {
+        id: "routine-active",
+        workspace_id: "ws-1",
+        name: "Active routine",
+        triggers: [],
+        actions: [],
+        subscriber_ids: [],
+        label_ids: [],
+        enabled: true,
+        managed: false,
+        github_auto_fix_enabled: false,
+      },
+      {
+        id: "routine-paused",
+        workspace_id: "ws-1",
+        name: "Paused routine",
+        triggers: [],
+        actions: [],
+        subscriber_ids: [],
+        label_ids: [],
+        enabled: false,
+        managed: false,
+        github_auto_fix_enabled: false,
+      },
+    ]);
+
+    render(<RoutinesPage />);
+
+    expect(await screen.findByRole("button", { name: /Active routine/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Paused routine/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Show inactive/i }));
+
+    expect(screen.getByRole("button", { name: /Paused routine/i })).toBeInTheDocument();
+  });
+
+  it("expands system routines in a separate section instead of merging them into the main list", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams();
+    mocks.api.listRoutines.mockResolvedValue([
+      {
+        id: "routine-normal",
+        workspace_id: "ws-1",
+        name: "Normal routine",
+        triggers: [],
+        actions: [],
+        subscriber_ids: [],
+        label_ids: [],
+        enabled: true,
+        managed: false,
+        github_auto_fix_enabled: false,
+      },
+      {
+        id: "routine-system",
+        workspace_id: "ws-1",
+        name: "System routine",
+        triggers: [],
+        actions: [],
+        subscriber_ids: [],
+        label_ids: [],
+        enabled: true,
+        managed: true,
+        github_auto_fix_enabled: false,
+      },
+    ]);
+
+    render(<RoutinesPage />);
+
+    expect(await screen.findByRole("button", { name: /Normal routine/i })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "System routines" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Show system routines/i }));
+
+    const systemSection = screen.getByRole("region", { name: "System routines" });
+    expect(within(systemSection).getByRole("button", { name: /System routine/i })).toBeInTheDocument();
+  });
+
+  it("loads more routine runs when the detail page scrolls near the bottom", async () => {
+    mocks.searchParams = new URLSearchParams();
+    mocks.api.listRoutines.mockResolvedValue([
+      {
+        id: "routine-1",
+        workspace_id: "ws-1",
+        name: "Daily code review",
+        triggers: [{ id: "trigger-1" }],
+        actions: [],
+        subscriber_ids: [],
+        label_ids: [],
+        enabled: true,
+        github_auto_fix_enabled: false,
+      },
+    ]);
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Daily code review",
+      instructions: "Review incoming work",
+      priority: "medium",
+      triggers: [{ id: "trigger-1", trigger_type: "schedule", schedule: "0 9 * * 1", timezone: "UTC", config: {} }],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+      github_auto_fix_enabled: false,
+    });
+    mocks.api.listRoutineRuns
+      .mockResolvedValueOnce(Array.from({ length: 10 }, (_, index) => ({
+        id: `run-${index + 1}`,
+        routine_id: "routine-1",
+        routine_event_id: null,
+        trigger_id: "trigger-1",
+        action_id: null,
+        event_type: "manual",
+        dedup_key: `run-${index + 1}`,
+        payload: {},
+        status: "processed",
+        issue_id: null,
+        comment_id: null,
+        error_message: null,
+        created_at: "2026-05-22T08:00:00Z",
+      })))
+      .mockResolvedValueOnce([
+        {
+          id: "run-11",
+          routine_id: "routine-1",
+          routine_event_id: null,
+          trigger_id: "trigger-1",
+          action_id: null,
+          event_type: "manual",
+          dedup_key: "run-11",
+          payload: {},
+          status: "processed",
+          issue_id: null,
+          comment_id: null,
+          error_message: null,
+          created_at: "2026-05-22T07:00:00Z",
+        },
+      ]);
+    const user = userEvent.setup();
+    render(<RoutinesPage />);
+
+    await user.click(await screen.findByRole("button", { name: /Daily code review/i }));
+    const scrollContainer = await screen.findByTestId("routine-detail-scroll");
+    Object.defineProperty(scrollContainer, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(scrollContainer, "clientHeight", { configurable: true, value: 500 });
+    Object.defineProperty(scrollContainer, "scrollTop", { configurable: true, value: 480 });
+    fireEvent.scroll(scrollContainer);
+
+    await waitFor(() => {
+      expect(mocks.api.listRoutineRuns).toHaveBeenCalledWith("routine-1", { limit: 10, offset: 10 });
+    });
   });
 
   it("hides creation entry points for regular members", async () => {
@@ -347,8 +508,8 @@ describe("RoutinesPage", () => {
 
     expect(screen.queryByText(/Runs once on/)).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Once" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Run on a recurring cron schedule or once at a future time")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /GitHub event/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Run on a recurring cron schedule or once at a future time")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /GitHub event/i })).toBeInTheDocument();
     const addTrigger = screen.getByRole("button", { name: /Add another trigger/i });
 
     await user.click(addTrigger);

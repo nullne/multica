@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/middleware"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
@@ -112,6 +113,110 @@ func TestRoutineCRUD_CreateGetAndRunList(t *testing.T) {
 	testHandler.ListRoutineRuns(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("ListRoutineRuns: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListRoutineEventsPaginatesWorkspaceEventLog(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	created := make([]db.RoutineEvent, 0, 3)
+	for i, eventType := range []string{"routine.test.first", "routine.test.second", "routine.test.third"} {
+		event, err := testHandler.Queries.CreateRoutineEvent(ctx, db.CreateRoutineEventParams{
+			WorkspaceID:        parseUUID(testWorkspaceID),
+			SourceType:         "api",
+			EventType:          eventType,
+			DedupKey:           eventType,
+			ExternalDeliveryID: pgtype.Text{String: "delivery-" + eventType, Valid: true},
+			Data:               []byte(`{"headers":{"x-test":"true"}}`),
+			Payload:            []byte(`{"title":"Routine event page"}`),
+			Status:             "processed",
+		})
+		if err != nil {
+			t.Fatalf("create routine event %d: %v", i, err)
+		}
+		created = append(created, event)
+	}
+
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "GET", "/api/routine-events?limit=2&offset=1", nil)
+	testHandler.ListRoutineEvents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListRoutineEvents: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var events []RoutineEventResponse
+	if err := json.NewDecoder(w.Body).Decode(&events); err != nil {
+		t.Fatalf("decode routine events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d: %+v", len(events), events)
+	}
+	if events[0].ID != uuidToString(created[1].ID) || events[1].ID != uuidToString(created[0].ID) {
+		t.Fatalf("unexpected paginated order: got %q, %q", events[0].EventType, events[1].EventType)
+	}
+	if events[0].Payload.(map[string]any)["title"] != "Routine event page" {
+		t.Fatalf("payload not decoded: %+v", events[0].Payload)
+	}
+}
+
+func TestListRoutineEventsFiltersByStatusSourceAndEventType(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	matching, err := testHandler.Queries.CreateRoutineEvent(ctx, db.CreateRoutineEventParams{
+		WorkspaceID: parseUUID(testWorkspaceID),
+		SourceType:  "github",
+		EventType:   "github.pull_request.opened",
+		DedupKey:    "routine-event-filter-match",
+		Data:        []byte(`{}`),
+		Payload:     []byte(`{"title":"Matched event"}`),
+		Status:      "error",
+	})
+	if err != nil {
+		t.Fatalf("create matching routine event: %v", err)
+	}
+	for _, fixture := range []struct {
+		sourceType string
+		eventType  string
+		status     string
+		dedupKey   string
+	}{
+		{"github", "github.pull_request.closed", "error", "routine-event-filter-wrong-event"},
+		{"api", "github.pull_request.opened", "error", "routine-event-filter-wrong-source"},
+		{"github", "github.pull_request.opened", "processed", "routine-event-filter-wrong-status"},
+	} {
+		_, err := testHandler.Queries.CreateRoutineEvent(ctx, db.CreateRoutineEventParams{
+			WorkspaceID: parseUUID(testWorkspaceID),
+			SourceType:  fixture.sourceType,
+			EventType:   fixture.eventType,
+			DedupKey:    fixture.dedupKey,
+			Data:        []byte(`{}`),
+			Payload:     []byte(`{}`),
+			Status:      fixture.status,
+		})
+		if err != nil {
+			t.Fatalf("create routine event fixture %s: %v", fixture.dedupKey, err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "GET", "/api/routine-events?status=error&source_type=github&event_type=github.pull_request.opened", nil)
+	testHandler.ListRoutineEvents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListRoutineEvents: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var events []RoutineEventResponse
+	if err := json.NewDecoder(w.Body).Decode(&events); err != nil {
+		t.Fatalf("decode routine events: %v", err)
+	}
+	if len(events) != 1 || events[0].ID != uuidToString(matching.ID) {
+		t.Fatalf("expected only matching event, got %+v", events)
 	}
 }
 

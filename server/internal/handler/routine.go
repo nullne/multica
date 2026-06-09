@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,6 +113,21 @@ type RoutineRunResponse struct {
 	ErrorMessage   *string        `json:"error_message"`
 	CreatedAt      string         `json:"created_at"`
 	Issue          *IssueResponse `json:"issue,omitempty"`
+}
+
+type RoutineEventResponse struct {
+	ID                 string  `json:"id"`
+	WorkspaceID        string  `json:"workspace_id"`
+	SourceType         string  `json:"source_type"`
+	EventType          string  `json:"event_type"`
+	DedupKey           string  `json:"dedup_key"`
+	ExternalDeliveryID *string `json:"external_delivery_id"`
+	Data               any     `json:"data"`
+	Payload            any     `json:"payload"`
+	Status             string  `json:"status"`
+	ErrorMessage       *string `json:"error_message"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
 }
 
 type RoutineTriggerTokenResponse struct {
@@ -577,6 +593,79 @@ func validateRoutineRequest(req CreateRoutineRequest) string {
 	return ""
 }
 
+func (h *Handler) ListRoutineEvents(w http.ResponseWriter, r *http.Request) {
+	workspaceID := ctxWorkspaceID(r.Context())
+	limit := 20
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v > 0 {
+			offset = v
+		}
+	}
+	statusFilter := optionalTextQuery(r, "status")
+	sourceTypeFilter := optionalTextQuery(r, "source_type")
+	eventTypeFilter := optionalTextQuery(r, "event_type")
+
+	events, err := h.Queries.ListRoutineEvents(r.Context(), db.ListRoutineEventsParams{
+		WorkspaceID: parseUUID(workspaceID),
+		Limit:       int32(limit),
+		Offset:      int32(offset),
+		Status:      statusFilter,
+		SourceType:  sourceTypeFilter,
+		EventType:   eventTypeFilter,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list routine events")
+		return
+	}
+	resp := make([]RoutineEventResponse, 0, len(events))
+	for _, event := range events {
+		resp = append(resp, routineEventToResponse(event))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func optionalTextQuery(r *http.Request, key string) pgtype.Text {
+	value := strings.TrimSpace(r.URL.Query().Get(key))
+	if value == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: value, Valid: true}
+}
+
+func routineEventToResponse(event db.RoutineEvent) RoutineEventResponse {
+	var data any
+	if len(event.Data) > 0 {
+		_ = json.Unmarshal(event.Data, &data)
+	}
+	var payload any
+	if len(event.Payload) > 0 {
+		_ = json.Unmarshal(event.Payload, &payload)
+	}
+	return RoutineEventResponse{
+		ID:                 uuidToString(event.ID),
+		WorkspaceID:        uuidToString(event.WorkspaceID),
+		SourceType:         event.SourceType,
+		EventType:          event.EventType,
+		DedupKey:           event.DedupKey,
+		ExternalDeliveryID: textToPtr(event.ExternalDeliveryID),
+		Data:               data,
+		Payload:            payload,
+		Status:             event.Status,
+		ErrorMessage:       textToPtr(event.ErrorMessage),
+		CreatedAt:          timestampToString(event.CreatedAt),
+		UpdatedAt:          timestampToString(event.UpdatedAt),
+	}
+}
+
 func (h *Handler) ListRoutineRuns(w http.ResponseWriter, r *http.Request) {
 	workspaceID := ctxWorkspaceID(r.Context())
 	id := parseUUID(chi.URLParam(r, "id"))
@@ -584,10 +673,25 @@ func (h *Handler) ListRoutineRuns(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "routine not found")
 		return
 	}
+	limit := 100
+	offset := 0
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if o := r.URL.Query().Get("offset"); o != "" {
+		if v, err := strconv.Atoi(o); err == nil && v > 0 {
+			offset = v
+		}
+	}
 	runs, err := h.Queries.ListRoutineRuns(r.Context(), db.ListRoutineRunsParams{
 		RoutineID: id,
-		Limit:     100,
-		Offset:    0,
+		Limit:     int32(limit),
+		Offset:    int32(offset),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list routine runs")
