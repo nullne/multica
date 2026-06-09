@@ -259,6 +259,9 @@ RETURNING *;
 -- name: ListRoutineEvents :many
 SELECT * FROM routine_event
 WHERE workspace_id = $1
+  AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
+  AND (sqlc.narg('source_type')::text IS NULL OR source_type = sqlc.narg('source_type'))
+  AND (sqlc.narg('event_type')::text IS NULL OR event_type = sqlc.narg('event_type'))
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 

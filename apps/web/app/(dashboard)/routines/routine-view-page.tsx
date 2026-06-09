@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import {
@@ -20,14 +20,18 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch";
 import { RoutineRunList } from "@/features/routines";
 import { useRoutineStore } from "@/features/routines";
 import { useAuthStore } from "@/features/auth";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
-import { MoreHorizontal, Pencil, Play, Sparkles, Trash2 } from "lucide-react";
+import { Loader2, MoreHorizontal, Pencil, Play, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/shared/api";
 import type { Routine, RoutineRun } from "@/shared/types";
 import { toast } from "sonner";
+
+const ROUTINE_RUN_PAGE_SIZE = 10;
+
 export function RoutineViewPage({ routineID }: { routineID: string }) {
   const router = useRouter();
   const currentUser = useAuthStore((s) => s.user);
@@ -41,18 +45,37 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const [deleting, setDeleting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
+  const [hasMoreRuns, setHasMoreRuns] = useState(true);
+  const [nextRunOffset, setNextRunOffset] = useState(0);
   const currentMember = members.find((member) => member.user_id === currentUser?.id);
   const canManageRoutines =
     (currentMember?.role === "owner" || currentMember?.role === "admin") && !routine?.managed;
 
+  const loadRuns = useCallback(async (offset: number, replace = false) => {
+    const page = await api.listRoutineRuns(routineID, {
+      limit: ROUTINE_RUN_PAGE_SIZE,
+      offset,
+    });
+    setRuns((current) => (replace ? page : [...current, ...page]));
+    setNextRunOffset(offset + ROUTINE_RUN_PAGE_SIZE);
+    setHasMoreRuns(page.length === ROUTINE_RUN_PAGE_SIZE);
+    return page;
+  }, [routineID]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([api.getRoutine(routineID), api.listRoutineRuns(routineID)])
+    Promise.all([
+      api.getRoutine(routineID),
+      api.listRoutineRuns(routineID, { limit: ROUTINE_RUN_PAGE_SIZE, offset: 0 }),
+    ])
       .then(([routineResult, runResult]) => {
         if (cancelled) return;
         setRoutine(routineResult);
         setRuns(runResult);
+        setNextRunOffset(ROUTINE_RUN_PAGE_SIZE);
+        setHasMoreRuns(runResult.length === ROUTINE_RUN_PAGE_SIZE);
       })
       .catch((error) => {
         if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routine");
@@ -65,12 +88,28 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     };
   }, [routineID, workspaceId]);
 
+  const handleScroll = useCallback(
+    (event: React.UIEvent<HTMLElement>) => {
+      if (loading || loadingMoreRuns || !hasMoreRuns) return;
+      const target = event.currentTarget;
+      const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+      if (distanceFromBottom >= 160) return;
+      setLoadingMoreRuns(true);
+      void loadRuns(nextRunOffset)
+        .catch((error) => {
+          toast.error(error instanceof Error ? error.message : "Failed to load routine runs");
+        })
+        .finally(() => setLoadingMoreRuns(false));
+    },
+    [hasMoreRuns, loadRuns, loading, loadingMoreRuns, nextRunOffset],
+  );
+
   async function handleTrigger() {
     if (!routine) return;
     setTriggering(true);
     try {
       await api.triggerRoutine(routine.id);
-      setRuns(await api.listRoutineRuns(routine.id));
+      await loadRuns(0, true);
       toast.success("Routine triggered");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to trigger routine");
@@ -111,7 +150,11 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
 
   return (
     <>
-      <main className="h-full min-h-0 overflow-y-auto bg-background">
+      <main
+        data-testid="routine-detail-scroll"
+        onScroll={handleScroll}
+        className="h-full min-h-0 overflow-y-auto bg-background"
+      >
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-6 py-5">
           <div className="flex items-start justify-between gap-4 md:items-center">
             <div className="space-y-1">
@@ -189,15 +232,12 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                     <span className="flex items-center gap-2">
                       <span>{routine.enabled ? "Enabled" : "Paused"}</span>
                       {canManageRoutines && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="xs"
-                          onClick={handleToggleStatus}
+                        <Switch
+                          checked={routine.enabled}
+                          onCheckedChange={handleToggleStatus}
                           disabled={updatingStatus}
-                        >
-                          {routine.enabled ? "Pause routine" : "Enable routine"}
-                        </Button>
+                          aria-label="Routine enabled"
+                        />
                       )}
                     </span>
                   }
@@ -244,6 +284,14 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
               </section>
 
               <RoutineRunList runs={runs} />
+              {loadingMoreRuns && (
+                <div className="flex justify-center py-2 text-sm text-muted-foreground">
+                  <span className="inline-flex items-center gap-2">
+                    <Loader2 className="size-4 animate-spin" />
+                    Loading more runs...
+                  </span>
+                </div>
+              )}
             </>
           )}
         </div>

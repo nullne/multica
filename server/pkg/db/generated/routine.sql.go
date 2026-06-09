@@ -1152,6 +1152,9 @@ func (q *Queries) ListRoutineActions(ctx context.Context, routineID pgtype.UUID)
 const listRoutineEvents = `-- name: ListRoutineEvents :many
 SELECT id, workspace_id, source_type, event_type, dedup_key, external_delivery_id, data, payload, status, error_message, created_at, updated_at FROM routine_event
 WHERE workspace_id = $1
+  AND ($4::text IS NULL OR status = $4)
+  AND ($5::text IS NULL OR source_type = $5)
+  AND ($6::text IS NULL OR event_type = $6)
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
 `
@@ -1160,10 +1163,20 @@ type ListRoutineEventsParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	Limit       int32       `json:"limit"`
 	Offset      int32       `json:"offset"`
+	Status      pgtype.Text `json:"status"`
+	SourceType  pgtype.Text `json:"source_type"`
+	EventType   pgtype.Text `json:"event_type"`
 }
 
 func (q *Queries) ListRoutineEvents(ctx context.Context, arg ListRoutineEventsParams) ([]RoutineEvent, error) {
-	rows, err := q.db.Query(ctx, listRoutineEvents, arg.WorkspaceID, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listRoutineEvents,
+		arg.WorkspaceID,
+		arg.Limit,
+		arg.Offset,
+		arg.Status,
+		arg.SourceType,
+		arg.EventType,
+	)
 	if err != nil {
 		return nil, err
 	}

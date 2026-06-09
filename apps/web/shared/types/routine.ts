@@ -3,6 +3,7 @@ import type { Issue, IssueAssigneeType, IssuePriority } from "./issue";
 export type RoutineTriggerType = "schedule" | "api" | "github";
 export type RoutineActionType = "create_issue" | "comment_issue";
 export type RoutineRunStatus = "processed" | "filtered" | "deduped" | "error";
+export type RoutineEventStatus = "received" | "processed" | "filtered" | "deduped" | "no_matching_trigger" | "parse_error" | "error";
 
 export interface RoutineTrigger {
   id: string;
@@ -118,4 +119,19 @@ export interface RoutineRun {
   error_message: string | null;
   created_at: string;
   issue?: Issue;
+}
+
+export interface RoutineEvent {
+  id: string;
+  workspace_id: string;
+  source_type: string;
+  event_type: string;
+  dedup_key: string;
+  external_delivery_id: string | null;
+  data: unknown;
+  payload: unknown;
+  status: RoutineEventStatus;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }

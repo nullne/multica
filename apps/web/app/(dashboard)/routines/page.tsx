@@ -14,8 +14,10 @@ import {
   Code2,
   Copy,
   GitBranch as Github,
+  History,
   Plus,
   Save,
+  SlidersHorizontal,
   Sparkles,
   Tag,
   Users,
@@ -23,7 +25,7 @@ import {
 } from "lucide-react";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -431,10 +433,17 @@ export default function RoutinesPage() {
   const fetchRoutines = useRoutineStore((s) => s.fetch);
   const selectRoutine = useRoutineStore((s) => s.select);
   const [showSystemRoutines, setShowSystemRoutines] = useState(false);
+  const [showInactiveRoutines, setShowInactiveRoutines] = useState(false);
   const currentMember = members.find((member) => member.user_id === currentUser?.id);
   const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
   const managedCount = routines.filter((routine) => routine.managed).length;
-  const visibleRoutines = showSystemRoutines ? routines : routines.filter((routine) => !routine.managed);
+  const visibleUserRoutines = routines.filter(
+    (routine) => !routine.managed && (showInactiveRoutines || routine.enabled),
+  );
+  const visibleSystemRoutines = routines.filter(
+    (routine) => routine.managed && (showInactiveRoutines || routine.enabled),
+  );
+  const hasUserRoutines = routines.some((routine) => !routine.managed);
   const urlRoutine = searchParams.get("routine");
   const editRoutineID = searchParams.get("edit") ?? searchParams.get("id");
   const isCreateMode = searchParams.get("new") === "1";
@@ -495,80 +504,118 @@ export default function RoutinesPage() {
     return <RoutineCreatePage routineID={queryPane.routineId} />;
   }
 
+  const renderRoutineRows = (items: Routine[]) => (
+    <div>
+      {items.map((routine) => {
+        const isSelected = activePane.routineId === routine.id;
+        return (
+          <button
+            key={routine.id}
+            type="button"
+            aria-current={isSelected ? "true" : undefined}
+            data-active={isSelected || undefined}
+            onClick={() => setPane({ type: "detail", routineId: routine.id })}
+            className={`group relative flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors ${
+              isSelected
+                ? "bg-accent text-accent-foreground before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[3px] before:rounded-r before:bg-primary"
+                : "hover:bg-accent/50"
+            }`}
+          >
+            <span className="min-w-0">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm font-medium">{routine.name}</span>
+                {routine.managed && (
+                  <Badge variant="secondary" className="shrink-0 text-[10px]">
+                    System
+                  </Badge>
+                )}
+              </span>
+              <span className="block truncate text-xs text-muted-foreground">
+                {routine.triggers.length} trigger{routine.triggers.length === 1 ? "" : "s"}
+                {" · "}
+                {routine.enabled ? "Enabled" : "Paused"}
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   const listPane = (
     <div className="flex h-full flex-col border-r">
       <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold">Routines</h1>
         </div>
-        {canManageRoutines && (
-          <Button size="sm" onClick={() => setPane({ type: "new", routineId: null })}>
-            <Plus className="size-4" />
-            New
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant={showInactiveRoutines ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setShowInactiveRoutines((value) => !value)}
+          >
+            <SlidersHorizontal className="size-4" />
+            {showInactiveRoutines ? "Hide inactive" : "Show inactive"}
           </Button>
-        )}
+          <a href="/routines/events" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            <History className="size-4" />
+            Events
+          </a>
+          {canManageRoutines && (
+            <Button size="sm" onClick={() => setPane({ type: "new", routineId: null })}>
+              <Plus className="size-4" />
+              New
+            </Button>
+          )}
+        </div>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {loading ? (
           <div className="p-4 text-sm text-muted-foreground">Loading routines...</div>
-        ) : visibleRoutines.length === 0 ? (
+        ) : visibleUserRoutines.length === 0 ? (
           <div className="flex flex-col items-center justify-center px-4 py-16 text-center text-muted-foreground">
             <Sparkles className="mb-3 size-8 text-muted-foreground/50" />
-            <p className="text-sm font-medium text-foreground">No routines yet</p>
+            <p className="text-sm font-medium text-foreground">
+              {hasUserRoutines ? "No active routines" : "No routines yet"}
+            </p>
             <p className="mt-1 max-w-64 text-xs">
-              {canManageRoutines
-                ? "Create your first routine to schedule work or react to external events."
-                : "Ask an owner or admin to create routines for this workspace."}
+              {hasUserRoutines
+                ? "Use the inactive filter to show paused routines."
+                : canManageRoutines
+                  ? "Create your first routine to schedule work or react to external events."
+                  : "Ask an owner or admin to create routines for this workspace."}
             </p>
           </div>
         ) : (
-          <div>
-            {visibleRoutines.map((routine) => {
-              const isSelected = activePane.routineId === routine.id;
-              return (
-                <button
-                  key={routine.id}
-                  type="button"
-                  aria-current={isSelected ? "true" : undefined}
-                  data-active={isSelected || undefined}
-                  onClick={() => setPane({ type: "detail", routineId: routine.id })}
-                  className={`group relative flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors ${
-                    isSelected
-                      ? "bg-accent text-accent-foreground before:absolute before:left-0 before:top-1 before:bottom-1 before:w-[3px] before:rounded-r before:bg-primary"
-                      : "hover:bg-accent/50"
-                  }`}
-                >
-                  <span className="min-w-0">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate text-sm font-medium">{routine.name}</span>
-                      {routine.managed && (
-                        <Badge variant="secondary" className="shrink-0 text-[10px]">
-                          System
-                        </Badge>
-                      )}
-                    </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {routine.triggers.length} trigger{routine.triggers.length === 1 ? "" : "s"}
-                      {" · "}
-                      {routine.enabled ? "Enabled" : "Paused"}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+          renderRoutineRows(visibleUserRoutines)
         )}
 
         {managedCount > 0 && (
-          <button
-            type="button"
-            onClick={() => setShowSystemRoutines((value) => !value)}
-            className="self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
-          >
-            {showSystemRoutines
-              ? "Hide system routines"
-              : `Show system routines (${managedCount})`}
-          </button>
+          <div className="border-t">
+            <button
+              type="button"
+              onClick={() => setShowSystemRoutines((value) => !value)}
+              className="flex w-full items-center justify-between px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <span>{showSystemRoutines ? "Hide system routines" : `Show system routines (${managedCount})`}</span>
+              <ChevronDown className={`size-3.5 transition-transform ${showSystemRoutines ? "rotate-180" : ""}`} />
+            </button>
+            {showSystemRoutines && (
+              <section role="region" aria-label="System routines" className="border-t bg-muted/10">
+                <div className="px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  System routines
+                </div>
+                {visibleSystemRoutines.length > 0 ? (
+                  renderRoutineRows(visibleSystemRoutines)
+                ) : (
+                  <div className="px-4 pb-3 text-xs text-muted-foreground">
+                    No active system routines
+                  </div>
+                )}
+              </section>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -683,6 +730,7 @@ function RoutineCreatePage({
   const effectiveTriggerDrafts = triggerDrafts.filter(
     (trigger) => trigger.type !== "api" || trigger.apiCredential !== null,
   );
+  const showTriggerOptions = addingTrigger || (!routineID && triggerDrafts.length === 0);
   const canSubmitRoutine =
     name.trim() !== "" &&
     instructions.trim() !== "" &&
@@ -1145,7 +1193,7 @@ function RoutineCreatePage({
               })}
             </div>
 
-            {addingTrigger && (
+            {showTriggerOptions && (
               <div className="space-y-2 pl-3">
                 {triggerOptions.map((option) => (
                     <AvailableTriggerRow
@@ -1160,6 +1208,11 @@ function RoutineCreatePage({
             <button
               type="button"
               onClick={() => {
+                if (!routineID && triggerDrafts.length === 0) {
+                  setAddingTrigger(true);
+                  setOpenTriggerId(null);
+                  return;
+                }
                 setAddingTrigger((open) => {
                   const next = !open;
                   if (next) setOpenTriggerId(null);
