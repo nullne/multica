@@ -162,7 +162,7 @@ describe("RoutineEventsPage", () => {
 
     await screen.findByText("No routine events yet");
     await user.selectOptions(screen.getByLabelText("Status"), "error");
-    await user.selectOptions(screen.getByLabelText("Source"), "github");
+    await user.selectOptions(screen.getByLabelText("Source"), "standard");
     await user.type(screen.getByLabelText("Event type"), "github.pull_request.opened");
 
     await waitFor(() => {
@@ -170,8 +170,36 @@ describe("RoutineEventsPage", () => {
         limit: 20,
         offset: 0,
         status: "error",
-        source_type: "github",
+        source_type: "standard",
         event_type: "github.pull_request.opened",
+      });
+    });
+  });
+
+  it("uses stored source type values for API and alert filters", async () => {
+    const user = userEvent.setup();
+    mocks.api.listRoutineEvents.mockResolvedValue([]);
+
+    render(<RoutineEventsPage />);
+
+    await screen.findByText("No routine events yet");
+    await user.selectOptions(screen.getByLabelText("Source"), "standard");
+
+    await waitFor(() => {
+      expect(mocks.api.listRoutineEvents).toHaveBeenLastCalledWith({
+        limit: 20,
+        offset: 0,
+        source_type: "standard",
+      });
+    });
+
+    await user.selectOptions(screen.getByLabelText("Source"), "oss-alert");
+
+    await waitFor(() => {
+      expect(mocks.api.listRoutineEvents).toHaveBeenLastCalledWith({
+        limit: 20,
+        offset: 0,
+        source_type: "oss-alert",
       });
     });
   });

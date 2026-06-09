@@ -28,9 +28,9 @@ const STATUS_FILTERS = [
 const SOURCE_FILTERS = [
   { value: "", label: "All sources" },
   { value: "github", label: "GitHub" },
-  { value: "api", label: "API" },
+  { value: "standard", label: "API" },
   { value: "schedule", label: "Schedule" },
-  { value: "alert", label: "Alert" },
+  { value: "oss-alert", label: "Alert" },
 ];
 
 export default function RoutineEventsPage() {
