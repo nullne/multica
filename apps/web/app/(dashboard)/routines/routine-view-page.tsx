@@ -26,8 +26,13 @@ import { useAuthStore } from "@/features/auth";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
 import { MoreHorizontal, Pencil, Play, Sparkles, Trash2 } from "lucide-react";
 import { api } from "@/shared/api";
-import type { Routine, RoutineRun } from "@/shared/types";
+import type { Routine, RoutineRun, RoutineRunSource } from "@/shared/types";
 import { toast } from "sonner";
+
+type RoutineRunFilter = "all" | RoutineRunSource;
+
+const ROUTINE_RUN_PAGE_SIZE = 50;
+
 export function RoutineViewPage({ routineID }: { routineID: string }) {
   const router = useRouter();
   const currentUser = useAuthStore((s) => s.user);
@@ -37,6 +42,10 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const [routine, setRoutine] = useState<Routine | null>(null);
   const [runs, setRuns] = useState<RoutineRun[]>([]);
   const [loading, setLoading] = useState(true);
+  const [runsLoading, setRunsLoading] = useState(true);
+  const [runsLoadingMore, setRunsLoadingMore] = useState(false);
+  const [hasMoreRuns, setHasMoreRuns] = useState(false);
+  const [runFilter, setRunFilter] = useState<RoutineRunFilter>("all");
   const [triggering, setTriggering] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
@@ -48,11 +57,10 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([api.getRoutine(routineID), api.listRoutineRuns(routineID)])
-      .then(([routineResult, runResult]) => {
+    api.getRoutine(routineID)
+      .then((routineResult) => {
         if (cancelled) return;
         setRoutine(routineResult);
-        setRuns(runResult);
       })
       .catch((error) => {
         if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routine");
@@ -65,12 +73,66 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     };
   }, [routineID, workspaceId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setRunsLoading(true);
+    setHasMoreRuns(false);
+    api.listRoutineRuns(routineID, {
+      limit: ROUTINE_RUN_PAGE_SIZE,
+      source: runFilter === "all" ? undefined : runFilter,
+    })
+      .then((runResult) => {
+        if (cancelled) return;
+        setRuns(runResult);
+        setHasMoreRuns(runResult.length === ROUTINE_RUN_PAGE_SIZE);
+      })
+      .catch((error) => {
+        if (!cancelled) toast.error(error instanceof Error ? error.message : "Failed to load routine runs");
+      })
+      .finally(() => {
+        if (!cancelled) setRunsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [routineID, runFilter]);
+
+  async function refreshFirstRunPage(filter: RoutineRunFilter = runFilter) {
+    const runResult = await api.listRoutineRuns(routineID, {
+      limit: ROUTINE_RUN_PAGE_SIZE,
+      source: filter === "all" ? undefined : filter,
+    });
+    setRuns(runResult);
+    setHasMoreRuns(runResult.length === ROUTINE_RUN_PAGE_SIZE);
+  }
+
+  async function handleLoadMoreRuns() {
+    setRunsLoadingMore(true);
+    try {
+      const nextRuns = await api.listRoutineRuns(routineID, {
+        limit: ROUTINE_RUN_PAGE_SIZE,
+        offset: runs.length,
+        source: runFilter === "all" ? undefined : runFilter,
+      });
+      setRuns((current) => [...current, ...nextRuns]);
+      setHasMoreRuns(nextRuns.length === ROUTINE_RUN_PAGE_SIZE);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load more runs");
+    } finally {
+      setRunsLoadingMore(false);
+    }
+  }
+
   async function handleTrigger() {
     if (!routine) return;
     setTriggering(true);
     try {
       await api.triggerRoutine(routine.id);
-      setRuns(await api.listRoutineRuns(routine.id));
+      if (runFilter !== "all") {
+        setRunFilter("all");
+      } else {
+        await refreshFirstRunPage("all");
+      }
       toast.success("Routine triggered");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to trigger routine");
@@ -243,7 +305,15 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                 </div>
               </section>
 
-              <RoutineRunList runs={runs} />
+              <RoutineRunList
+                runs={runs}
+                filter={runFilter}
+                onFilterChange={setRunFilter}
+                hasMore={hasMoreRuns}
+                loading={runsLoading}
+                loadingMore={runsLoadingMore}
+                onLoadMore={handleLoadMoreRuns}
+              />
             </>
           )}
         </div>
@@ -363,4 +433,3 @@ function routineToUpdatePayload(routine: Routine, enabled: boolean) {
     })),
   };
 }
-

@@ -299,6 +299,63 @@ describe("RoutinesPage", () => {
     expect(await screen.findByText("Review incoming work")).toBeInTheDocument();
   });
 
+  it("loads additional routine run pages from the detail pane", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("routine=routine-1");
+    mocks.api.listRoutines.mockResolvedValue([
+      {
+        id: "routine-1",
+        workspace_id: "ws-1",
+        name: "Daily code review",
+        triggers: [{ id: "trigger-1" }],
+        actions: [],
+        subscriber_ids: [],
+        label_ids: [],
+        enabled: true,
+        github_auto_fix_enabled: false,
+      },
+    ]);
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Daily code review",
+      priority: "medium",
+      assignee_id: null,
+      assignee_type: null,
+      triggers: [{ id: "trigger-1" }],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+      github_auto_fix_enabled: false,
+    });
+    mocks.api.listRoutineRuns
+      .mockResolvedValueOnce(Array.from({ length: 50 }, (_, index) => (
+        makeRun({
+          id: `run-${index + 1}`,
+          event_type: "schedule",
+          issue_id: `issue-${index + 1}`,
+          title: `Run ${index + 1}`,
+        })
+      )))
+      .mockResolvedValueOnce([
+        makeRun({ id: "run-51", event_type: "schedule", issue_id: "issue-51", title: "Run 51" }),
+      ]);
+
+    render(<RoutinesPage />);
+
+    expect(await screen.findByText("Run 1")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+
+    expect(await screen.findByText("Run 51")).toBeInTheDocument();
+    expect(mocks.api.listRoutineRuns).toHaveBeenLastCalledWith("routine-1", {
+      limit: 50,
+      offset: 50,
+      source: undefined,
+    });
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  });
+
   it("hides creation entry points for regular members", async () => {
     mocks.searchParams = new URLSearchParams();
     useWorkspaceStore.setState({
@@ -804,3 +861,59 @@ describe("RoutinesPage", () => {
     });
   });
 });
+
+function makeRun({
+  id,
+  event_type,
+  issue_id,
+  title,
+  payload = {},
+}: {
+  id: string;
+  event_type: string;
+  issue_id: string;
+  title: string;
+  payload?: unknown;
+}) {
+  return {
+    id,
+    routine_id: "routine-1",
+    trigger_id: "trigger-1",
+    action_id: "action-1",
+    event_type,
+    dedup_key: "",
+    payload,
+    status: "processed",
+    issue_id,
+    comment_id: null,
+    error_message: null,
+    created_at: "2026-05-22T08:00:00Z",
+    issue: {
+      id: issue_id,
+      workspace_id: "ws-1",
+      number: 1,
+      identifier: `TES-${issue_id.slice(-1)}`,
+      title,
+      description: null,
+      status: "todo",
+      priority: "medium",
+      assignee_type: null,
+      assignee_id: null,
+      verifier_agent_id: null,
+      max_verification_rounds: null,
+      creator_type: "member",
+      creator_id: "user-1",
+      parent_issue_id: null,
+      acceptance_criteria: [],
+      criteria_status: null,
+      position: 0,
+      due_date: null,
+      dispatch_provider: null,
+      dispatch_daemon_id: null,
+      dispatch_daemon_label: null,
+      labels: [],
+      created_at: "2026-05-22T08:00:00Z",
+      updated_at: "2026-05-22T08:00:00Z",
+    },
+  };
+}

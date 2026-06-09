@@ -115,6 +115,95 @@ func TestRoutineCRUD_CreateGetAndRunList(t *testing.T) {
 	}
 }
 
+func TestListRoutineRunsPaginatesAndFiltersBySource(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine run pagination test",
+		"instructions":  "Create a routine issue",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "schedule",
+				"schedule":     "0 9 * * 1",
+				"timezone":     "UTC",
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(context.Background(), db.DeleteRoutineParams{
+			ID:          parseUUID(created.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+	})
+
+	for i := 0; i < 120; i++ {
+		eventType := "schedule"
+		if i%10 == 0 {
+			eventType = "manual"
+		}
+		if _, err := testPool.Exec(context.Background(), `
+			INSERT INTO routine_run (routine_id, event_type, payload, status, created_at)
+			VALUES ($1, $2, '{}', 'processed', now() - make_interval(mins => $3::int))
+		`, created.ID, eventType, i); err != nil {
+			t.Fatalf("insert routine run %d: %v", i, err)
+		}
+	}
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "GET", "/api/routines/"+created.ID+"/runs?limit=25&offset=100", nil)
+	req = withURLParam(req, "id", created.ID)
+	testHandler.ListRoutineRuns(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListRoutineRuns: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var page []RoutineRunResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatalf("decode paginated runs: %v", err)
+	}
+	if len(page) != 20 {
+		t.Fatalf("expected final page of 20 runs beyond offset 100, got %d", len(page))
+	}
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "GET", "/api/routines/"+created.ID+"/runs?limit=5&source=manual", nil)
+	req = withURLParam(req, "id", created.ID)
+	testHandler.ListRoutineRuns(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListRoutineRuns manual: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	page = nil
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatalf("decode filtered runs: %v", err)
+	}
+	if len(page) != 5 {
+		t.Fatalf("expected 5 manual runs, got %d", len(page))
+	}
+	for _, run := range page {
+		if run.EventType != "manual" {
+			t.Fatalf("expected only manual runs, got %q", run.EventType)
+		}
+	}
+}
+
 func TestRoutineAPITriggerRequiresGeneratedTokenDraft(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")

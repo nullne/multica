@@ -251,6 +251,13 @@ RETURNING *;
 -- name: ListRoutineRuns :many
 SELECT * FROM routine_run
 WHERE routine_id = $1
+  AND (
+    sqlc.arg(source)::text = ''
+    OR (sqlc.arg(source)::text = 'scheduled' AND event_type = 'schedule')
+    OR (sqlc.arg(source)::text = 'manual' AND event_type = 'manual')
+    OR (sqlc.arg(source)::text = 'webhook' AND (event_type LIKE 'github.%' OR event_type LIKE 'alert.%'))
+    OR (sqlc.arg(source)::text = 'api' AND event_type <> 'schedule' AND event_type <> 'manual' AND event_type NOT LIKE 'github.%' AND event_type NOT LIKE 'alert.%')
+  )
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 
