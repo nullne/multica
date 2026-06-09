@@ -293,31 +293,85 @@ func (q *Queries) CreateRoutineAction(ctx context.Context, arg CreateRoutineActi
 	return i, err
 }
 
+const createRoutineEvent = `-- name: CreateRoutineEvent :one
+INSERT INTO routine_event (
+    workspace_id, source_type, event_type, dedup_key,
+    external_delivery_id, data, payload, status, error_message
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
+)
+RETURNING id, workspace_id, source_type, event_type, dedup_key, external_delivery_id, data, payload, status, error_message, created_at, updated_at
+`
+
+type CreateRoutineEventParams struct {
+	WorkspaceID        pgtype.UUID `json:"workspace_id"`
+	SourceType         string      `json:"source_type"`
+	EventType          string      `json:"event_type"`
+	DedupKey           string      `json:"dedup_key"`
+	ExternalDeliveryID pgtype.Text `json:"external_delivery_id"`
+	Data               []byte      `json:"data"`
+	Payload            []byte      `json:"payload"`
+	Status             string      `json:"status"`
+	ErrorMessage       pgtype.Text `json:"error_message"`
+}
+
+func (q *Queries) CreateRoutineEvent(ctx context.Context, arg CreateRoutineEventParams) (RoutineEvent, error) {
+	row := q.db.QueryRow(ctx, createRoutineEvent,
+		arg.WorkspaceID,
+		arg.SourceType,
+		arg.EventType,
+		arg.DedupKey,
+		arg.ExternalDeliveryID,
+		arg.Data,
+		arg.Payload,
+		arg.Status,
+		arg.ErrorMessage,
+	)
+	var i RoutineEvent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SourceType,
+		&i.EventType,
+		&i.DedupKey,
+		&i.ExternalDeliveryID,
+		&i.Data,
+		&i.Payload,
+		&i.Status,
+		&i.ErrorMessage,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createRoutineRun = `-- name: CreateRoutineRun :one
 INSERT INTO routine_run (
-    routine_id, trigger_id, action_id, event_type, dedup_key,
+    routine_event_id, routine_id, trigger_id, action_id, event_type, dedup_key,
     payload, status, issue_id, comment_id, error_message
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
-RETURNING id, routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id, comment_id, error_message, created_at
+RETURNING id, routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id, comment_id, error_message, created_at, routine_event_id
 `
 
 type CreateRoutineRunParams struct {
-	RoutineID    pgtype.UUID `json:"routine_id"`
-	TriggerID    pgtype.UUID `json:"trigger_id"`
-	ActionID     pgtype.UUID `json:"action_id"`
-	EventType    string      `json:"event_type"`
-	DedupKey     string      `json:"dedup_key"`
-	Payload      []byte      `json:"payload"`
-	Status       string      `json:"status"`
-	IssueID      pgtype.UUID `json:"issue_id"`
-	CommentID    pgtype.UUID `json:"comment_id"`
-	ErrorMessage pgtype.Text `json:"error_message"`
+	RoutineEventID pgtype.UUID `json:"routine_event_id"`
+	RoutineID      pgtype.UUID `json:"routine_id"`
+	TriggerID      pgtype.UUID `json:"trigger_id"`
+	ActionID       pgtype.UUID `json:"action_id"`
+	EventType      string      `json:"event_type"`
+	DedupKey       string      `json:"dedup_key"`
+	Payload        []byte      `json:"payload"`
+	Status         string      `json:"status"`
+	IssueID        pgtype.UUID `json:"issue_id"`
+	CommentID      pgtype.UUID `json:"comment_id"`
+	ErrorMessage   pgtype.Text `json:"error_message"`
 }
 
 func (q *Queries) CreateRoutineRun(ctx context.Context, arg CreateRoutineRunParams) (RoutineRun, error) {
 	row := q.db.QueryRow(ctx, createRoutineRun,
+		arg.RoutineEventID,
 		arg.RoutineID,
 		arg.TriggerID,
 		arg.ActionID,
@@ -343,6 +397,7 @@ func (q *Queries) CreateRoutineRun(ctx context.Context, arg CreateRoutineRunPara
 		&i.CommentID,
 		&i.ErrorMessage,
 		&i.CreatedAt,
+		&i.RoutineEventID,
 	)
 	return i, err
 }
@@ -1094,6 +1149,52 @@ func (q *Queries) ListRoutineActions(ctx context.Context, routineID pgtype.UUID)
 	return items, nil
 }
 
+const listRoutineEvents = `-- name: ListRoutineEvents :many
+SELECT id, workspace_id, source_type, event_type, dedup_key, external_delivery_id, data, payload, status, error_message, created_at, updated_at FROM routine_event
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListRoutineEventsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Limit       int32       `json:"limit"`
+	Offset      int32       `json:"offset"`
+}
+
+func (q *Queries) ListRoutineEvents(ctx context.Context, arg ListRoutineEventsParams) ([]RoutineEvent, error) {
+	rows, err := q.db.Query(ctx, listRoutineEvents, arg.WorkspaceID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RoutineEvent{}
+	for rows.Next() {
+		var i RoutineEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.SourceType,
+			&i.EventType,
+			&i.DedupKey,
+			&i.ExternalDeliveryID,
+			&i.Data,
+			&i.Payload,
+			&i.Status,
+			&i.ErrorMessage,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoutineLabels = `-- name: ListRoutineLabels :many
 SELECT routine_id, label_id, created_at FROM routine_label
 WHERE routine_id = $1
@@ -1207,7 +1308,7 @@ func (q *Queries) ListRoutineOriginsByIssues(ctx context.Context, arg ListRoutin
 }
 
 const listRoutineRuns = `-- name: ListRoutineRuns :many
-SELECT id, routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id, comment_id, error_message, created_at FROM routine_run
+SELECT id, routine_id, trigger_id, action_id, event_type, dedup_key, payload, status, issue_id, comment_id, error_message, created_at, routine_event_id FROM routine_run
 WHERE routine_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3
@@ -1241,6 +1342,7 @@ func (q *Queries) ListRoutineRuns(ctx context.Context, arg ListRoutineRunsParams
 			&i.CommentID,
 			&i.ErrorMessage,
 			&i.CreatedAt,
+			&i.RoutineEventID,
 		); err != nil {
 			return nil, err
 		}
@@ -1585,6 +1687,41 @@ func (q *Queries) UpdateRoutineAction(ctx context.Context, arg UpdateRoutineActi
 		&i.Config,
 		&i.Enabled,
 		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateRoutineEventStatus = `-- name: UpdateRoutineEventStatus :one
+UPDATE routine_event SET
+    status = $2,
+    error_message = $3,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, source_type, event_type, dedup_key, external_delivery_id, data, payload, status, error_message, created_at, updated_at
+`
+
+type UpdateRoutineEventStatusParams struct {
+	ID           pgtype.UUID `json:"id"`
+	Status       string      `json:"status"`
+	ErrorMessage pgtype.Text `json:"error_message"`
+}
+
+func (q *Queries) UpdateRoutineEventStatus(ctx context.Context, arg UpdateRoutineEventStatusParams) (RoutineEvent, error) {
+	row := q.db.QueryRow(ctx, updateRoutineEventStatus, arg.ID, arg.Status, arg.ErrorMessage)
+	var i RoutineEvent
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.SourceType,
+		&i.EventType,
+		&i.DedupKey,
+		&i.ExternalDeliveryID,
+		&i.Data,
+		&i.Payload,
+		&i.Status,
+		&i.ErrorMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

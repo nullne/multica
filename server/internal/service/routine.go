@@ -32,10 +32,11 @@ func NewRoutineService(queries *db.Queries, txStarter routineTxStarter, taskServ
 }
 
 type RoutineEvent struct {
-	Type     string
-	DedupKey string
-	Data     map[string]string
-	Payload  []byte
+	RoutineEventID pgtype.UUID
+	Type           string
+	DedupKey       string
+	Data           map[string]string
+	Payload        []byte
 }
 
 type RoutineCreateIssueConfig struct {
@@ -328,16 +329,17 @@ func (s *RoutineService) logRun(ctx context.Context, routineID, triggerID, actio
 		payload = []byte("{}")
 	}
 	_, err := s.Queries.CreateRoutineRun(ctx, db.CreateRoutineRunParams{
-		RoutineID:    routineID,
-		TriggerID:    triggerID,
-		ActionID:     actionID,
-		EventType:    evt.Type,
-		DedupKey:     evt.DedupKey,
-		Payload:      payload,
-		Status:       status,
-		IssueID:      issueID,
-		CommentID:    commentID,
-		ErrorMessage: util.StrToText(errorMessage),
+		RoutineEventID: evt.RoutineEventID,
+		RoutineID:      routineID,
+		TriggerID:      triggerID,
+		ActionID:       actionID,
+		EventType:      evt.Type,
+		DedupKey:       evt.DedupKey,
+		Payload:        payload,
+		Status:         status,
+		IssueID:        issueID,
+		CommentID:      commentID,
+		ErrorMessage:   util.StrToText(errorMessage),
 	})
 	return err
 }

@@ -30,26 +30,26 @@ const (
 // (publish, on_comment, on_mention). It iterates every issue linked to the
 // event's source URL, applies the optional per-issue auto-fix gate, and posts
 // the rendered comment. Returns whether at least one comment was posted.
-func (h *Handler) executeRoutineCommentIssue(ctx context.Context, routine db.Routine, trigger db.RoutineTrigger, action db.RoutineAction, evt wh.Event) (bool, error) {
+func (h *Handler) executeRoutineCommentIssue(ctx context.Context, routineEventID pgtype.UUID, routine db.Routine, trigger db.RoutineTrigger, action db.RoutineAction, evt wh.Event) (bool, error) {
 	var cfg CommentIssueActionConfig
 	if err := json.Unmarshal(action.Config, &cfg); err != nil {
-		_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, "invalid comment_issue config: "+err.Error())
+		_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, "invalid comment_issue config: "+err.Error())
 		return false, fmt.Errorf("invalid comment_issue config: %w", err)
 	}
 	botUserID := parseUUID(cfg.BotUserID)
 	if !botUserID.Valid {
 		err := fmt.Errorf("comment_issue requires bot_user_id")
-		_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, err.Error())
+		_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, err.Error())
 		return false, err
 	}
 
 	links, err := h.findIssueLinksForEvent(ctx, routine.WorkspaceID, evt)
 	if err != nil {
-		_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, err.Error())
+		_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, err.Error())
 		return false, err
 	}
 	if len(links) == 0 {
-		_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "filtered", pgtype.UUID{}, pgtype.UUID{}, "no matching issue link")
+		_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "filtered", pgtype.UUID{}, pgtype.UUID{}, "no matching issue link")
 		return false, nil
 	}
 
@@ -65,21 +65,21 @@ func (h *Handler) executeRoutineCommentIssue(ctx context.Context, routine db.Rou
 	for _, link := range links {
 		issue, err := h.Queries.GetIssue(ctx, link.IssueID)
 		if err != nil {
-			_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", link.IssueID, pgtype.UUID{}, "load issue: "+err.Error())
+			_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "error", link.IssueID, pgtype.UUID{}, "load issue: "+err.Error())
 			continue
 		}
 		if cfg.OnlyIfIssueAutoFixEnabled && !issue.GithubAutoFixEnabled {
-			_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "filtered", link.IssueID, pgtype.UUID{}, "issue auto-fix disabled")
+			_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "filtered", link.IssueID, pgtype.UUID{}, "issue auto-fix disabled")
 			continue
 		}
 		commentID, posted, err := h.createBotCommentOnIssue(ctx, issue, botUserID, content, cfg.MentionAgentID)
 		if err != nil {
-			_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", link.IssueID, pgtype.UUID{}, err.Error())
+			_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "error", link.IssueID, pgtype.UUID{}, err.Error())
 			continue
 		}
 		if posted {
 			ran = true
-			_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "processed", link.IssueID, commentID, "")
+			_ = h.logRoutineRunWithEvent(ctx, routineEventID, routine.ID, trigger.ID, action.ID, evt, "processed", link.IssueID, commentID, "")
 		}
 	}
 	return ran, nil

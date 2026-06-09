@@ -316,6 +316,21 @@ type RoutineAction struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type RoutineEvent struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	SourceType         string             `json:"source_type"`
+	EventType          string             `json:"event_type"`
+	DedupKey           string             `json:"dedup_key"`
+	ExternalDeliveryID pgtype.Text        `json:"external_delivery_id"`
+	Data               []byte             `json:"data"`
+	Payload            []byte             `json:"payload"`
+	Status             string             `json:"status"`
+	ErrorMessage       pgtype.Text        `json:"error_message"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
 type RoutineLabel struct {
 	RoutineID pgtype.UUID        `json:"routine_id"`
 	LabelID   pgtype.UUID        `json:"label_id"`
@@ -323,18 +338,19 @@ type RoutineLabel struct {
 }
 
 type RoutineRun struct {
-	ID           pgtype.UUID        `json:"id"`
-	RoutineID    pgtype.UUID        `json:"routine_id"`
-	TriggerID    pgtype.UUID        `json:"trigger_id"`
-	ActionID     pgtype.UUID        `json:"action_id"`
-	EventType    string             `json:"event_type"`
-	DedupKey     string             `json:"dedup_key"`
-	Payload      []byte             `json:"payload"`
-	Status       string             `json:"status"`
-	IssueID      pgtype.UUID        `json:"issue_id"`
-	CommentID    pgtype.UUID        `json:"comment_id"`
-	ErrorMessage pgtype.Text        `json:"error_message"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ID             pgtype.UUID        `json:"id"`
+	RoutineID      pgtype.UUID        `json:"routine_id"`
+	TriggerID      pgtype.UUID        `json:"trigger_id"`
+	ActionID       pgtype.UUID        `json:"action_id"`
+	EventType      string             `json:"event_type"`
+	DedupKey       string             `json:"dedup_key"`
+	Payload        []byte             `json:"payload"`
+	Status         string             `json:"status"`
+	IssueID        pgtype.UUID        `json:"issue_id"`
+	CommentID      pgtype.UUID        `json:"comment_id"`
+	ErrorMessage   pgtype.Text        `json:"error_message"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	RoutineEventID pgtype.UUID        `json:"routine_event_id"`
 }
 
 type RoutineSubscriber struct {
