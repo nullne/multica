@@ -54,7 +54,4 @@ export type {
   RoutineTriggerRequest,
   RoutineActionRequest,
 } from "./routine";
-export type {
-  BotUser,
-  CreateBotUserRequest,
-} from "./webhook";
+export type { BotUser, CreateBotUserRequest } from "./webhook";

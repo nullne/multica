@@ -166,9 +166,7 @@ function BotRow({
           <span className="text-sm font-medium truncate">{bot.name}</span>
           <Badge variant="outline" className="text-[10px] px-1.5 py-0">bot</Badge>
         </div>
-        <div className="text-xs text-muted-foreground truncate">
-          Used by {bot.webhook_count} webhook{bot.webhook_count === 1 ? "" : "s"}
-        </div>
+        <div className="text-xs text-muted-foreground truncate">{bot.email}</div>
       </div>
       {canManage && (
         <Tooltip>
@@ -306,12 +304,9 @@ export function MembersTab() {
 
   const handleDeleteBot = (bot: BotUser) => {
     if (!workspace?.id) return;
-    const usage = bot.webhook_count > 0
-      ? ` ${bot.webhook_count} webhook${bot.webhook_count === 1 ? "" : "s"} bound to this bot will lose their author and any "comment on linked issue" actions will fail until you assign a new bot.`
-      : "";
     setConfirmAction({
       title: `Delete bot ${bot.name}`,
-      description: `Permanently delete this bot user.${usage}`,
+      description: `Permanently delete this bot user. Any routine "comment on linked issue" actions bound to this bot will fail until you assign a new bot.`,
       variant: "destructive",
       onConfirm: async () => {
         setMemberActionId(bot.id);
@@ -407,9 +402,9 @@ export function MembersTab() {
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          Bot users post comments on behalf of webhooks (e.g. the GitHub App webhook&apos;s
-          &ldquo;comment on linked issue&rdquo; action). They appear in mention lists like
-          regular members but cannot log in.
+          Bot users post comments on behalf of routines (e.g. the GitHub auto-fix
+          routine&apos;s &ldquo;comment on linked issue&rdquo; action). They appear in
+          mention lists like regular members but cannot log in.
         </p>
 
         {botsLoading ? (

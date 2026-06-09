@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -65,8 +66,8 @@ func fetchProjects(cmd *cobra.Command) ([]project, error) {
 	defer cancel()
 
 	var workspaces []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID    string `json:"id"`
+		Name  string `json:"name"`
 		Repos []struct {
 			URL         string `json:"url"`
 			Description string `json:"description"`
@@ -118,9 +119,10 @@ func workspacesRoot(profile string) (string, error) {
 }
 
 // barePath returns the path for the bare clone cache.
-// Layout: ~/multica_workspaces/.repos/{workspaceID}/{repo-name}.git
+// Layout: ~/multica_workspaces/.repos/{workspaceID}/{repo-name}-{url-hash}.git
 func barePath(wsRoot string, proj project) string {
-	name := proj.RepoName + ".git"
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(proj.RepoURL)))[:12]
+	name := fmt.Sprintf("%s-%s.git", proj.RepoName, hash)
 	return filepath.Join(wsRoot, ".repos", proj.WorkspaceID, name)
 }
 
@@ -140,10 +142,12 @@ func sanitizeDirName(name string) string {
 func ensureBareClone(repoURL, bare string) error {
 	if _, err := os.Stat(filepath.Join(bare, "HEAD")); err == nil {
 		fmt.Fprintf(os.Stderr, "Updating %s...\n", filepath.Base(bare))
-		cmd := exec.Command("git", "-C", bare, "fetch", "origin")
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		cmd.Run() // best-effort
+		if err := configureOpenFetchRefspec(bare); err != nil {
+			return err
+		}
+		if err := fetchOpenOrigin(bare); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -158,9 +162,31 @@ func ensureBareClone(repoURL, bare string) error {
 		return fmt.Errorf("git clone --bare failed: %w", err)
 	}
 	// Use remotes refspec so fetch never conflicts with checked-out worktree branches.
-	exec.Command("git", "-C", bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*").Run()
+	if err := configureOpenFetchRefspec(bare); err != nil {
+		os.RemoveAll(bare)
+		return err
+	}
 	// Fetch once with the new refspec to populate refs/remotes/origin/*.
-	exec.Command("git", "-C", bare, "fetch", "origin").Run()
+	if err := fetchOpenOrigin(bare); err != nil {
+		os.RemoveAll(bare)
+		return err
+	}
+	return nil
+}
+
+func configureOpenFetchRefspec(bare string) error {
+	cmd := exec.Command("git", "-C", bare, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("configure fetch refspec: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func fetchOpenOrigin(bare string) error {
+	cmd := exec.Command("git", "-C", bare, "fetch", "origin")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch origin: %s: %w", strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 

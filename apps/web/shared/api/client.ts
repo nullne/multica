@@ -125,6 +125,10 @@ export class ApiClient {
     this.workspaceId = id;
   }
 
+  getWorkspaceId(): string | null {
+    return this.workspaceId;
+  }
+
   private authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {};
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
@@ -774,7 +778,7 @@ export class ApiClient {
     });
   }
 
-  // Bot users (non-human members used as the author for webhook-driven comments)
+  // Bot users (non-human members used as the author for routine-driven comments)
   async listBotUsers(workspaceId: string): Promise<BotUser[]> {
     return this.fetch(`/api/workspaces/${workspaceId}/bot-users`);
   }

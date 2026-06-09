@@ -9,6 +9,24 @@ INSERT INTO routine (
 )
 RETURNING *;
 
+-- name: CreateManagedRoutine :one
+INSERT INTO routine (
+    workspace_id, name, priority, enabled, managed, created_by_id, created_by_type
+) VALUES (
+    $1, $2, 'medium', TRUE, TRUE, $3, $4
+)
+RETURNING *;
+
+-- name: GetManagedRoutineByWorkspace :one
+SELECT * FROM routine
+WHERE workspace_id = $1 AND managed = TRUE
+ORDER BY created_at ASC
+LIMIT 1;
+
+-- name: DeleteManagedRoutineByWorkspace :exec
+DELETE FROM routine
+WHERE workspace_id = $1 AND managed = TRUE;
+
 -- name: GetRoutineInWorkspace :one
 SELECT * FROM routine
 WHERE id = $1 AND workspace_id = $2;
@@ -295,6 +313,25 @@ WHERE rr.issue_id = ANY(sqlc.arg('issue_ids')::uuid[])
   AND r.workspace_id = sqlc.arg('workspace_id')
   AND rr.status = 'processed'
 ORDER BY rr.issue_id, rr.created_at ASC;
+
+-- name: GetRoutineIssueLinkByURL :one
+SELECT il.*
+FROM issue_link il
+JOIN routine_run rr ON rr.issue_id = il.issue_id
+WHERE rr.routine_id = $1
+  AND il.workspace_id = $2
+  AND il.url = $3
+  AND rr.status = 'processed'
+  AND rr.id = (
+    SELECT rr_origin.id
+    FROM routine_run rr_origin
+    WHERE rr_origin.issue_id = il.issue_id
+      AND rr_origin.status = 'processed'
+    ORDER BY rr_origin.created_at ASC
+    LIMIT 1
+  )
+ORDER BY rr.created_at ASC
+LIMIT 1;
 
 -- name: FindRecentRoutineRun :one
 SELECT id FROM routine_run

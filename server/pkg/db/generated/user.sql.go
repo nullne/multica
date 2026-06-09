@@ -93,39 +93,24 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 	return i, err
 }
 
-const listBotsInWorkspaceWithUsage = `-- name: ListBotsInWorkspaceWithUsage :many
-SELECT u.id, u.name, u.email, u.avatar_url, u.created_at, u.updated_at, u.kind,
-       COUNT(w.id)::int AS webhook_count
-FROM "user" u
+const listBotsInWorkspace = `-- name: ListBotsInWorkspace :many
+SELECT u.id, u.name, u.email, u.avatar_url, u.created_at, u.updated_at, u.kind FROM "user" u
 JOIN member m ON m.user_id = u.id
-LEFT JOIN webhook w ON w.bot_user_id = u.id AND w.workspace_id = m.workspace_id
 WHERE m.workspace_id = $1 AND u.kind = 'bot'
-GROUP BY u.id
 ORDER BY u.created_at ASC
 `
 
-type ListBotsInWorkspaceWithUsageRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	Name         string             `json:"name"`
-	Email        string             `json:"email"`
-	AvatarUrl    pgtype.Text        `json:"avatar_url"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	Kind         string             `json:"kind"`
-	WebhookCount int32              `json:"webhook_count"`
-}
-
-// Lists bot users in a workspace and the number of webhooks currently bound
-// to each bot, so the UI can warn before deletion.
-func (q *Queries) ListBotsInWorkspaceWithUsage(ctx context.Context, workspaceID pgtype.UUID) ([]ListBotsInWorkspaceWithUsageRow, error) {
-	rows, err := q.db.Query(ctx, listBotsInWorkspaceWithUsage, workspaceID)
+// Lists bot users in a workspace. Bots are used as the author for
+// system-driven comments (e.g. routine comment_issue actions).
+func (q *Queries) ListBotsInWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]User, error) {
+	rows, err := q.db.Query(ctx, listBotsInWorkspace, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListBotsInWorkspaceWithUsageRow{}
+	items := []User{}
 	for rows.Next() {
-		var i ListBotsInWorkspaceWithUsageRow
+		var i User
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
@@ -134,7 +119,6 @@ func (q *Queries) ListBotsInWorkspaceWithUsage(ctx context.Context, workspaceID 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Kind,
-			&i.WebhookCount,
 		); err != nil {
 			return nil, err
 		}

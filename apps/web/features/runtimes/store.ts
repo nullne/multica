@@ -19,6 +19,7 @@ interface RuntimeActions {
   patchDaemon: (id: string, updates: Partial<Daemon>) => void;
   patchRuntime: (id: string, updates: Partial<AgentRuntime>) => void;
   setRuntimes: (runtimes: AgentRuntime[]) => void;
+  reset: () => void;
   /** @deprecated use fetchAll */
   fetchRuntimes: () => Promise<void>;
   /** @deprecated use selectedDaemonId */
@@ -107,4 +108,14 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
           : runtimes[0]?.id ?? "",
     });
   },
+
+  reset: () =>
+    set({
+      runtimes: [],
+      daemons: [],
+      enabledProviders: [],
+      selectedDaemonId: "",
+      selectedId: "",
+      fetching: true,
+    }),
 }));

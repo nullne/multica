@@ -23,13 +23,22 @@ export const useLabelStore = create<LabelState>((set, get) => ({
   loading: true,
 
   fetch: async () => {
+    const workspaceId = api.getWorkspaceId();
     const isInitialLoad = get().labels.length === 0;
     if (isInitialLoad) set({ loading: true });
     try {
       const labels = await api.listLabels();
+      if (api.getWorkspaceId() !== workspaceId) {
+        logger.debug("skip stale fetch result", workspaceId);
+        return;
+      }
       logger.info("fetched", labels.length, "labels");
       set({ labels, loading: false });
     } catch (err) {
+      if (api.getWorkspaceId() !== workspaceId) {
+        logger.debug("skip stale fetch error", workspaceId);
+        return;
+      }
       logger.error("fetch labels failed", err);
       toast.error("Failed to load labels");
       if (isInitialLoad) set({ loading: false });

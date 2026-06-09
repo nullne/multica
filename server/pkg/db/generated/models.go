@@ -274,37 +274,6 @@ type PersonalAccessToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
-type RecurringIssueTemplate struct {
-	ID                  pgtype.UUID        `json:"id"`
-	WorkspaceID         pgtype.UUID        `json:"workspace_id"`
-	Title               string             `json:"title"`
-	Description         pgtype.Text        `json:"description"`
-	Priority            string             `json:"priority"`
-	AssigneeType        pgtype.Text        `json:"assignee_type"`
-	AssigneeID          pgtype.UUID        `json:"assignee_id"`
-	DueDateOffsetHours  pgtype.Int4        `json:"due_date_offset_hours"`
-	DispatchProvider    pgtype.Text        `json:"dispatch_provider"`
-	DispatchDaemonID    pgtype.UUID        `json:"dispatch_daemon_id"`
-	DispatchDaemonLabel pgtype.Text        `json:"dispatch_daemon_label"`
-	Schedule            string             `json:"schedule"`
-	Timezone            string             `json:"timezone"`
-	Enabled             bool               `json:"enabled"`
-	LastTriggeredAt     pgtype.Timestamptz `json:"last_triggered_at"`
-	NextRunAt           pgtype.Timestamptz `json:"next_run_at"`
-	CreatedByID         pgtype.UUID        `json:"created_by_id"`
-	CreatedByType       string             `json:"created_by_type"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	MaxRuns             pgtype.Int4        `json:"max_runs"`
-	SuccessfulRunsCount int32              `json:"successful_runs_count"`
-}
-
-type RecurringTemplateSubscriber struct {
-	TemplateID pgtype.UUID        `json:"template_id"`
-	UserID     pgtype.UUID        `json:"user_id"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-}
-
 type RefreshToken struct {
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`
@@ -333,6 +302,7 @@ type Routine struct {
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 	GithubAutoFixEnabled bool               `json:"github_auto_fix_enabled"`
+	Managed              bool               `json:"managed"`
 }
 
 type RoutineAction struct {
@@ -480,44 +450,6 @@ type VerificationCode struct {
 	Used      bool               `json:"used"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	Attempts  int32              `json:"attempts"`
-}
-
-type Webhook struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Name               string             `json:"name"`
-	SourceType         string             `json:"source_type"`
-	TokenHash          string             `json:"token_hash"`
-	TokenPrefix        string             `json:"token_prefix"`
-	Status             string             `json:"status"`
-	DedupWindowSeconds int32              `json:"dedup_window_seconds"`
-	CreatedBy          pgtype.UUID        `json:"created_by"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	BotUserID          pgtype.UUID        `json:"bot_user_id"`
-	InstallationID     pgtype.Int8        `json:"installation_id"`
-}
-
-type WebhookAction struct {
-	ID         pgtype.UUID        `json:"id"`
-	WebhookID  pgtype.UUID        `json:"webhook_id"`
-	ActionType string             `json:"action_type"`
-	Config     []byte             `json:"config"`
-	Enabled    bool               `json:"enabled"`
-	Position   int32              `json:"position"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-}
-
-type WebhookEventLog struct {
-	ID           pgtype.UUID        `json:"id"`
-	WebhookID    pgtype.UUID        `json:"webhook_id"`
-	DedupKey     string             `json:"dedup_key"`
-	Payload      []byte             `json:"payload"`
-	Status       string             `json:"status"`
-	IssueID      pgtype.UUID        `json:"issue_id"`
-	ErrorMessage pgtype.Text        `json:"error_message"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type Workspace struct {

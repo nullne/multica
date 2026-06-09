@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RoutineRunList } from "@/features/routines";
+import { useRoutineStore } from "@/features/routines";
 import { useAuthStore } from "@/features/auth";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
 import { MoreHorizontal, Pencil, Play, Sparkles, Trash2 } from "lucide-react";
@@ -37,6 +38,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const currentUser = useAuthStore((s) => s.user);
   const { getActorName } = useActorName();
   const members = useWorkspaceStore((s) => s.members);
+  const workspaceId = useWorkspaceStore((s) => s.workspace?.id ?? null);
   const [routine, setRoutine] = useState<Routine | null>(null);
   const [runs, setRuns] = useState<RoutineRun[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,7 +51,8 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const [updatingStatus, setUpdatingStatus] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const currentMember = members.find((member) => member.user_id === currentUser?.id);
-  const canManageRoutines = currentMember?.role === "owner" || currentMember?.role === "admin";
+  const canManageRoutines =
+    (currentMember?.role === "owner" || currentMember?.role === "admin") && !routine?.managed;
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +71,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     return () => {
       cancelled = true;
     };
-  }, [routineID]);
+  }, [routineID, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +146,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     setDeleting(true);
     try {
       await api.deleteRoutine(routine.id);
+      useRoutineStore.getState().remove(routine.id);
       toast.success("Routine deleted");
       router.push("/routines");
     } catch (error) {
@@ -158,6 +162,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     try {
       await api.updateRoutine(routine.id, routineToUpdatePayload(routine, nextEnabled));
       setRoutine({ ...routine, enabled: nextEnabled });
+      useRoutineStore.getState().patch(routine.id, { enabled: nextEnabled });
       toast.success(nextEnabled ? "Routine enabled" : "Routine paused");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update routine");
@@ -185,7 +190,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                   <Play className="size-4" />
                   {triggering ? "Running..." : "Run now"}
                 </Button>
-                <a href={`/routines?new=1&id=${routine.id}`} className={buttonVariants({ variant: "outline" })}>
+                <a href={`/routines?edit=${routine.id}`} className={buttonVariants({ variant: "outline" })}>
                   <Pencil className="size-4" />
                   Edit routine
                 </a>
@@ -226,13 +231,19 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
             </div>
           ) : (
             <>
-              {!canManageRoutines && (
+              {routine.managed ? (
+                <div className="rounded-xl border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">System routine</span>
+                  {" · "}
+                  Managed by Multica and provisioned by the GitHub App connection. It cannot be edited or deleted.
+                </div>
+              ) : !canManageRoutines ? (
                 <div className="rounded-xl border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
                   <span className="font-medium text-foreground">Read-only</span>
                   {" · "}
                   Ask an owner or admin to change or run this routine.
                 </div>
-              )}
+              ) : null}
               <section className="grid gap-3 rounded-xl border bg-muted/20 p-4 md:grid-cols-3">
                 <OverviewItem
                   label="Status"

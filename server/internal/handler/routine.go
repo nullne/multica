@@ -39,6 +39,7 @@ type RoutineResponse struct {
 	DispatchDaemonLabel  *string                  `json:"dispatch_daemon_label"`
 	Enabled              bool                     `json:"enabled"`
 	GithubAutoFixEnabled bool                     `json:"github_auto_fix_enabled"`
+	Managed              bool                     `json:"managed"`
 	CreatedByID          string                   `json:"created_by_id"`
 	CreatedByType        string                   `json:"created_by_type"`
 	CreatedAt            string                   `json:"created_at"`
@@ -169,6 +170,7 @@ func routineToResponse(r db.Routine, subscriberIDs, labelIDs []string, triggers 
 		DispatchDaemonLabel:  textToPtr(r.DispatchDaemonLabel),
 		Enabled:              r.Enabled,
 		GithubAutoFixEnabled: r.GithubAutoFixEnabled,
+		Managed:              r.Managed,
 		CreatedByID:          uuidToString(r.CreatedByID),
 		CreatedByType:        r.CreatedByType,
 		CreatedAt:            timestampToString(r.CreatedAt),
@@ -318,6 +320,10 @@ func (h *Handler) UpdateRoutine(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "routine not found")
 		return
 	}
+	if existing.Managed {
+		writeError(w, http.StatusForbidden, "managed routines cannot be edited")
+		return
+	}
 	var req UpdateRoutineRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -351,8 +357,21 @@ func (h *Handler) UpdateRoutine(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteRoutine(w http.ResponseWriter, r *http.Request) {
 	workspaceID := ctxWorkspaceID(r.Context())
+	id := parseUUID(chi.URLParam(r, "id"))
+	existing, err := h.Queries.GetRoutineInWorkspace(r.Context(), db.GetRoutineInWorkspaceParams{
+		ID:          id,
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "routine not found")
+		return
+	}
+	if existing.Managed {
+		writeError(w, http.StatusForbidden, "managed routines cannot be deleted")
+		return
+	}
 	if err := h.Queries.DeleteRoutine(r.Context(), db.DeleteRoutineParams{
-		ID:          parseUUID(chi.URLParam(r, "id")),
+		ID:          id,
 		WorkspaceID: parseUUID(workspaceID),
 	}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete routine")
@@ -370,6 +389,10 @@ func (h *Handler) TriggerRoutine(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "routine not found")
+		return
+	}
+	if routine.Managed {
+		writeError(w, http.StatusForbidden, "managed routines cannot be triggered manually")
 		return
 	}
 	if !routine.Enabled {
@@ -445,6 +468,10 @@ func (h *Handler) RegenerateRoutineTriggerToken(w http.ResponseWriter, r *http.R
 	})
 	if err != nil || uuidToString(trigger.RoutineID) != chi.URLParam(r, "id") {
 		writeError(w, http.StatusNotFound, "routine trigger not found")
+		return
+	}
+	if routine, err := h.Queries.GetRoutine(r.Context(), trigger.RoutineID); err == nil && routine.Managed {
+		writeError(w, http.StatusForbidden, "managed routine triggers cannot be modified")
 		return
 	}
 	if trigger.TriggerType != "api" {
@@ -699,17 +726,26 @@ func (h *Handler) ingestRoutineTriggers(ctx context.Context, triggers []db.Routi
 				if !routineActionMatchesEvent(action, evt) {
 					continue
 				}
-				result, err := routineSvc.ExecuteAction(ctx, routine, trigger, action, service.RoutineEvent{
-					Type:     evt.Type,
-					DedupKey: evt.DedupKey,
-					Data:     evt.Data,
-					Payload:  evt.RawPayload,
-				})
-				if err != nil {
-					_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, err.Error())
+				var didRun bool
+				var execErr error
+				if action.ActionType == "comment_issue" {
+					// comment_issue runs on the Handler so it reuses the full
+					// bot-comment + agent re-engagement pipeline.
+					didRun, execErr = h.executeRoutineCommentIssue(ctx, routine, trigger, action, evt)
+				} else {
+					result, err := routineSvc.ExecuteAction(ctx, routine, trigger, action, service.RoutineEvent{
+						Type:     evt.Type,
+						DedupKey: evt.DedupKey,
+						Data:     evt.Data,
+						Payload:  evt.RawPayload,
+					})
+					didRun, execErr = result.Ran, err
+				}
+				if execErr != nil {
+					_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, execErr.Error())
 					continue
 				}
-				if result.Ran {
+				if didRun {
 					processed = true
 					ran++
 				}
