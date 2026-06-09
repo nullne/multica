@@ -106,6 +106,7 @@ export type UpdateRoutineRequest = CreateRoutineRequest;
 export interface RoutineRun {
   id: string;
   routine_id: string;
+  routine_event_id: string | null;
   trigger_id: string | null;
   action_id: string | null;
   event_type: string;

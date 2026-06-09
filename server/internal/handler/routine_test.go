@@ -263,6 +263,113 @@ func TestRoutineAPITriggerIngestCreatesIssue(t *testing.T) {
 	}
 }
 
+func TestRoutineAPITriggerStoresOneRoutineEventForMultipleRuns(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	apiTrigger, apiToken := routineAPITokenDraft(t)
+	suffix := time.Now().Format("150405000000000")
+	firstTitle := "Routine event log first " + suffix
+	secondTitle := "Routine event log second " + suffix
+
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine event log fanout",
+		"instructions":  "Create multiple issues from one event",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers":      []map[string]any{apiTrigger},
+		"actions": []map[string]any{
+			{
+				"action_type": "create_issue",
+				"config": map[string]any{
+					"title_template": firstTitle,
+				},
+			},
+			{
+				"action_type": "create_issue",
+				"config": map[string]any{
+					"title_template": secondTitle,
+				},
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = testHandler.Queries.DeleteRoutine(ctx, db.DeleteRoutineParams{
+			ID:          parseUUID(routine.ID),
+			WorkspaceID: parseUUID(testWorkspaceID),
+		})
+		_, _ = testPool.Exec(ctx, `
+			DELETE FROM issue
+			WHERE workspace_id = $1 AND title = ANY($2::text[])
+		`, testWorkspaceID, []string{firstTitle, secondTitle})
+	})
+
+	dedupKey := "routine-event-log-fanout-" + suffix
+	w = httptest.NewRecorder()
+	req = newRequest("POST", "/api/webhook/"+routine.Triggers[0].ID, map[string]any{
+		"title":     "Fanout source event",
+		"body":      "One event should back both runs",
+		"dedup_key": dedupKey,
+	})
+	req = withURLParam(req, "id", routine.Triggers[0].ID)
+	req.Header.Set("Authorization", "Bearer "+apiToken)
+	testHandler.IngestRoutineTrigger(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("IngestRoutineTrigger: expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var eventID string
+	var eventStatus string
+	var eventData []byte
+	if err := testPool.QueryRow(ctx, `
+		SELECT id::text, status, data
+		FROM routine_event
+		WHERE workspace_id = $1 AND dedup_key = $2
+	`, testWorkspaceID, dedupKey).Scan(&eventID, &eventStatus, &eventData); err != nil {
+		t.Fatalf("query routine_event: %v", err)
+	}
+	if eventStatus != "processed" {
+		t.Fatalf("routine_event status = %q, want processed", eventStatus)
+	}
+	var data map[string]string
+	if err := json.Unmarshal(eventData, &data); err != nil {
+		t.Fatalf("unmarshal routine_event data: %v", err)
+	}
+	if data["title"] != "Fanout source event" {
+		t.Fatalf("routine_event data title = %q", data["title"])
+	}
+
+	var runCount int
+	var linkedEventCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*), count(DISTINCT routine_event_id)
+		FROM routine_run
+		WHERE routine_id = $1 AND routine_event_id = $2
+	`, routine.ID, eventID).Scan(&runCount, &linkedEventCount); err != nil {
+		t.Fatalf("count routine runs linked to event: %v", err)
+	}
+	if runCount != 2 || linkedEventCount != 1 {
+		t.Fatalf("runs linked to event count = %d distinct events = %d, want 2/1", runCount, linkedEventCount)
+	}
+}
+
 func TestRoutineAPITriggerAcceptsFlexibleJSONPayload(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")
@@ -1293,6 +1400,20 @@ func TestRoutineGitHubTriggerConfigFiltersEventsBeforeActions(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Fatalf("unmatched trigger event should not create routine runs, got %+v", runs)
+	}
+	var eventStatus string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status
+		FROM routine_event
+		WHERE workspace_id = $1
+		  AND source_type = 'github'
+		  AND event_type = 'github.pull_request.opened'
+		  AND dedup_key = 'github:pull_request:opened:https://github.com/acme/widgets/pull/901'
+	`, testWorkspaceID).Scan(&eventStatus); err != nil {
+		t.Fatalf("query routine_event for unmatched trigger event: %v", err)
+	}
+	if eventStatus != "no_matching_trigger" {
+		t.Fatalf("unmatched trigger event status = %q, want no_matching_trigger", eventStatus)
 	}
 
 	mergedBody := []byte(`{"action":"closed","pull_request":{"number":2,"title":"Merge target","merged":true,"html_url":"https://github.com/acme/widgets/pull/902","user":{"login":"bob"},"head":{"ref":"feat"},"base":{"ref":"main"},"body":"body"},"repository":{"full_name":"acme/widgets"}}`)

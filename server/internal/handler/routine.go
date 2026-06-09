@@ -24,6 +24,21 @@ var errRoutineTriggerTokenRequired = errors.New("routine trigger token must be g
 
 const routineTriggerMaxPayloadBytes = 1 << 20
 
+type routineTriggerContext struct {
+	trigger db.RoutineTrigger
+	routine db.Routine
+	actions []db.RoutineAction
+}
+
+type routineEventOutcome struct {
+	matchedTrigger bool
+	processed      bool
+	filtered       bool
+	deduped        bool
+	errored        bool
+	errorMessage   string
+}
+
 type RoutineResponse struct {
 	ID                   string                   `json:"id"`
 	WorkspaceID          string                   `json:"workspace_id"`
@@ -83,19 +98,20 @@ type RoutineActionResponse struct {
 }
 
 type RoutineRunResponse struct {
-	ID           string         `json:"id"`
-	RoutineID    string         `json:"routine_id"`
-	TriggerID    *string        `json:"trigger_id"`
-	ActionID     *string        `json:"action_id"`
-	EventType    string         `json:"event_type"`
-	DedupKey     string         `json:"dedup_key"`
-	Payload      any            `json:"payload"`
-	Status       string         `json:"status"`
-	IssueID      *string        `json:"issue_id"`
-	CommentID    *string        `json:"comment_id"`
-	ErrorMessage *string        `json:"error_message"`
-	CreatedAt    string         `json:"created_at"`
-	Issue        *IssueResponse `json:"issue,omitempty"`
+	ID             string         `json:"id"`
+	RoutineID      string         `json:"routine_id"`
+	RoutineEventID *string        `json:"routine_event_id"`
+	TriggerID      *string        `json:"trigger_id"`
+	ActionID       *string        `json:"action_id"`
+	EventType      string         `json:"event_type"`
+	DedupKey       string         `json:"dedup_key"`
+	Payload        any            `json:"payload"`
+	Status         string         `json:"status"`
+	IssueID        *string        `json:"issue_id"`
+	CommentID      *string        `json:"comment_id"`
+	ErrorMessage   *string        `json:"error_message"`
+	CreatedAt      string         `json:"created_at"`
+	Issue          *IssueResponse `json:"issue,omitempty"`
 }
 
 type RoutineTriggerTokenResponse struct {
@@ -598,18 +614,19 @@ func routineRunToResponse(run db.RoutineRun) RoutineRunResponse {
 		_ = json.Unmarshal(run.Payload, &payload)
 	}
 	return RoutineRunResponse{
-		ID:           uuidToString(run.ID),
-		RoutineID:    uuidToString(run.RoutineID),
-		TriggerID:    uuidToPtr(run.TriggerID),
-		ActionID:     uuidToPtr(run.ActionID),
-		EventType:    run.EventType,
-		DedupKey:     run.DedupKey,
-		Payload:      payload,
-		Status:       run.Status,
-		IssueID:      uuidToPtr(run.IssueID),
-		CommentID:    uuidToPtr(run.CommentID),
-		ErrorMessage: textToPtr(run.ErrorMessage),
-		CreatedAt:    timestampToString(run.CreatedAt),
+		ID:             uuidToString(run.ID),
+		RoutineID:      uuidToString(run.RoutineID),
+		RoutineEventID: uuidToPtr(run.RoutineEventID),
+		TriggerID:      uuidToPtr(run.TriggerID),
+		ActionID:       uuidToPtr(run.ActionID),
+		EventType:      run.EventType,
+		DedupKey:       run.DedupKey,
+		Payload:        payload,
+		Status:         run.Status,
+		IssueID:        uuidToPtr(run.IssueID),
+		CommentID:      uuidToPtr(run.CommentID),
+		ErrorMessage:   textToPtr(run.ErrorMessage),
+		CreatedAt:      timestampToString(run.CreatedAt),
 	}
 }
 
@@ -651,16 +668,103 @@ func (h *Handler) ingestRoutineTriggers(ctx context.Context, triggers []db.Routi
 	if len(triggers) == 0 {
 		return 0, 0
 	}
+	triggerContexts := h.loadRoutineTriggerContexts(ctx, triggers)
+	if len(triggerContexts) == 0 {
+		return 0, 0
+	}
 	adapter, err := wh.GetAdapter(sourceType)
 	if err != nil {
+		h.logRoutineParseError(ctx, triggerContexts, sourceType, body, headers, err.Error())
 		return 0, 0
 	}
 	events, err := adapter.Parse(json.RawMessage(body), headers)
-	if err != nil || len(events) == 0 {
+	if err != nil {
+		h.logRoutineParseError(ctx, triggerContexts, sourceType, body, headers, err.Error())
+		return 0, 0
+	}
+	if len(events) == 0 {
+		return 0, 0
+	}
+	eventRecords, ok := h.createRoutineEventRecords(ctx, triggerContexts, sourceType, events, headers)
+	if !ok {
 		return 0, 0
 	}
 	routineSvc := service.NewRoutineService(h.Queries, h.TxStarter, h.TaskService)
 	ran := 0
+	outcomes := map[string]*routineEventOutcome{}
+	for i, evt := range events {
+		for _, tc := range triggerContexts {
+			record := eventRecords[i][uuidToString(tc.routine.WorkspaceID)]
+			if !record.ID.Valid {
+				continue
+			}
+			outcomeKey := uuidToString(record.ID)
+			if outcomes[outcomeKey] == nil {
+				outcomes[outcomeKey] = &routineEventOutcome{}
+			}
+			outcome := outcomes[outcomeKey]
+			if !routineTriggerMatchesEvent(tc.trigger, evt) {
+				continue
+			}
+			outcome.matchedTrigger = true
+			if evt.DedupKey != "" && tc.trigger.DedupWindowSeconds > 0 {
+				if _, err := h.Queries.FindRecentRoutineRun(ctx, db.FindRecentRoutineRunParams{
+					TriggerID:     tc.trigger.ID,
+					DedupKey:      evt.DedupKey,
+					WindowSeconds: float64(tc.trigger.DedupWindowSeconds),
+				}); err == nil {
+					outcome.deduped = true
+					_ = h.logRoutineRunWithEvent(ctx, record.ID, tc.routine.ID, tc.trigger.ID, pgtype.UUID{}, evt, "deduped", pgtype.UUID{}, pgtype.UUID{}, "")
+					continue
+				}
+			}
+			processed := false
+			for _, action := range tc.actions {
+				if !routineActionMatchesEvent(action, evt) {
+					continue
+				}
+				var didRun bool
+				var execErr error
+				if action.ActionType == "comment_issue" {
+					// comment_issue runs on the Handler so it reuses the full
+					// bot-comment + agent re-engagement pipeline.
+					didRun, execErr = h.executeRoutineCommentIssue(ctx, record.ID, tc.routine, tc.trigger, action, evt)
+				} else {
+					result, err := routineSvc.ExecuteAction(ctx, tc.routine, tc.trigger, action, service.RoutineEvent{
+						RoutineEventID: record.ID,
+						Type:           evt.Type,
+						DedupKey:       evt.DedupKey,
+						Data:           evt.Data,
+						Payload:        evt.RawPayload,
+					})
+					didRun, execErr = result.Ran, err
+				}
+				if execErr != nil {
+					outcome.errored = true
+					if outcome.errorMessage == "" {
+						outcome.errorMessage = execErr.Error()
+					}
+					_ = h.logRoutineRunWithEvent(ctx, record.ID, tc.routine.ID, tc.trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, execErr.Error())
+					continue
+				}
+				if didRun {
+					processed = true
+					outcome.processed = true
+					ran++
+				}
+			}
+			if !processed {
+				outcome.filtered = true
+				_ = h.logRoutineRunWithEvent(ctx, record.ID, tc.routine.ID, tc.trigger.ID, pgtype.UUID{}, evt, "filtered", pgtype.UUID{}, pgtype.UUID{}, "no matching action")
+			}
+		}
+	}
+	h.updateRoutineEventStatuses(ctx, eventRecords, outcomes)
+	return len(events), ran
+}
+
+func (h *Handler) loadRoutineTriggerContexts(ctx context.Context, triggers []db.RoutineTrigger) []routineTriggerContext {
+	contexts := make([]routineTriggerContext, 0, len(triggers))
 	for _, trigger := range triggers {
 		routine, err := h.Queries.GetRoutine(ctx, trigger.RoutineID)
 		if err != nil || !routine.Enabled || !trigger.Enabled {
@@ -670,55 +774,131 @@ func (h *Handler) ingestRoutineTriggers(ctx context.Context, triggers []db.Routi
 		if err != nil {
 			continue
 		}
-		for _, evt := range events {
-			if !routineTriggerMatchesEvent(trigger, evt) {
-				continue
+		contexts = append(contexts, routineTriggerContext{
+			trigger: trigger,
+			routine: routine,
+			actions: actions,
+		})
+	}
+	return contexts
+}
+
+func (h *Handler) createRoutineEventRecords(ctx context.Context, triggerContexts []routineTriggerContext, sourceType string, events []wh.Event, headers http.Header) ([]map[string]db.RoutineEvent, bool) {
+	workspaces := uniqueRoutineEventWorkspaces(triggerContexts)
+	records := make([]map[string]db.RoutineEvent, len(events))
+	for i, evt := range events {
+		records[i] = make(map[string]db.RoutineEvent, len(workspaces))
+		for _, workspaceID := range workspaces {
+			record, err := h.createRoutineEventRecord(ctx, workspaceID, sourceType, evt, headers, "received", "")
+			if err != nil {
+				return nil, false
 			}
-			if evt.DedupKey != "" && trigger.DedupWindowSeconds > 0 {
-				if _, err := h.Queries.FindRecentRoutineRun(ctx, db.FindRecentRoutineRunParams{
-					TriggerID:     trigger.ID,
-					DedupKey:      evt.DedupKey,
-					WindowSeconds: float64(trigger.DedupWindowSeconds),
-				}); err == nil {
-					_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, pgtype.UUID{}, evt, "deduped", pgtype.UUID{}, pgtype.UUID{}, "")
-					continue
-				}
-			}
-			processed := false
-			for _, action := range actions {
-				if !routineActionMatchesEvent(action, evt) {
-					continue
-				}
-				var didRun bool
-				var execErr error
-				if action.ActionType == "comment_issue" {
-					// comment_issue runs on the Handler so it reuses the full
-					// bot-comment + agent re-engagement pipeline.
-					didRun, execErr = h.executeRoutineCommentIssue(ctx, routine, trigger, action, evt)
-				} else {
-					result, err := routineSvc.ExecuteAction(ctx, routine, trigger, action, service.RoutineEvent{
-						Type:     evt.Type,
-						DedupKey: evt.DedupKey,
-						Data:     evt.Data,
-						Payload:  evt.RawPayload,
-					})
-					didRun, execErr = result.Ran, err
-				}
-				if execErr != nil {
-					_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, action.ID, evt, "error", pgtype.UUID{}, pgtype.UUID{}, execErr.Error())
-					continue
-				}
-				if didRun {
-					processed = true
-					ran++
-				}
-			}
-			if !processed {
-				_ = h.logRoutineRun(ctx, routine.ID, trigger.ID, pgtype.UUID{}, evt, "filtered", pgtype.UUID{}, pgtype.UUID{}, "no matching action")
-			}
+			records[i][uuidToString(workspaceID)] = record
 		}
 	}
-	return len(events), ran
+	return records, true
+}
+
+func uniqueRoutineEventWorkspaces(triggerContexts []routineTriggerContext) []pgtype.UUID {
+	seen := map[string]bool{}
+	workspaces := make([]pgtype.UUID, 0, len(triggerContexts))
+	for _, tc := range triggerContexts {
+		key := uuidToString(tc.routine.WorkspaceID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		workspaces = append(workspaces, tc.routine.WorkspaceID)
+	}
+	return workspaces
+}
+
+func (h *Handler) logRoutineParseError(ctx context.Context, triggerContexts []routineTriggerContext, sourceType string, body []byte, headers http.Header, message string) {
+	for _, workspaceID := range uniqueRoutineEventWorkspaces(triggerContexts) {
+		_, _ = h.createRoutineEventRecord(ctx, workspaceID, sourceType, wh.Event{
+			RawPayload: json.RawMessage(body),
+			Data:       map[string]string{},
+		}, headers, "parse_error", message)
+	}
+}
+
+func (h *Handler) createRoutineEventRecord(ctx context.Context, workspaceID pgtype.UUID, sourceType string, evt wh.Event, headers http.Header, status string, errorMessage string) (db.RoutineEvent, error) {
+	if evt.Data == nil {
+		evt.Data = map[string]string{}
+	}
+	data, err := json.Marshal(evt.Data)
+	if err != nil {
+		data = []byte("{}")
+	}
+	payload := evt.RawPayload
+	if len(payload) == 0 {
+		payload = []byte("{}")
+	}
+	return h.Queries.CreateRoutineEvent(ctx, db.CreateRoutineEventParams{
+		WorkspaceID:        workspaceID,
+		SourceType:         sourceType,
+		EventType:          evt.Type,
+		DedupKey:           evt.DedupKey,
+		ExternalDeliveryID: routineEventDeliveryID(sourceType, headers),
+		Data:               data,
+		Payload:            payload,
+		Status:             status,
+		ErrorMessage:       routineEventErrorText(errorMessage),
+	})
+}
+
+func routineEventDeliveryID(sourceType string, headers http.Header) pgtype.Text {
+	if sourceType == "github" {
+		if deliveryID := strings.TrimSpace(headers.Get("X-GitHub-Delivery")); deliveryID != "" {
+			return pgtype.Text{String: deliveryID, Valid: true}
+		}
+	}
+	for _, name := range []string{"X-Request-ID", "X-Request-Id"} {
+		if requestID := strings.TrimSpace(headers.Get(name)); requestID != "" {
+			return pgtype.Text{String: requestID, Valid: true}
+		}
+	}
+	return pgtype.Text{}
+}
+
+func (h *Handler) updateRoutineEventStatuses(ctx context.Context, records []map[string]db.RoutineEvent, outcomes map[string]*routineEventOutcome) {
+	for _, perWorkspace := range records {
+		for _, record := range perWorkspace {
+			outcome := outcomes[uuidToString(record.ID)]
+			status, message := routineEventStatus(outcome)
+			_, _ = h.Queries.UpdateRoutineEventStatus(ctx, db.UpdateRoutineEventStatusParams{
+				ID:           record.ID,
+				Status:       status,
+				ErrorMessage: routineEventErrorText(message),
+			})
+		}
+	}
+}
+
+func routineEventErrorText(message string) pgtype.Text {
+	if message == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: message, Valid: true}
+}
+
+func routineEventStatus(outcome *routineEventOutcome) (string, string) {
+	if outcome == nil || !outcome.matchedTrigger {
+		return "no_matching_trigger", ""
+	}
+	if outcome.processed {
+		return "processed", ""
+	}
+	if outcome.errored {
+		return "error", outcome.errorMessage
+	}
+	if outcome.filtered {
+		return "filtered", ""
+	}
+	if outcome.deduped {
+		return "deduped", ""
+	}
+	return "filtered", ""
 }
 
 func routineActionMatchesEvent(action db.RoutineAction, evt wh.Event) bool {
@@ -840,21 +1020,26 @@ func splitRoutineTriggerFilterValues(value string) []string {
 }
 
 func (h *Handler) logRoutineRun(ctx context.Context, routineID, triggerID, actionID pgtype.UUID, evt wh.Event, status string, issueID, commentID pgtype.UUID, errorMessage string) error {
+	return h.logRoutineRunWithEvent(ctx, pgtype.UUID{}, routineID, triggerID, actionID, evt, status, issueID, commentID, errorMessage)
+}
+
+func (h *Handler) logRoutineRunWithEvent(ctx context.Context, routineEventID, routineID, triggerID, actionID pgtype.UUID, evt wh.Event, status string, issueID, commentID pgtype.UUID, errorMessage string) error {
 	errText := pgtype.Text{}
 	if errorMessage != "" {
 		errText = pgtype.Text{String: errorMessage, Valid: true}
 	}
 	_, err := h.Queries.CreateRoutineRun(ctx, db.CreateRoutineRunParams{
-		RoutineID:    routineID,
-		TriggerID:    triggerID,
-		ActionID:     actionID,
-		EventType:    evt.Type,
-		DedupKey:     evt.DedupKey,
-		Payload:      evt.RawPayload,
-		Status:       status,
-		IssueID:      issueID,
-		CommentID:    commentID,
-		ErrorMessage: errText,
+		RoutineEventID: routineEventID,
+		RoutineID:      routineID,
+		TriggerID:      triggerID,
+		ActionID:       actionID,
+		EventType:      evt.Type,
+		DedupKey:       evt.DedupKey,
+		Payload:        evt.RawPayload,
+		Status:         status,
+		IssueID:        issueID,
+		CommentID:      commentID,
+		ErrorMessage:   errText,
 	})
 	return err
 }

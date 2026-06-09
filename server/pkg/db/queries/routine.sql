@@ -239,12 +239,35 @@ ON CONFLICT (routine_id, label_id) DO NOTHING;
 DELETE FROM routine_label
 WHERE routine_id = $1;
 
+-- name: CreateRoutineEvent :one
+INSERT INTO routine_event (
+    workspace_id, source_type, event_type, dedup_key,
+    external_delivery_id, data, payload, status, error_message
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
+)
+RETURNING *;
+
+-- name: UpdateRoutineEventStatus :one
+UPDATE routine_event SET
+    status = $2,
+    error_message = $3,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ListRoutineEvents :many
+SELECT * FROM routine_event
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
 -- name: CreateRoutineRun :one
 INSERT INTO routine_run (
-    routine_id, trigger_id, action_id, event_type, dedup_key,
+    routine_event_id, routine_id, trigger_id, action_id, event_type, dedup_key,
     payload, status, issue_id, comment_id, error_message
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )
 RETURNING *;
 
