@@ -254,20 +254,24 @@ multica issue get <id> --output json
 
 ```bash
 multica issue create --title "Fix login bug" --description "..." --priority high --assignee "Lambda"
+multica issue create --title "Run tomorrow" --assignee "Lambda" --dispatch-after "2026-06-11T09:00:00Z"
 ```
 
-Flags: `--title` (required), `--description`, `--status`, `--priority`, `--assignee`, `--parent`, `--due-date`.
+Flags: `--title` (required), `--description`, `--status`, `--priority`, `--assignee`, `--parent`, `--due-date`, `--dispatch-after`.
 
 ### Update Issue
 
 ```bash
 multica issue update <id> --title "New title" --priority urgent
+multica issue update <id> --dispatch-after "2026-06-11T09:00:00Z"
+multica issue update <id> --clear-dispatch-after
 ```
 
 ### Assign Issue
 
 ```bash
 multica issue assign <id> --to "Lambda"
+multica issue assign <id> --to "Lambda" --dispatch-after "2026-06-11T09:00:00Z"
 multica issue assign <id> --unassign
 ```
 

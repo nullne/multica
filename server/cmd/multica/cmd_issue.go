@@ -143,6 +143,7 @@ func init() {
 	issueCreateCmd.Flags().String("verifier", "", "Verifier agent name")
 	issueCreateCmd.Flags().String("parent", "", "Parent issue ID")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (RFC3339 format)")
+	issueCreateCmd.Flags().String("dispatch-after", "", "Defer agent dispatch until this RFC3339 timestamp")
 	issueCreateCmd.Flags().String("output", "json", "Output format: table or json")
 	issueCreateCmd.Flags().StringSlice("attachment", nil, "File path(s) to attach (can be specified multiple times)")
 
@@ -155,6 +156,8 @@ func init() {
 	issueUpdateCmd.Flags().String("verifier", "", "New verifier agent name")
 	issueUpdateCmd.Flags().Bool("clear-verifier", false, "Clear verifier agent")
 	issueUpdateCmd.Flags().String("due-date", "", "New due date (RFC3339 format)")
+	issueUpdateCmd.Flags().String("dispatch-after", "", "New deferred dispatch timestamp (RFC3339 format)")
+	issueUpdateCmd.Flags().Bool("clear-dispatch-after", false, "Clear deferred dispatch timestamp")
 	issueUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue status
@@ -164,6 +167,8 @@ func init() {
 	issueAssignCmd.Flags().String("to", "", "Assignee name (member or agent)")
 	issueAssignCmd.Flags().Bool("unassign", false, "Remove current assignee")
 	issueAssignCmd.Flags().String("daemon", "", "Daemon name or ID to run the task on (overrides agent default)")
+	issueAssignCmd.Flags().String("dispatch-after", "", "Defer agent dispatch until this RFC3339 timestamp")
+	issueAssignCmd.Flags().Bool("clear-dispatch-after", false, "Clear deferred dispatch timestamp")
 	issueAssignCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue comment list
@@ -335,6 +340,9 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	if v, _ := cmd.Flags().GetString("due-date"); v != "" {
 		body["due_date"] = v
 	}
+	if v, _ := cmd.Flags().GetString("dispatch-after"); v != "" {
+		body["dispatch_after"] = v
+	}
 	if v, _ := cmd.Flags().GetString("assignee"); v != "" {
 		aType, aID, resolveErr := resolveAssignee(ctx, client, v)
 		if resolveErr != nil {
@@ -433,6 +441,16 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 		v, _ := cmd.Flags().GetString("due-date")
 		body["due_date"] = v
 	}
+	if cmd.Flags().Changed("dispatch-after") {
+		v, _ := cmd.Flags().GetString("dispatch-after")
+		body["dispatch_after"] = v
+	}
+	if clearDispatchAfter, _ := cmd.Flags().GetBool("clear-dispatch-after"); clearDispatchAfter {
+		if cmd.Flags().Changed("dispatch-after") {
+			return fmt.Errorf("--dispatch-after and --clear-dispatch-after are mutually exclusive")
+		}
+		body["dispatch_after"] = nil
+	}
 	if cmd.Flags().Changed("assignee") {
 		v, _ := cmd.Flags().GetString("assignee")
 		aType, aID, resolveErr := resolveAssignee(ctx, client, v)
@@ -486,12 +504,17 @@ func runIssueAssign(cmd *cobra.Command, args []string) error {
 	toName, _ := cmd.Flags().GetString("to")
 	unassign, _ := cmd.Flags().GetBool("unassign")
 	daemonName, _ := cmd.Flags().GetString("daemon")
+	dispatchAfter, _ := cmd.Flags().GetString("dispatch-after")
+	clearDispatchAfter, _ := cmd.Flags().GetBool("clear-dispatch-after")
 
 	if toName == "" && !unassign {
 		return fmt.Errorf("provide --to <name> or --unassign")
 	}
 	if toName != "" && unassign {
 		return fmt.Errorf("--to and --unassign are mutually exclusive")
+	}
+	if dispatchAfter != "" && clearDispatchAfter {
+		return fmt.Errorf("--dispatch-after and --clear-dispatch-after are mutually exclusive")
 	}
 
 	client, err := newAPIClient(cmd)
@@ -520,6 +543,12 @@ func runIssueAssign(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("resolve daemon: %w", resolveErr)
 		}
 		body["dispatch_daemon_id"] = daemonID
+	}
+	if dispatchAfter != "" {
+		body["dispatch_after"] = dispatchAfter
+	}
+	if clearDispatchAfter {
+		body["dispatch_after"] = nil
 	}
 
 	var result map[string]any

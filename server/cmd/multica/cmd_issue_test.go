@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/nullne/multica/server/internal/cli"
+	"github.com/spf13/cobra"
 )
 
 func TestTruncateID(t *testing.T) {
@@ -181,3 +182,132 @@ func TestValidIssueStatuses(t *testing.T) {
 	}
 }
 
+func TestIssueCreateSendsDispatchAfter(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/issues" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		got["id"] = "issue-1"
+		got["status"] = "todo"
+		got["priority"] = "medium"
+		json.NewEncoder(w).Encode(got)
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := newIssueCommandForTest("create",
+		"--title", "Deferred work",
+		"--dispatch-after", "2026-06-11T09:00:00Z",
+		"--output", "table",
+	)
+	if err := runIssueCreate(cmd, nil); err != nil {
+		t.Fatalf("runIssueCreate: %v", err)
+	}
+	if got["dispatch_after"] != "2026-06-11T09:00:00Z" {
+		t.Fatalf("dispatch_after = %#v, want timestamp", got["dispatch_after"])
+	}
+}
+
+func TestIssueUpdateCanClearDispatchAfter(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/issues/issue-1" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":       "issue-1",
+			"title":    "Deferred work",
+			"status":   "todo",
+			"priority": "medium",
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+
+	cmd := newIssueCommandForTest("update", "--clear-dispatch-after", "--output", "table")
+	if err := runIssueUpdate(cmd, []string{"issue-1"}); err != nil {
+		t.Fatalf("runIssueUpdate: %v", err)
+	}
+	if _, ok := got["dispatch_after"]; !ok {
+		t.Fatal("dispatch_after not present in request body")
+	}
+	if got["dispatch_after"] != nil {
+		t.Fatalf("dispatch_after = %#v, want nil", got["dispatch_after"])
+	}
+}
+
+func TestIssueAssignSendsDispatchAfter(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/workspaces/ws-1/members":
+			json.NewEncoder(w).Encode([]map[string]any{{"user_id": "member-1", "name": "Alice"}})
+		case "/api/agents":
+			json.NewEncoder(w).Encode([]map[string]any{})
+		case "/api/issues/issue-1":
+			if r.Method != http.MethodPut {
+				t.Fatalf("unexpected method: %s", r.Method)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":       "issue-1",
+				"title":    "Deferred work",
+				"status":   "todo",
+				"priority": "medium",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+
+	cmd := newIssueCommandForTest("assign",
+		"--to", "Alice",
+		"--dispatch-after", "2026-06-11T09:00:00Z",
+		"--output", "table",
+	)
+	if err := runIssueAssign(cmd, []string{"issue-1"}); err != nil {
+		t.Fatalf("runIssueAssign: %v", err)
+	}
+	if got["assignee_type"] != "member" || got["assignee_id"] != "member-1" {
+		t.Fatalf("assignee = (%#v, %#v), want member/member-1", got["assignee_type"], got["assignee_id"])
+	}
+	if got["dispatch_after"] != "2026-06-11T09:00:00Z" {
+		t.Fatalf("dispatch_after = %#v, want timestamp", got["dispatch_after"])
+	}
+}
+
+func newIssueCommandForTest(_ string, args ...string) *cobra.Command {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("title", "", "")
+	cmd.Flags().String("description", "", "")
+	cmd.Flags().String("status", "", "")
+	cmd.Flags().String("priority", "", "")
+	cmd.Flags().String("assignee", "", "")
+	cmd.Flags().String("to", "", "")
+	cmd.Flags().Bool("unassign", false, "")
+	cmd.Flags().String("daemon", "", "")
+	cmd.Flags().String("verifier", "", "")
+	cmd.Flags().Bool("clear-verifier", false, "")
+	cmd.Flags().String("parent", "", "")
+	cmd.Flags().String("due-date", "", "")
+	cmd.Flags().String("dispatch-after", "", "")
+	cmd.Flags().Bool("clear-dispatch-after", false, "")
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().StringSlice("attachment", nil, "")
+	if err := cmd.ParseFlags(args); err != nil {
+		panic(err)
+	}
+	return cmd
+}
