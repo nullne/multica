@@ -273,3 +273,14 @@ test("example", async ({ page }) => {
   // api.cleanup() in afterEach removes the issue
 });
 ```
+
+## Targeted UI Verification (Playwright Screenshots)
+
+To manually verify a single UI feature against the running `make dev` environment (e.g. after building a component, or to capture screenshots for a PR), drive the browser with Playwright and take step-by-step screenshots instead of writing a full E2E test. Full guide: `docs/ui-verification-playwright.md`.
+
+Short version:
+
+1. Log in by calling `POST /auth/dev` from the page and storing `multica_token` + `multica_workspace_id` in localStorage (mirrors `loginAsDefault` in `e2e/helpers.ts`).
+2. Seed exactly the data the feature needs via the REST API (`Authorization: Bearer` + `X-Workspace-ID` headers), then reload so stores hydrate.
+3. Interact via accessibility snapshots/roles, capture one screenshot per meaningful step (a 3–5 screenshot sequence reads like a recording; the Playwright MCP plugin cannot record video — use a throwaway spec with `video: "on"` if a real video is required).
+4. Assert against the DOM (text, disabled states) as well as the screenshot, clean up created data afterwards.
