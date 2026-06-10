@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   ShieldOff,
   Tag,
+  Timer,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -40,6 +41,7 @@ import { useLabelStore } from "@/features/labels";
 import { useRuntimeStore } from "@/features/runtimes";
 import { formatAbsoluteTime } from "@/shared/utils";
 import { canAssignAgent, AssigneePicker } from "./pickers/assignee-picker";
+import { DispatchAfterPicker } from "./pickers/dispatch-after-picker";
 import { StatusIcon } from "./status-icon";
 import { PriorityIcon } from "./priority-icon";
 import {
@@ -87,6 +89,7 @@ export function CreateIssueToolbar({
   priority,
   selectedLabels,
   dueDate,
+  dispatchAfter,
   uploading,
   submitting,
   onAssigneeUpdate,
@@ -96,6 +99,7 @@ export function CreateIssueToolbar({
   onPriorityChange,
   onLabelsChange,
   onDueDateChange,
+  onDispatchAfterChange,
   onUploadFile,
   onSubmit,
   submitDisabled,
@@ -114,6 +118,7 @@ export function CreateIssueToolbar({
   priority: IssuePriority;
   selectedLabels: Label[];
   dueDate: string | null;
+  dispatchAfter?: string | null;
   uploading?: boolean;
   submitting?: boolean;
   onAssigneeUpdate: (patch: Partial<UpdateIssueRequest>) => void;
@@ -123,6 +128,7 @@ export function CreateIssueToolbar({
   onPriorityChange: (priority: IssuePriority) => void;
   onLabelsChange: (labels: Label[]) => void;
   onDueDateChange: (value: string | null) => void;
+  onDispatchAfterChange?: (value: string | null) => void;
   onUploadFile: (file: File) => void;
   onSubmit: () => void;
   submitDisabled?: boolean;
@@ -514,6 +520,27 @@ export function CreateIssueToolbar({
             )}
           </PopoverContent>
         </Popover>
+
+        {/* Dispatch after — only meaningful when an agent is assigned */}
+        {selectedAgent && onDispatchAfterChange && (
+          <DispatchAfterPicker
+            dispatchAfter={dispatchAfter ?? null}
+            onChange={onDispatchAfterChange}
+            triggerRender={
+              <CreateIssuePillButton
+                className={cn("border-none", dispatchAfter ? "px-2.5" : "px-1.5")}
+              />
+            }
+            trigger={
+              <>
+                <Timer className="size-4 text-muted-foreground" />
+                {dispatchAfter && (
+                  <span>{formatAbsoluteTime(dispatchAfter, "shortDateTime")}</span>
+                )}
+              </>
+            }
+          />
+        )}
 
         <FileUploadButton busy={uploading} onSelect={onUploadFile} />
         {isCompactSubmit && !hideSubmit ? submitButton : null}

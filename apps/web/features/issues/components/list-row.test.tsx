@@ -30,6 +30,7 @@ function makeIssue(id: string): Issue {
     criteria_status: null,
     position: 0,
     due_date: null,
+    dispatch_after: null,
     dispatch_provider: null,
     dispatch_daemon_id: null,
     dispatch_daemon_label: null,

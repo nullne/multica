@@ -10,6 +10,9 @@ import (
 
 func createOpenTestRepo(t *testing.T) string {
 	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available in test environment")
+	}
 	dir := t.TempDir()
 	openGitRun(t, "", "init", dir)
 	openGitRun(t, dir, "commit", "--allow-empty", "-m", "initial")

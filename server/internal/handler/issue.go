@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/nullne/multica/server/internal/logger"
+	"github.com/nullne/multica/server/internal/service"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 	"github.com/nullne/multica/server/pkg/protocol"
 )
@@ -37,6 +38,7 @@ type IssueResponse struct {
 	CriteriaStatus        *string                 `json:"criteria_status"`
 	Position              float64                 `json:"position"`
 	DueDate               *string                 `json:"due_date"`
+	DispatchAfter         *string                 `json:"dispatch_after"`
 	DispatchProvider      *string                 `json:"dispatch_provider"`
 	DispatchDaemonID      *string                 `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string                 `json:"dispatch_daemon_label"`
@@ -225,6 +227,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		CriteriaStatus:        textToPtr(i.CriteriaStatus),
 		Position:              i.Position,
 		DueDate:               timestampToPtr(i.DueDate),
+		DispatchAfter:         timestampToPtr(i.DispatchAfter),
 		DispatchProvider:      textToPtr(i.DispatchProvider),
 		DispatchDaemonID:      uuidToPtr(i.DispatchDaemonID),
 		DispatchDaemonLabel:   textToPtr(i.DispatchDaemonLabel),
@@ -545,6 +548,7 @@ type CreateIssueRequest struct {
 	MaxVerificationRounds *int32  `json:"max_verification_rounds"`
 	ParentIssueID         *string `json:"parent_issue_id"`
 	DueDate               *string `json:"due_date"`
+	DispatchAfter         *string `json:"dispatch_after"`
 	DispatchProvider      *string `json:"dispatch_provider"`
 	DispatchDaemonID      *string `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string `json:"dispatch_daemon_label"`
@@ -646,6 +650,15 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		}
 		dueDate = pgtype.Timestamptz{Time: t, Valid: true}
 	}
+	var dispatchAfter pgtype.Timestamptz
+	if req.DispatchAfter != nil && *req.DispatchAfter != "" {
+		t, err := time.Parse(time.RFC3339, *req.DispatchAfter)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid dispatch_after format, expected RFC3339")
+			return
+		}
+		dispatchAfter = pgtype.Timestamptz{Time: t, Valid: true}
+	}
 	dispatchProvider := ptrToText(req.DispatchProvider)
 	dispatchDaemonID := parseOptionalUUID(req.DispatchDaemonID)
 	if err := h.applyAgentDispatchDefaults(r.Context(), workspaceID, req.AssigneeType, req.AssigneeID, req.DispatchProvider != nil, req.DispatchDaemonID != nil, &dispatchProvider, &dispatchDaemonID); err != nil {
@@ -699,6 +712,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ParentIssueID:         parentIssueID,
 		Position:              0,
 		DueDate:               dueDate,
+		DispatchAfter:         dispatchAfter,
 		Number:                issueNumber,
 		MaxVerificationRounds: maxVerificationRounds,
 		DispatchProvider:      dispatchProvider,
@@ -747,7 +761,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Only ready issues in todo are enqueued for agents.
 	if issue.AssigneeType.Valid && issue.AssigneeID.Valid {
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
+		if h.shouldEnqueueAgentTask(r.Context(), issue) && !dispatchDeferred(issue) {
 			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 		}
 	}
@@ -767,6 +781,7 @@ type UpdateIssueRequest struct {
 	MaxVerificationRounds *int32   `json:"max_verification_rounds"`
 	Position              *float64 `json:"position"`
 	DueDate               *string  `json:"due_date"`
+	DispatchAfter         *string  `json:"dispatch_after"`
 	DispatchProvider      *string  `json:"dispatch_provider"`
 	DispatchDaemonID      *string  `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   *string  `json:"dispatch_daemon_label"`
@@ -807,6 +822,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		VerifierAgentID:       prevIssue.VerifierAgentID,
 		ParentIssueID:         prevIssue.ParentIssueID,
 		DueDate:               prevIssue.DueDate,
+		DispatchAfter:         prevIssue.DispatchAfter,
 		MaxVerificationRounds: prevIssue.MaxVerificationRounds,
 		DispatchProvider:      prevIssue.DispatchProvider,
 		DispatchDaemonID:      prevIssue.DispatchDaemonID,
@@ -862,6 +878,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			params.DueDate = pgtype.Timestamptz{Time: t, Valid: true}
 		} else {
 			params.DueDate = pgtype.Timestamptz{Valid: false} // explicit null = clear date
+		}
+	}
+	if _, ok := rawFields["dispatch_after"]; ok {
+		if req.DispatchAfter != nil && *req.DispatchAfter != "" {
+			t, err := time.Parse(time.RFC3339, *req.DispatchAfter)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid dispatch_after format, expected RFC3339")
+				return
+			}
+			params.DispatchAfter = pgtype.Timestamptz{Time: t, Valid: true}
+		} else {
+			params.DispatchAfter = pgtype.Timestamptz{Valid: false} // explicit null = clear schedule
 		}
 	}
 	if _, ok := rawFields["max_verification_rounds"]; ok {
@@ -1061,12 +1089,31 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if assigneeChanged || verifierChanged || dispatchChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 
+		if h.shouldEnqueueAgentTask(r.Context(), issue) && !dispatchDeferred(issue) {
+			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+		}
+	} else if dispatchDeferralCleared(prevIssue, issue) {
+		// The pending schedule was removed: the deferred assignment dispatch
+		// happens now instead of via the scheduler.
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
 			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// dispatchDeferred reports whether assign-triggered dispatch for this issue is
+// owned by the issue dispatch scheduler instead of inline enqueue: a
+// dispatch_after schedule exists and its one-shot firing has not been consumed.
+func dispatchDeferred(issue db.Issue) bool {
+	return issue.DispatchAfter.Valid && !issue.DispatchAfterFiredAt.Valid
+}
+
+// dispatchDeferralCleared reports whether an update removed a pending (not yet
+// fired) dispatch_after schedule.
+func dispatchDeferralCleared(prev, curr db.Issue) bool {
+	return dispatchDeferred(prev) && !curr.DispatchAfter.Valid
 }
 
 // isBotUser returns true when the user identified by userID has kind == "bot".
@@ -1167,27 +1214,10 @@ func (h *Handler) isAgentMentionTriggerEnabled(ctx context.Context, agentID pgty
 }
 
 // agentHasTriggerEnabled checks if a trigger type is enabled in the agent's
-// trigger config. Returns true (default-enabled) when the triggers list is
-// empty or does not contain the requested type — for backwards compatibility
-// with agents created before explicit trigger config was introduced.
+// trigger config. Thin wrapper over the shared service implementation so the
+// issue dispatch scheduler can reuse the same semantics.
 func agentHasTriggerEnabled(raw []byte, triggerType string) bool {
-	if raw == nil || len(raw) == 0 {
-		return true
-	}
-
-	var triggers []agentTriggerSnapshot
-	if err := json.Unmarshal(raw, &triggers); err != nil {
-		return false
-	}
-	if len(triggers) == 0 {
-		return true // Empty array = default-enabled (backwards compat)
-	}
-	for _, trigger := range triggers {
-		if trigger.Type == triggerType {
-			return trigger.Enabled
-		}
-	}
-	return true // Trigger type not configured = enabled by default
+	return service.AgentHasTriggerEnabled(raw, triggerType)
 }
 
 // ---------------------------------------------------------------------------
@@ -1275,7 +1305,7 @@ func (h *Handler) ApproveCriteria(w http.ResponseWriter, r *http.Request) {
 		"criteria_approved": true,
 	})
 
-	if h.shouldEnqueueAgentTask(r.Context(), updated) {
+	if h.shouldEnqueueAgentTask(r.Context(), updated) && !dispatchDeferred(updated) {
 		h.TaskService.EnqueueExecutorForApprovedCriteria(r.Context(), updated)
 	}
 
@@ -1482,6 +1512,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			VerifierAgentID:       prevIssue.VerifierAgentID,
 			ParentIssueID:         prevIssue.ParentIssueID,
 			DueDate:               prevIssue.DueDate,
+			DispatchAfter:         prevIssue.DispatchAfter,
 			MaxVerificationRounds: prevIssue.MaxVerificationRounds,
 			DispatchProvider:      prevIssue.DispatchProvider,
 			DispatchDaemonID:      prevIssue.DispatchDaemonID,
@@ -1534,6 +1565,17 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				params.DueDate = pgtype.Timestamptz{Time: t, Valid: true}
 			} else {
 				params.DueDate = pgtype.Timestamptz{Valid: false}
+			}
+		}
+		if _, ok := rawUpdates["dispatch_after"]; ok {
+			if req.Updates.DispatchAfter != nil && *req.Updates.DispatchAfter != "" {
+				t, err := time.Parse(time.RFC3339, *req.Updates.DispatchAfter)
+				if err != nil {
+					continue
+				}
+				params.DispatchAfter = pgtype.Timestamptz{Time: t, Valid: true}
+			} else {
+				params.DispatchAfter = pgtype.Timestamptz{Valid: false}
 			}
 		}
 		_, batchProviderPresent := rawUpdates["dispatch_provider"]
@@ -1657,6 +1699,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		if assigneeChanged || verifierChanged || dispatchChanged {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
+			if h.shouldEnqueueAgentTask(r.Context(), issue) && !dispatchDeferred(issue) {
+				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+			}
+		} else if dispatchDeferralCleared(prevIssue, issue) {
 			if h.shouldEnqueueAgentTask(r.Context(), issue) {
 				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 			}

@@ -1008,6 +1008,7 @@ func issueToMap(issue db.Issue, issuePrefix string) map[string]any {
 		"acceptance_criteria": acceptanceCriteria,
 		"position":            issue.Position,
 		"due_date":            util.TimestampToPtr(issue.DueDate),
+		"dispatch_after":      util.TimestampToPtr(issue.DispatchAfter),
 		"created_at":          util.TimestampToString(issue.CreatedAt),
 		"updated_at":          util.TimestampToString(issue.UpdatedAt),
 	}

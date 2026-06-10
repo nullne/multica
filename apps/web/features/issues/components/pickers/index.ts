@@ -6,4 +6,5 @@ export { AgentPicker, AgentDispatchTriggerContent } from "./agent-picker";
 export type { AgentPickerValue } from "./agent-picker";
 export { VerifierPicker, VerifierIcon } from "./verifier-picker";
 export { DueDatePicker } from "./due-date-picker";
+export { DispatchAfterPicker } from "./dispatch-after-picker";
 export { DaemonPicker } from "./daemon-picker";

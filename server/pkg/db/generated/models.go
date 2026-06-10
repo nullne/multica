@@ -203,6 +203,8 @@ type Issue struct {
 	AgentMentionChainCount      int32              `json:"agent_mention_chain_count"`
 	AgentMentionChainGeneration int64              `json:"agent_mention_chain_generation"`
 	GithubAutoFixEnabled        bool               `json:"github_auto_fix_enabled"`
+	DispatchAfter               pgtype.Timestamptz `json:"dispatch_after"`
+	DispatchAfterFiredAt        pgtype.Timestamptz `json:"dispatch_after_fired_at"`
 }
 
 type IssueDependency struct {
