@@ -60,6 +60,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const [assigneeType, setAssigneeType] = useState<IssueAssigneeType | undefined>(initAssigneeType);
   const [assigneeId, setAssigneeId] = useState<string | undefined>(initAssigneeId);
   const [dueDate, setDueDate] = useState<string | null>(draft.dueDate);
+  const [dispatchAfter, setDispatchAfter] = useState<string | null>(null);
   const [verifierAgentId, setVerifierAgentId] = useState<string | undefined>(draft.verifierAgentId);
   const [maxVerificationRounds, setMaxVerificationRounds] = useState<number | undefined>(draft.maxVerificationRounds);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -142,6 +143,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         verifier_agent_id: verifierAgentId,
         max_verification_rounds: maxVerificationRounds,
         due_date: dueDate || undefined,
+        dispatch_after: dispatchAfter || undefined,
         dispatch_provider: dispatchProvider,
         dispatch_daemon_id: dispatchDaemonId,
         parent_issue_id: parentIssueId,
@@ -297,6 +299,8 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
           onPriorityChange={updatePriority}
           onLabelsChange={setSelectedLabels}
           onDueDateChange={updateDueDate}
+          dispatchAfter={dispatchAfter}
+          onDispatchAfterChange={setDispatchAfter}
           onUploadFile={(file) => descEditorRef.current?.uploadFile(file)}
           onSubmit={handleSubmit}
         />

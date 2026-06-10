@@ -98,6 +98,7 @@ function makeIssue(id: string, workspaceId: string, title = id): Issue {
     criteria_status: null,
     position: 0,
     due_date: null,
+    dispatch_after: null,
     dispatch_provider: null,
     dispatch_daemon_id: null,
     dispatch_daemon_label: null,

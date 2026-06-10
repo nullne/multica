@@ -64,7 +64,7 @@ import { ActorAvatar } from "@/components/common/actor-avatar";
 import { AbsoluteTime } from "@/components/common/absolute-time";
 import type { Issue, UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
-import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, DueDatePicker, DispatchAfterPicker, AssigneePicker, VerifierPicker, canAssignAgent, PropertyPicker, PickerItem, DaemonPicker } from "@/features/issues/components";
 import { AgentDispatchConfirm } from "@/features/issues/components/pickers/assignee-picker";
 import { getAgentDispatchDefaults, resolveAssigneeChange } from "@/features/issues/utils/dispatch";
 import { CommentCard } from "./comment-card";
@@ -1808,6 +1808,16 @@ export function IssueDetail({ issueId, onDelete, onBack, defaultSidebarOpen = tr
                       onUpdate={handleUpdateField}
                     />
                   </PropRow>
+
+                  {/* Dispatch after — only relevant for agent assignees */}
+                  {(issue.dispatch_after || (issue.assignee_type === "agent" && issue.assignee_id)) && (
+                    <PropRow label="Dispatch after">
+                      <DispatchAfterPicker
+                        dispatchAfter={issue.dispatch_after}
+                        onChange={(value) => handleUpdateField({ dispatch_after: value })}
+                      />
+                    </PropRow>
+                  )}
 
                   {/* Parent issue */}
                   <PropRow label="Parent">
