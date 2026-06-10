@@ -86,6 +86,9 @@ func main() {
 	taskSvc := service.NewTaskService(queries, hub, bus)
 	go runRoutineScheduler(schedCtx, pool, queries, taskSvc)
 
+	// Start issue dispatch scheduler for dispatch_after-deferred assignments.
+	go runIssueDispatchScheduler(schedCtx, queries, taskSvc)
+
 	// Graceful shutdown
 	go func() {
 		slog.Info("server starting", "port", port)

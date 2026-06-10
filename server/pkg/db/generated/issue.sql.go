@@ -11,6 +11,55 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimIssueDispatch = `-- name: ClaimIssueDispatch :one
+UPDATE issue SET
+    dispatch_after_fired_at = now()
+WHERE id = $1
+  AND dispatch_after IS NOT NULL
+  AND dispatch_after <= now()
+  AND dispatch_after_fired_at IS NULL
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at
+`
+
+// Compare-and-set claim of a due dispatch. Returns no rows when another
+// scheduler instance already claimed it or the schedule changed.
+func (q *Queries) ClaimIssueDispatch(ctx context.Context, id pgtype.UUID) (Issue, error) {
+	row := q.db.QueryRow(ctx, claimIssueDispatch, id)
+	var i Issue
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.AssigneeType,
+		&i.AssigneeID,
+		&i.CreatorType,
+		&i.CreatorID,
+		&i.ParentIssueID,
+		&i.AcceptanceCriteria,
+		&i.ContextRefs,
+		&i.Position,
+		&i.DueDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Number,
+		&i.VerifierAgentID,
+		&i.MaxVerificationRounds,
+		&i.CriteriaStatus,
+		&i.DispatchProvider,
+		&i.DispatchDaemonID,
+		&i.DispatchDaemonLabel,
+		&i.AgentMentionChainCount,
+		&i.AgentMentionChainGeneration,
+		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
+	)
+	return i, err
+}
+
 const createIssue = `-- name: CreateIssue :one
 INSERT INTO issue (
     workspace_id, title, description, status, priority,
@@ -18,11 +67,11 @@ INSERT INTO issue (
     verifier_agent_id, parent_issue_id, position, due_date, number,
     max_verification_rounds,
     dispatch_provider, dispatch_daemon_id, dispatch_daemon_label,
-    github_auto_fix_enabled
+    github_auto_fix_enabled, dispatch_after
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, $18, $19
-) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled
+    $16, $17, $18, $19, $20
+) RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at
 `
 
 type CreateIssueParams struct {
@@ -45,6 +94,7 @@ type CreateIssueParams struct {
 	DispatchDaemonID      pgtype.UUID        `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   pgtype.Text        `json:"dispatch_daemon_label"`
 	GithubAutoFixEnabled  bool               `json:"github_auto_fix_enabled"`
+	DispatchAfter         pgtype.Timestamptz `json:"dispatch_after"`
 }
 
 func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue, error) {
@@ -68,6 +118,7 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		arg.DispatchDaemonID,
 		arg.DispatchDaemonLabel,
 		arg.GithubAutoFixEnabled,
+		arg.DispatchAfter,
 	)
 	var i Issue
 	err := row.Scan(
@@ -98,6 +149,8 @@ func (q *Queries) CreateIssue(ctx context.Context, arg CreateIssueParams) (Issue
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }
@@ -112,7 +165,7 @@ func (q *Queries) DeleteIssue(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getIssue = `-- name: GetIssue :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at FROM issue
 WHERE id = $1
 `
 
@@ -147,12 +200,14 @@ func (q *Queries) GetIssue(ctx context.Context, id pgtype.UUID) (Issue, error) {
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }
 
 const getIssueByNumber = `-- name: GetIssueByNumber :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at FROM issue
 WHERE workspace_id = $1 AND number = $2
 `
 
@@ -192,12 +247,14 @@ func (q *Queries) GetIssueByNumber(ctx context.Context, arg GetIssueByNumberPara
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }
 
 const getIssueInWorkspace = `-- name: GetIssueInWorkspace :one
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at FROM issue
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -237,12 +294,78 @@ func (q *Queries) GetIssueInWorkspace(ctx context.Context, arg GetIssueInWorkspa
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }
 
+const listDueDispatchIssues = `-- name: ListDueDispatchIssues :many
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at FROM issue
+WHERE dispatch_after IS NOT NULL
+  AND dispatch_after <= now()
+  AND dispatch_after_fired_at IS NULL
+  AND assignee_type = 'agent'
+  AND assignee_id IS NOT NULL
+  AND status NOT IN ('done', 'cancelled')
+ORDER BY dispatch_after ASC
+LIMIT $1
+`
+
+// Issues whose scheduled dispatch time has arrived and has not been consumed.
+// Used by the issue dispatch scheduler to enqueue deferred agent tasks.
+func (q *Queries) ListDueDispatchIssues(ctx context.Context, limit int32) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listDueDispatchIssues, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeType,
+			&i.AssigneeID,
+			&i.CreatorType,
+			&i.CreatorID,
+			&i.ParentIssueID,
+			&i.AcceptanceCriteria,
+			&i.ContextRefs,
+			&i.Position,
+			&i.DueDate,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Number,
+			&i.VerifierAgentID,
+			&i.MaxVerificationRounds,
+			&i.CriteriaStatus,
+			&i.DispatchProvider,
+			&i.DispatchDaemonID,
+			&i.DispatchDaemonLabel,
+			&i.AgentMentionChainCount,
+			&i.AgentMentionChainGeneration,
+			&i.GithubAutoFixEnabled,
+			&i.DispatchAfter,
+			&i.DispatchAfterFiredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listIssues = `-- name: ListIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at FROM issue
 WHERE workspace_id = $1
   AND ($4::text IS NULL OR status = $4)
   AND ($5::text IS NULL OR priority = $5)
@@ -304,6 +427,8 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]Issue
 			&i.AgentMentionChainCount,
 			&i.AgentMentionChainGeneration,
 			&i.GithubAutoFixEnabled,
+			&i.DispatchAfter,
+			&i.DispatchAfterFiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -316,7 +441,7 @@ func (q *Queries) ListIssues(ctx context.Context, arg ListIssuesParams) ([]Issue
 }
 
 const listIssuesByParent = `-- name: ListIssuesByParent :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at FROM issue
 WHERE parent_issue_id = $1
 ORDER BY position ASC, created_at DESC
 `
@@ -358,6 +483,8 @@ func (q *Queries) ListIssuesByParent(ctx context.Context, parentIssueID pgtype.U
 			&i.AgentMentionChainCount,
 			&i.AgentMentionChainGeneration,
 			&i.GithubAutoFixEnabled,
+			&i.DispatchAfter,
+			&i.DispatchAfterFiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -370,7 +497,7 @@ func (q *Queries) ListIssuesByParent(ctx context.Context, parentIssueID pgtype.U
 }
 
 const listRecentIssues = `-- name: ListRecentIssues :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled FROM issue
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at FROM issue
 WHERE workspace_id = $1
   AND (
     $3::uuid IS NULL
@@ -428,6 +555,8 @@ func (q *Queries) ListRecentIssues(ctx context.Context, arg ListRecentIssuesPara
 			&i.AgentMentionChainCount,
 			&i.AgentMentionChainGeneration,
 			&i.GithubAutoFixEnabled,
+			&i.DispatchAfter,
+			&i.DispatchAfterFiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -478,6 +607,19 @@ func (q *Queries) ResetIssueAgentMentionChain(ctx context.Context, id pgtype.UUI
 	return err
 }
 
+const resetIssueDispatchFired = `-- name: ResetIssueDispatchFired :exec
+UPDATE issue SET
+    dispatch_after_fired_at = NULL
+WHERE id = $1
+`
+
+// Releases a claimed dispatch so the scheduler retries on the next tick
+// (e.g. when no runtime was available at fire time).
+func (q *Queries) ResetIssueDispatchFired(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, resetIssueDispatchFired, id)
+	return err
+}
+
 const tryReserveIssueAgentMentionChain = `-- name: TryReserveIssueAgentMentionChain :one
 UPDATE issue SET
     agent_mention_chain_count = agent_mention_chain_count + 1
@@ -523,9 +665,16 @@ UPDATE issue SET
     dispatch_daemon_id = $14,
     dispatch_daemon_label = $15,
     github_auto_fix_enabled = COALESCE($16, github_auto_fix_enabled),
+    -- Reset the one-shot fired marker whenever dispatch_after changes, so a
+    -- rescheduled time becomes eligible for dispatch again.
+    dispatch_after_fired_at = CASE
+        WHEN $17::timestamptz IS DISTINCT FROM dispatch_after THEN NULL
+        ELSE dispatch_after_fired_at
+    END,
+    dispatch_after = $17,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at
 `
 
 type UpdateIssueParams struct {
@@ -545,6 +694,7 @@ type UpdateIssueParams struct {
 	DispatchDaemonID      pgtype.UUID        `json:"dispatch_daemon_id"`
 	DispatchDaemonLabel   pgtype.Text        `json:"dispatch_daemon_label"`
 	GithubAutoFixEnabled  pgtype.Bool        `json:"github_auto_fix_enabled"`
+	DispatchAfter         pgtype.Timestamptz `json:"dispatch_after"`
 }
 
 func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue, error) {
@@ -565,6 +715,7 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		arg.DispatchDaemonID,
 		arg.DispatchDaemonLabel,
 		arg.GithubAutoFixEnabled,
+		arg.DispatchAfter,
 	)
 	var i Issue
 	err := row.Scan(
@@ -595,6 +746,8 @@ func (q *Queries) UpdateIssue(ctx context.Context, arg UpdateIssueParams) (Issue
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }
@@ -605,7 +758,7 @@ UPDATE issue SET
     criteria_status = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at
 `
 
 type UpdateIssueAcceptanceCriteriaParams struct {
@@ -645,6 +798,8 @@ func (q *Queries) UpdateIssueAcceptanceCriteria(ctx context.Context, arg UpdateI
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }
@@ -654,7 +809,7 @@ UPDATE issue SET
     criteria_status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at
 `
 
 type UpdateIssueCriteriaStatusParams struct {
@@ -693,6 +848,8 @@ func (q *Queries) UpdateIssueCriteriaStatus(ctx context.Context, arg UpdateIssue
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }
@@ -702,7 +859,7 @@ UPDATE issue SET
     status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, verifier_agent_id, max_verification_rounds, criteria_status, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, agent_mention_chain_count, agent_mention_chain_generation, github_auto_fix_enabled, dispatch_after, dispatch_after_fired_at
 `
 
 type UpdateIssueStatusParams struct {
@@ -741,6 +898,8 @@ func (q *Queries) UpdateIssueStatus(ctx context.Context, arg UpdateIssueStatusPa
 		&i.AgentMentionChainCount,
 		&i.AgentMentionChainGeneration,
 		&i.GithubAutoFixEnabled,
+		&i.DispatchAfter,
+		&i.DispatchAfterFiredAt,
 	)
 	return i, err
 }

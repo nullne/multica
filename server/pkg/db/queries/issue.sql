@@ -37,10 +37,10 @@ INSERT INTO issue (
     verifier_agent_id, parent_issue_id, position, due_date, number,
     max_verification_rounds,
     dispatch_provider, dispatch_daemon_id, dispatch_daemon_label,
-    github_auto_fix_enabled
+    github_auto_fix_enabled, dispatch_after
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, $18, $19
+    $16, $17, $18, $19, $20
 ) RETURNING *;
 
 -- name: GetIssueByNumber :one
@@ -64,6 +64,13 @@ UPDATE issue SET
     dispatch_daemon_id = sqlc.narg('dispatch_daemon_id'),
     dispatch_daemon_label = sqlc.narg('dispatch_daemon_label'),
     github_auto_fix_enabled = COALESCE(sqlc.narg('github_auto_fix_enabled'), github_auto_fix_enabled),
+    -- Reset the one-shot fired marker whenever dispatch_after changes, so a
+    -- rescheduled time becomes eligible for dispatch again.
+    dispatch_after_fired_at = CASE
+        WHEN sqlc.narg('dispatch_after')::timestamptz IS DISTINCT FROM dispatch_after THEN NULL
+        ELSE dispatch_after_fired_at
+    END,
+    dispatch_after = sqlc.narg('dispatch_after'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -118,6 +125,37 @@ UPDATE issue SET
 WHERE id = $1
   AND agent_mention_chain_generation = sqlc.arg(generation)::bigint
   AND agent_mention_chain_count > 0;
+
+-- name: ListDueDispatchIssues :many
+-- Issues whose scheduled dispatch time has arrived and has not been consumed.
+-- Used by the issue dispatch scheduler to enqueue deferred agent tasks.
+SELECT * FROM issue
+WHERE dispatch_after IS NOT NULL
+  AND dispatch_after <= now()
+  AND dispatch_after_fired_at IS NULL
+  AND assignee_type = 'agent'
+  AND assignee_id IS NOT NULL
+  AND status NOT IN ('done', 'cancelled')
+ORDER BY dispatch_after ASC
+LIMIT $1;
+
+-- name: ClaimIssueDispatch :one
+-- Compare-and-set claim of a due dispatch. Returns no rows when another
+-- scheduler instance already claimed it or the schedule changed.
+UPDATE issue SET
+    dispatch_after_fired_at = now()
+WHERE id = $1
+  AND dispatch_after IS NOT NULL
+  AND dispatch_after <= now()
+  AND dispatch_after_fired_at IS NULL
+RETURNING *;
+
+-- name: ResetIssueDispatchFired :exec
+-- Releases a claimed dispatch so the scheduler retries on the next tick
+-- (e.g. when no runtime was available at fire time).
+UPDATE issue SET
+    dispatch_after_fired_at = NULL
+WHERE id = $1;
 
 -- name: ResetIssueAgentMentionChain :exec
 -- Resets the chain count and bumps the generation so any in-flight rollbacks
