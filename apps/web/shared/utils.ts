@@ -9,6 +9,27 @@ export function timeAgo(dateStr: string): string {
   return `${days}d ago`;
 }
 
+// Relative time with minute precision, e.g. "in 28m", "in 3h 5m",
+// "in 2d 4h", "15m ago". Computed once at render — not live-updating.
+export function formatRelativeTime(dateStr: string): string {
+  const diffMs = new Date(dateStr).getTime() - Date.now();
+  const future = diffMs > 0;
+  const totalMinutes = Math.round(Math.abs(diffMs) / 60000);
+  if (totalMinutes < 1) return future ? "in <1m" : "just now";
+
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+
+  const parts: string[] = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes && !days) parts.push(`${minutes}m`);
+
+  const text = parts.join(" ");
+  return future ? `in ${text}` : `${text} ago`;
+}
+
 export type AbsoluteTimeStyle = "shortDate" | "shortDateTime" | "localeDate" | "localeDateTime";
 
 const absoluteTimeFormats: Record<AbsoluteTimeStyle, Intl.DateTimeFormatOptions | undefined> = {
