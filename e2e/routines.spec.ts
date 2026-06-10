@@ -76,7 +76,9 @@ test("routine detail can run now and shows processed history", async ({ page }) 
   routineId = routine.id;
 
   await page.goto(`/routines/${routine.id}`);
-  await expect(page.getByText(routine.name)).toBeVisible();
+  // The routine name appears both in the sidebar nav and the detail header,
+  // so a bare getByText would violate strict mode.
+  await expect(page.getByText(routine.name).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Runs" })).toBeVisible();
   await captureEvidence(page, "02-detail-before-run");
 
