@@ -114,6 +114,9 @@ interface RoutineTriggerDraft {
   githubEventValue: string;
   githubFilters: GitHubFilterCondition[];
   apiCredential: ApiTriggerCredential | null;
+  timezone?: string;
+  dedupWindowSeconds?: number;
+  maxRuns?: number | null;
 }
 
 interface TriggerOption {
@@ -1557,15 +1560,12 @@ function createRoutineTriggerDraft(type: TriggerType): RoutineTriggerDraft {
 function routineTriggerToDraft(trigger: Routine["triggers"][number]): RoutineTriggerDraft {
   const draft = createRoutineTriggerDraft(trigger.trigger_type as TriggerType);
   draft.id = trigger.id;
+  draft.timezone = trigger.timezone;
+  draft.dedupWindowSeconds = trigger.dedup_window_seconds;
+  draft.maxRuns = trigger.max_runs ?? null;
 
   if (trigger.trigger_type === "schedule") {
-    const mode = getScheduleMode(trigger.config?.mode);
-    draft.schedule = {
-      ...draft.schedule,
-      mode: mode ?? (trigger.run_at ? "once" : "custom"),
-      runAt: trigger.run_at ?? draft.schedule.runAt,
-      cronExpression: trigger.schedule ?? draft.schedule.cronExpression,
-    };
+    draft.schedule = scheduleTriggerToConfig(trigger);
   }
 
   if (trigger.trigger_type === "github") {
@@ -1601,6 +1601,57 @@ function createDefaultScheduleConfig(): ScheduleTriggerConfig {
 
 function getScheduleMode(value: unknown): ScheduleMode | null {
   return scheduleModes.some((mode) => mode.value === value) ? (value as ScheduleMode) : null;
+}
+
+// Inverse of buildRoutineTrigger for schedule triggers: rebuild the form fields
+// from the persisted run_at / cron so editing does not reset them to defaults.
+function scheduleTriggerToConfig(trigger: Routine["triggers"][number]): ScheduleTriggerConfig {
+  const config = createDefaultScheduleConfig();
+  if (trigger.run_at) {
+    const runAt = new Date(trigger.run_at);
+    return {
+      ...config,
+      mode: "once",
+      runAt: Number.isNaN(runAt.getTime()) ? config.runAt : formatLocalDateTime(runAt),
+    };
+  }
+  const cron = trigger.schedule?.trim() ?? "";
+  if (!cron) return config;
+  const parsed = parseCronSchedule(cron);
+  if (!parsed) {
+    return { ...config, mode: "custom", cronExpression: cron };
+  }
+  const mode = getScheduleMode(trigger.config?.mode) === "custom" ? "custom" : parsed.mode;
+  return { ...config, ...parsed, mode, cronExpression: cron };
+}
+
+// Inverse of scheduleToCron: recognizes the cron shapes that the editor
+// generates. Anything else is edited as a custom cron expression.
+function parseCronSchedule(
+  cron: string,
+): (Partial<ScheduleTriggerConfig> & { mode: Exclude<ScheduleMode, "once" | "custom"> }) | null {
+  const parts = cron.split(/\s+/);
+  if (parts.length !== 5) return null;
+  const [minute = "", hour = "", dayOfMonth = "", month = "", dayOfWeek = ""] = parts;
+  if (!/^\d+$/.test(minute) || dayOfMonth !== "*" || month !== "*") return null;
+  if (hour === "*") {
+    return dayOfWeek === "*" ? { mode: "hourly", hourlyMinute: minute } : null;
+  }
+  if (!/^\d+$/.test(hour)) return null;
+  const timeOfDay = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+  if (dayOfWeek === "*") return { mode: "daily", timeOfDay };
+  if (dayOfWeek === "1-5") return { mode: "weekdays", timeOfDay };
+  if (/^[0-7]$/.test(dayOfWeek)) {
+    // weekDays is Monday-first; cron uses 0 or 7 for Sunday.
+    const index = dayOfWeek === "0" || dayOfWeek === "7" ? 6 : Number(dayOfWeek) - 1;
+    return { mode: "weekly", timeOfDay, weeklyDay: weekDays[index]! };
+  }
+  return null;
+}
+
+function formatLocalDateTime(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())}, ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function getTriggerOption(type: TriggerType) {
@@ -1964,14 +2015,19 @@ function buildRoutinePayload({
 }
 
 function buildRoutineTrigger(triggerDraft: RoutineTriggerDraft): RoutineTriggerRequest {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const preserved: Pick<RoutineTriggerRequest, "dedup_window_seconds" | "max_runs"> = {
+    dedup_window_seconds: triggerDraft.dedupWindowSeconds,
+    max_runs: triggerDraft.maxRuns,
+  };
   if (triggerDraft.type === "schedule") {
     const trigger: RoutineTriggerRequest = {
       id: triggerDraft.id,
       trigger_type: "schedule",
-      timezone,
+      timezone: triggerDraft.timezone ?? browserTimezone,
       config: { mode: triggerDraft.schedule.mode },
       enabled: true,
+      ...preserved,
     };
     if (triggerDraft.schedule.mode === "once") {
       trigger.run_at = parseLocalDateTime(triggerDraft.schedule.runAt)?.toISOString() ?? null;
@@ -2001,6 +2057,7 @@ function buildRoutineTrigger(triggerDraft: RoutineTriggerDraft): RoutineTriggerR
       trigger_type: "github",
       config,
       enabled: true,
+      ...preserved,
     };
   }
   return {
@@ -2010,6 +2067,7 @@ function buildRoutineTrigger(triggerDraft: RoutineTriggerDraft): RoutineTriggerR
     token_draft_id: triggerDraft.apiCredential?.tokenDraftId,
     config: {},
     enabled: true,
+    ...preserved,
   };
 }
 
