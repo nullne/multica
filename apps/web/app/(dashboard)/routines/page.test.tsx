@@ -930,6 +930,155 @@ describe("RoutinesPage", () => {
     expect(screen.getByText("sk-new-token-full")).toBeInTheDocument();
   });
 
+  it("preserves a recurring schedule trigger when editing without changes", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1&id=routine-1");
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Daily review",
+      instructions: "Review the code every day",
+      priority: "medium",
+      assignee_id: "agent-1",
+      assignee_type: "agent",
+      triggers: [
+        {
+          id: "trigger-1",
+          trigger_type: "schedule",
+          schedule: "30 18 * * *",
+          timezone: "America/New_York",
+          dedup_window_seconds: 120,
+          max_runs: 5,
+          config: { mode: "daily" },
+        },
+      ],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+    });
+
+    render(<RoutinesPage />);
+
+    expect(await screen.findByRole("heading", { name: "Edit routine" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Runs daily at 18:30/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Update routine/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.updateRoutine).toHaveBeenCalledWith(
+        "routine-1",
+        expect.objectContaining({
+          triggers: [
+            expect.objectContaining({
+              id: "trigger-1",
+              trigger_type: "schedule",
+              schedule: "30 18 * * *",
+              timezone: "America/New_York",
+              dedup_window_seconds: 120,
+              max_runs: 5,
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("preserves a once schedule trigger run_at when editing without changes", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1&id=routine-1");
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "One-off task",
+      instructions: "Run once",
+      priority: "medium",
+      assignee_id: "agent-1",
+      assignee_type: "agent",
+      triggers: [
+        {
+          id: "trigger-1",
+          trigger_type: "schedule",
+          run_at: "2026-07-01T02:30:00Z",
+          timezone: "UTC",
+          dedup_window_seconds: 600,
+          config: { mode: "once" },
+        },
+      ],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+    });
+
+    render(<RoutinesPage />);
+
+    expect(await screen.findByRole("heading", { name: "Edit routine" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Update routine/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.updateRoutine).toHaveBeenCalledWith(
+        "routine-1",
+        expect.objectContaining({
+          triggers: [
+            expect.objectContaining({
+              trigger_type: "schedule",
+              run_at: "2026-07-01T02:30:00.000Z",
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
+  it("falls back to custom mode for crons the editor cannot decompose", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = new URLSearchParams("new=1&id=routine-1");
+    mocks.api.getRoutine.mockResolvedValue({
+      id: "routine-1",
+      workspace_id: "ws-1",
+      name: "Quarter-hourly check",
+      instructions: "Check often",
+      priority: "medium",
+      assignee_id: "agent-1",
+      assignee_type: "agent",
+      triggers: [
+        {
+          id: "trigger-1",
+          trigger_type: "schedule",
+          schedule: "*/15 2 * * *",
+          timezone: "UTC",
+          dedup_window_seconds: 600,
+          config: { mode: "daily" },
+        },
+      ],
+      actions: [],
+      subscriber_ids: [],
+      label_ids: [],
+      enabled: true,
+    });
+
+    render(<RoutinesPage />);
+
+    expect(await screen.findByRole("heading", { name: "Edit routine" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Runs on cron \*\/15 2 \* \* \*/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Update routine/i }));
+
+    await waitFor(() => {
+      expect(mocks.api.updateRoutine).toHaveBeenCalledWith(
+        "routine-1",
+        expect.objectContaining({
+          triggers: [
+            expect.objectContaining({
+              trigger_type: "schedule",
+              schedule: "*/15 2 * * *",
+              config: { mode: "custom" },
+            }),
+          ],
+        }),
+      );
+    });
+  });
+
   it("loads an existing routine in edit mode and updates it", async () => {
     const user = userEvent.setup();
     mocks.searchParams = new URLSearchParams("new=1&id=routine-1");
