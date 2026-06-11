@@ -15,6 +15,7 @@ import {
   Loader2,
   MoreHorizontal,
   PanelRight,
+  Pencil,
   Plus,
   Trash2,
   UserMinus,
@@ -399,6 +400,7 @@ function ParentIssuePicker({
   onUpdate: (parentId: string | null) => void;
 }) {
   const allIssues = useIssueStore((s) => s.issues);
+  const workspaceSlug = useWorkspaceStore((s) => s.workspace?.slug ?? "");
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
 
@@ -410,16 +412,27 @@ function ParentIssuePicker({
 
   return (
     <Popover open={open} onOpenChange={(v) => { setOpen(v); if (!v) setFilter(""); }}>
-      <PopoverTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden min-w-0 max-w-full">
-        {parentIssue ? (
-          <>
+      {parentIssue ? (
+        <div className="group flex items-center gap-1 overflow-hidden min-w-0 max-w-full">
+          <Link
+            href={issueUrl(parentIssue.id, workspaceSlug)}
+            className="flex items-center gap-1.5 rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden min-w-0"
+          >
             <StatusIcon status={parentIssue.status} className="h-3 w-3 shrink-0" />
             <span className="truncate text-xs">{parentIssue.identifier} {parentIssue.title}</span>
-          </>
-        ) : (
+          </Link>
+          <PopoverTrigger
+            className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-accent/30 transition-all"
+            aria-label="Change parent issue"
+          >
+            <Pencil className="h-3 w-3" />
+          </PopoverTrigger>
+        </div>
+      ) : (
+        <PopoverTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden min-w-0 max-w-full">
           <span className="text-muted-foreground text-xs">None</span>
-        )}
-      </PopoverTrigger>
+        </PopoverTrigger>
+      )}
       <PopoverContent align="start" className="w-64 p-0">
         <div className="px-2 py-1.5 border-b">
           <input
