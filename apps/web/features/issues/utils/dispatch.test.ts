@@ -21,6 +21,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     github_code_access: "read",
     default_daemon_id: null,
     max_concurrent_tasks: 1,
+    model_config: {},
     created_at: "",
     updated_at: "",
     archived_at: null,

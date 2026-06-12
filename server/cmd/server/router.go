@@ -108,6 +108,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		r.Post("/runtimes/{runtimeId}/usage", h.ReportRuntimeUsage)
 		r.Post("/runtimes/{runtimeId}/ping/{pingId}/result", h.ReportPingResult)
 		r.Post("/runtimes/{runtimeId}/update/{updateId}/result", h.ReportUpdateResult)
+		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -301,6 +302,8 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				r.Get("/{runtimeId}/ping/{pingId}", h.GetPing)
 				r.Post("/{runtimeId}/update", h.InitiateUpdate)
 				r.Get("/{runtimeId}/update/{updateId}", h.GetUpdate)
+				r.Post("/{runtimeId}/models", h.InitiateListModels)
+				r.Get("/{runtimeId}/models/{requestId}", h.GetModelListRequest)
 			})
 
 			// Routines

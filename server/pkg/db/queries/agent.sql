@@ -19,8 +19,8 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: CreateAgent :one
 INSERT INTO agent (
     workspace_id, name, description, avatar_url, providers, visibility, owner_id,
-    tools, triggers, instructions, github_code_access, default_provider, default_daemon_id, max_concurrent_tasks
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(default_provider), sqlc.narg(default_daemon_id), @max_concurrent_tasks)
+    tools, triggers, instructions, github_code_access, default_provider, default_daemon_id, max_concurrent_tasks, model_config
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(default_provider), sqlc.narg(default_daemon_id), @max_concurrent_tasks, @model_config)
 RETURNING *;
 
 -- name: UpdateAgent :one
@@ -38,6 +38,7 @@ UPDATE agent SET
     default_provider = sqlc.narg('default_provider'),
     default_daemon_id = sqlc.narg('default_daemon_id'),
     max_concurrent_tasks = COALESCE(sqlc.narg('max_concurrent_tasks'), max_concurrent_tasks),
+    model_config = COALESCE(sqlc.narg('model_config'), model_config),
     updated_at = now()
 WHERE id = $1
 RETURNING *;

@@ -1,6 +1,7 @@
 export type { Issue, IssueLink, IssueLinkDirection, IssueLinkKind, IssueStatus, IssuePriority, IssueAssigneeType, IssueCreatorType, IssueReaction, AcceptanceCriterion, CriteriaStatus, Label } from "./issue";
 export type {
   Agent,
+  AgentModelConfig,
   AgentStatus,
   AgentRuntimeMode,
   AgentVisibility,
@@ -28,6 +29,11 @@ export type {
   ProviderAuthStatus,
   DaemonStatus,
   RuntimeStatus,
+  ModelListStatus,
+  ModelListRequest,
+  RuntimeModel,
+  RuntimeModelThinking,
+  RuntimeModelThinkingLevel,
 } from "./agent";
 export type { Workspace, WorkspaceRepo, ProviderConfig, WorkspaceProviderSettings, ProviderValidationResult, ProviderValidationStatus, Member, MemberRole, User, MemberWithUser, UserKind } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";

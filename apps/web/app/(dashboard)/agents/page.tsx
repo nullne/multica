@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import type {
   Agent,
+  AgentModelConfig,
   AgentStatus,
   AgentVisibility,
   AgentTool,
@@ -78,7 +79,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useIssueStore } from "@/features/issues";
-import { useRuntimeStore } from "@/features/runtimes";
+import { ModelPicker, useRuntimeStore } from "@/features/runtimes";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { cn } from "@/lib/utils";
@@ -133,17 +134,27 @@ function CreateAgentDialog({
   const [description, setDescription] = useState("");
   const [selectedProviders, setSelectedProviders] = useState<string[]>([SUPPORTED_PROVIDERS[0].key]);
   const [visibility, setVisibility] = useState<AgentVisibility>("private");
+  const [modelConfig, setModelConfig] = useState<Record<string, AgentModelConfig>>({});
   const [creating, setCreating] = useState(false);
 
   const handleSubmit = async () => {
     if (!name.trim() || selectedProviders.length === 0) return;
     setCreating(true);
     try {
+      // Only include model selections for providers that are still selected.
+      const effectiveModelConfig: Record<string, AgentModelConfig> = {};
+      for (const provider of selectedProviders) {
+        const cfg = modelConfig[provider];
+        if (cfg && (cfg.model || cfg.thinking_level)) {
+          effectiveModelConfig[provider] = cfg;
+        }
+      }
       await onCreate({
         name: name.trim(),
         description: description.trim(),
         providers: selectedProviders,
         visibility,
+        model_config: effectiveModelConfig,
         triggers: [
           { id: generateId(), type: "on_assign", enabled: true, config: {} },
           { id: generateId(), type: "on_comment", enabled: true, config: {} },
@@ -221,6 +232,28 @@ function CreateAgentDialog({
             <p className="mt-1.5 text-xs text-muted-foreground">
               Select one or more providers. Tasks will be dispatched to any online environment.
             </p>
+          </div>
+
+          <div>
+            <Label className="text-xs text-muted-foreground">Model</Label>
+            <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+              Defaults to the latest model per provider; you can change it later in Settings.
+            </p>
+            <div className="mt-1.5 space-y-2">
+              {selectedProviders.map((provider) => (
+                <div key={provider} className="flex items-center gap-3">
+                  <span className="w-24 shrink-0 text-sm font-medium capitalize">{provider}</span>
+                  <ModelPicker
+                    provider={provider}
+                    value={modelConfig[provider] ?? {}}
+                    autoSelectDefault
+                    onChange={(cfg) =>
+                      setModelConfig((prev) => ({ ...prev, [provider]: cfg }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
           </div>
 
           <div>
@@ -1294,6 +1327,7 @@ function SettingsTab({
   const [defaultProvider, setDefaultProvider] = useState<string | null>(agent.default_provider ?? null);
   const [defaultDaemonId, setDefaultDaemonId] = useState<string | null>(agent.default_daemon_id ?? null);
   const [maxConcurrentTasks, setMaxConcurrentTasks] = useState<string>(String(agent.max_concurrent_tasks ?? 6));
+  const [modelConfig, setModelConfig] = useState<Record<string, AgentModelConfig>>(agent.model_config ?? {});
   const [saving, setSaving] = useState(false);
   const { upload, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1328,7 +1362,8 @@ function SettingsTab({
     JSON.stringify(providers) !== JSON.stringify(agent.providers ?? []) ||
     defaultProvider !== (agent.default_provider ?? null) ||
     defaultDaemonId !== (agent.default_daemon_id ?? null) ||
-    parsedMaxConcurrentTasks !== (agent.max_concurrent_tasks ?? 6);
+    parsedMaxConcurrentTasks !== (agent.max_concurrent_tasks ?? 6) ||
+    JSON.stringify(modelConfig) !== JSON.stringify(agent.model_config ?? {});
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -1341,7 +1376,7 @@ function SettingsTab({
     }
     setSaving(true);
     try {
-      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_provider: defaultProvider, default_daemon_id: defaultDaemonId, max_concurrent_tasks: parsedMaxConcurrentTasks });
+      await onSave({ name: name.trim(), description, visibility, providers, github_code_access: codeAccess as Agent["github_code_access"], default_provider: defaultProvider, default_daemon_id: defaultDaemonId, max_concurrent_tasks: parsedMaxConcurrentTasks, model_config: modelConfig });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -1502,6 +1537,35 @@ function SettingsTab({
         <p className="mt-1.5 text-xs text-muted-foreground">
           Select one or more. Tasks will be dispatched to any online environment with a matching provider.
         </p>
+      </div>
+
+      <div>
+        <Label className="text-xs text-muted-foreground">Models</Label>
+        <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+          Model used per provider. &ldquo;Default&rdquo; lets each CLI pick its own default model.
+        </p>
+        <div className="mt-1.5 space-y-2">
+          {providers.map((provider) => (
+            <div key={provider} className="flex items-center gap-3">
+              <span className="w-24 shrink-0 text-sm font-medium capitalize">{provider}</span>
+              <ModelPicker
+                provider={provider}
+                value={modelConfig[provider] ?? {}}
+                onChange={(cfg) =>
+                  setModelConfig((prev) => {
+                    const next = { ...prev };
+                    if (!cfg.model && !cfg.thinking_level) {
+                      delete next[provider];
+                    } else {
+                      next[provider] = cfg;
+                    }
+                    return next;
+                  })
+                }
+              />
+            </div>
+          ))}
+        </div>
       </div>
 
       <div>
