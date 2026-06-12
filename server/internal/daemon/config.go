@@ -21,6 +21,12 @@ const (
 	DefaultWorkspaceSyncInterval = 30 * time.Second
 	DefaultHealthPort            = 19514
 	DefaultMaxConcurrentTasks    = 20
+	// DefaultCodexSemanticInactivityTimeout matches the codex backend's own
+	// default; surfaced here so it can be tuned via env without a rebuild.
+	DefaultCodexSemanticInactivityTimeout = 10 * time.Minute
+	// DefaultAutoUpdateCheckInterval is how often the daemon polls GitHub
+	// Releases for a newer CLI version when auto-update is enabled.
+	DefaultAutoUpdateCheckInterval = 6 * time.Hour
 )
 
 // Config holds all daemon configuration.
@@ -39,6 +45,17 @@ type Config struct {
 	PollInterval       time.Duration
 	HeartbeatInterval  time.Duration
 	AgentTimeout       time.Duration
+	// CodexSemanticInactivityTimeout bounds how long a codex task may run
+	// without semantic progress (tool use, items, status changes) before
+	// the daemon gives up on it. Zero falls back to the backend default.
+	CodexSemanticInactivityTimeout time.Duration
+
+	// AutoUpdateEnabled controls the periodic self-update loop. Defaults to
+	// true for release builds; disable with --no-auto-update or
+	// MULTICA_DAEMON_AUTO_UPDATE=false. Dev builds are skipped regardless.
+	AutoUpdateEnabled bool
+	// AutoUpdateCheckInterval is how often the loop checks GitHub Releases.
+	AutoUpdateCheckInterval time.Duration
 }
 
 // Overrides allows CLI flags to override environment variables and defaults.
@@ -55,6 +72,8 @@ type Overrides struct {
 	RuntimeName        string
 	Profile            string // profile name (empty = default)
 	HealthPort         int    // health check port (0 = use default)
+	NoAutoUpdate       bool   // disable the periodic self-update loop
+	AutoUpdateInterval time.Duration
 }
 
 // LoadConfig builds the daemon configuration from environment variables
@@ -98,7 +117,15 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			Model: strings.TrimSpace(os.Getenv("MULTICA_OPENCODE_MODEL")),
 		}
 	}
-	cursorPath := envOrDefault("MULTICA_CURSOR_PATH", "agent")
+	// Cursor renamed its CLI binary from `agent` to `cursor-agent`; probe the
+	// current name first and fall back to the legacy one.
+	cursorPath := strings.TrimSpace(os.Getenv("MULTICA_CURSOR_PATH"))
+	if cursorPath == "" {
+		cursorPath = "cursor-agent"
+		if _, err := exec.LookPath(cursorPath); err != nil {
+			cursorPath = "agent"
+		}
+	}
 	if _, err := exec.LookPath(cursorPath); err == nil {
 		agents["cursor"] = AgentEntry{
 			Path:  cursorPath,
@@ -148,6 +175,28 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	}
 	if overrides.MaxConcurrentTasks > 0 {
 		maxConcurrentTasks = overrides.MaxConcurrentTasks
+	}
+
+	codexSemanticInactivityTimeout, err := durationFromEnv("MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT", DefaultCodexSemanticInactivityTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// Auto-update: enabled by default, opt out via flag or env.
+	autoUpdateEnabled := true
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MULTICA_DAEMON_AUTO_UPDATE"))) {
+	case "false", "0", "no", "off":
+		autoUpdateEnabled = false
+	}
+	if overrides.NoAutoUpdate {
+		autoUpdateEnabled = false
+	}
+	autoUpdateInterval, err := durationFromEnv("MULTICA_DAEMON_AUTO_UPDATE_INTERVAL", DefaultAutoUpdateCheckInterval)
+	if err != nil {
+		return Config{}, err
+	}
+	if overrides.AutoUpdateInterval > 0 {
+		autoUpdateInterval = overrides.AutoUpdateInterval
 	}
 
 	// Profile
@@ -218,6 +267,11 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		PollInterval:       pollInterval,
 		HeartbeatInterval:  heartbeatInterval,
 		AgentTimeout:       agentTimeout,
+
+		CodexSemanticInactivityTimeout: codexSemanticInactivityTimeout,
+
+		AutoUpdateEnabled:       autoUpdateEnabled,
+		AutoUpdateCheckInterval: autoUpdateInterval,
 	}, nil
 }
 

@@ -94,6 +94,8 @@ func init() {
 	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	f.Duration("agent-timeout", 0, "Per-task timeout (env: MULTICA_AGENT_TIMEOUT)")
 	f.Int("max-concurrent-tasks", 0, "Max tasks running in parallel (env: MULTICA_DAEMON_MAX_CONCURRENT_TASKS)")
+	f.Bool("no-auto-update", false, "Disable periodic CLI self-update (env: MULTICA_DAEMON_AUTO_UPDATE=false)")
+	f.Duration("auto-update-interval", 0, "How often to check GitHub for a newer CLI release (env: MULTICA_DAEMON_AUTO_UPDATE_INTERVAL)")
 
 	daemonLogsCmd.Flags().BoolP("follow", "f", false, "Follow log output")
 	daemonLogsCmd.Flags().IntP("lines", "n", 50, "Number of lines to show")
@@ -310,6 +312,12 @@ func buildDaemonStartArgs(cmd *cobra.Command) []string {
 	if n, _ := cmd.Flags().GetInt("max-concurrent-tasks"); n > 0 {
 		args = append(args, "--max-concurrent-tasks", strconv.Itoa(n))
 	}
+	if v, _ := cmd.Flags().GetBool("no-auto-update"); v {
+		args = append(args, "--no-auto-update")
+	}
+	if d, _ := cmd.Flags().GetDuration("auto-update-interval"); d > 0 {
+		args = append(args, "--auto-update-interval", d.String())
+	}
 
 	// Forward global persistent flags.
 	if v, _ := cmd.Flags().GetString("server-url"); v != "" {
@@ -350,6 +358,12 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	}
 	if n, _ := cmd.Flags().GetInt("max-concurrent-tasks"); n > 0 {
 		overrides.MaxConcurrentTasks = n
+	}
+	if v, _ := cmd.Flags().GetBool("no-auto-update"); v {
+		overrides.NoAutoUpdate = true
+	}
+	if d, _ := cmd.Flags().GetDuration("auto-update-interval"); d > 0 {
+		overrides.AutoUpdateInterval = d
 	}
 
 	cfg, err := daemon.LoadConfig(overrides)

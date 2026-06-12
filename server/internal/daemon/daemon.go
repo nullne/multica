@@ -47,12 +47,29 @@ type Daemon struct {
 	restartBinary string             // non-empty after a successful update; path to the new binary
 	updating      atomic.Bool        // prevents concurrent update attempts
 	reconciling   atomic.Bool        // prevents concurrent reconcileProviders
+
+	activeTasks atomic.Int64 // number of tasks currently in handleTask
+
+	// claimMu guards pauseClaims and claimsInFlight. It is held only for the
+	// flag/counter mutations, never across network calls. pollLoop refuses to
+	// call ClaimTask while pauseClaims is set, and tryAutoUpdate refuses to
+	// flip pauseClaims while any poller is mid-claim — together these close
+	// the window where an auto-update restart could cancel a task that was
+	// claimed after the idle check.
+	claimMu        sync.Mutex
+	pauseClaims    bool // when true, pollLoop skips ClaimTask
+	claimsInFlight int  // pollers that have decided to claim but haven't handed the task to handleTask yet
+
+	// runUpdateFn executes the brew-or-download upgrade. Set to d.runUpdate
+	// by New; tests inject a stub so the auto-update loop can be exercised
+	// without shelling out to brew or hitting GitHub.
+	runUpdateFn func(targetVersion string) (string, error)
 }
 
 // New creates a new Daemon instance.
 func New(cfg Config, logger *slog.Logger) *Daemon {
 	cacheRoot := filepath.Join(cfg.WorkspacesRoot, ".repos")
-	return &Daemon{
+	d := &Daemon{
 		cfg:             cfg,
 		client:          NewClient(cfg.ServerBaseURL),
 		repoCache:       repocache.New(cacheRoot, logger),
@@ -63,6 +80,8 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		taskTokens:      make(map[string]string),
 		providerConfigs: make(map[string]ProviderConfig),
 	}
+	d.runUpdateFn = d.runUpdate
+	return d
 }
 
 // Run starts the daemon: resolves auth, registers runtimes, then polls for tasks.
@@ -108,6 +127,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	go d.heartbeatLoop(ctx)
 	go d.assignmentSyncLoop(ctx)
 	go d.usageScanLoop(ctx)
+	go d.autoUpdateLoop(ctx)
 	go d.serveHealth(ctx, healthLn, time.Now())
 	return d.pollLoop(ctx)
 }
@@ -312,6 +332,10 @@ func (d *Daemon) detectLocalRuntimes(ctx context.Context) []map[string]string {
 		version, err := agent.DetectVersion(ctx, entry.Path)
 		if err != nil {
 			d.logger.Warn("skip registering runtime", "name", name, "error", err)
+			continue
+		}
+		if err := agent.CheckMinVersion(name, version); err != nil {
+			d.logger.Warn("skip registering runtime: CLI version below minimum", "name", name, "version", version, "error", err)
 			continue
 		}
 		authStatus := agent.CheckAuth(ctx, name, entry.Path)
@@ -624,6 +648,11 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 				go d.handleUpdate(ctx, daemonUUID, &u)
 			}
 
+			for _, pending := range resp.PendingModelLists {
+				p := pending
+				go d.handleModelList(ctx, p)
+			}
+
 			// Auto-install newly enabled providers (same cadence as auth check).
 			if refreshAuth && len(resp.ProviderConfig) > 0 && d.reconciling.CompareAndSwap(false, true) {
 				go func() {
@@ -632,6 +661,76 @@ func (d *Daemon) heartbeatLoop(ctx context.Context) {
 				}()
 			}
 		}
+	}
+}
+
+// handleModelList resolves the provider's supported models (via static
+// catalog or local CLI discovery) and reports the result back to the
+// server. Discovery failures are reported as failed so the UI polling
+// loop terminates with a real error instead of timing out.
+func (d *Daemon) handleModelList(ctx context.Context, pending PendingModelList) {
+	d.logger.Info("model list requested", "runtime_id", pending.RuntimeID, "request_id", pending.ID, "provider", pending.Provider)
+
+	entry, ok := d.cfg.Agents[pending.Provider]
+	if !ok {
+		d.reportModelListResult(ctx, pending, map[string]any{
+			"status": "failed",
+			"error":  fmt.Sprintf("provider %s is not available on this daemon", pending.Provider),
+		})
+		return
+	}
+
+	models, err := agent.ListModels(ctx, pending.Provider, entry.Path)
+	if err != nil {
+		d.reportModelListResult(ctx, pending, map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	// Wire format matches handler.ModelEntry. Use structs (not
+	// map[string]string) so the Default bool and the per-model thinking
+	// catalog survive marshalling.
+	type thinkingLevelWire struct {
+		Value       string `json:"value"`
+		Label       string `json:"label"`
+		Description string `json:"description,omitempty"`
+	}
+	type modelThinkingWire struct {
+		SupportedLevels []thinkingLevelWire `json:"supported_levels"`
+		DefaultLevel    string              `json:"default_level,omitempty"`
+	}
+	type modelWire struct {
+		ID       string             `json:"id"`
+		Label    string             `json:"label"`
+		Provider string             `json:"provider,omitempty"`
+		Default  bool               `json:"default,omitempty"`
+		Thinking *modelThinkingWire `json:"thinking,omitempty"`
+	}
+	wire := make([]modelWire, 0, len(models))
+	for _, m := range models {
+		entry := modelWire{ID: m.ID, Label: m.Label, Provider: m.Provider, Default: m.Default}
+		if m.Thinking != nil {
+			levels := make([]thinkingLevelWire, 0, len(m.Thinking.SupportedLevels))
+			for _, lvl := range m.Thinking.SupportedLevels {
+				levels = append(levels, thinkingLevelWire{Value: lvl.Value, Label: lvl.Label, Description: lvl.Description})
+			}
+			entry.Thinking = &modelThinkingWire{SupportedLevels: levels, DefaultLevel: m.Thinking.DefaultLevel}
+		}
+		wire = append(wire, entry)
+	}
+
+	d.reportModelListResult(ctx, pending, map[string]any{
+		"status":    "completed",
+		"models":    wire,
+		"supported": agent.ModelSelectionSupported(pending.Provider),
+	})
+}
+
+func (d *Daemon) reportModelListResult(ctx context.Context, pending PendingModelList, payload map[string]any) {
+	if err := d.client.ReportModelListResult(ctx, pending.RuntimeID, pending.ID, payload); err != nil {
+		d.logger.Warn("report model list result failed", "runtime_id", pending.RuntimeID, "request_id", pending.ID, "error", err)
 	}
 }
 
@@ -743,34 +842,36 @@ func (d *Daemon) handleUpdate(ctx context.Context, id string, update *PendingUpd
 	}
 }
 
-// handleMulticaUpdate handles updates to the multica CLI itself.
-func (d *Daemon) handleMulticaUpdate(ctx context.Context, runtimeID string, update *PendingUpdate) {
-	// Try Homebrew first, fall back to direct download.
-	var output string
+// runUpdate executes the multica CLI upgrade via Homebrew when the binary is
+// brew-managed, otherwise via direct download of the release tarball. Shared
+// by the server-triggered update path and the auto-update loop.
+func (d *Daemon) runUpdate(targetVersion string) (string, error) {
 	if cli.IsBrewInstall() {
 		d.logger.Info("updating CLI via Homebrew...")
-		var err error
-		output, err = cli.UpdateViaBrew()
+		output, err := cli.UpdateViaBrew()
 		if err != nil {
-			d.logger.Error("CLI update failed", "error", err, "output", output)
-			d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-				"status": "failed",
-				"error":  fmt.Sprintf("brew upgrade failed: %v", err),
-			})
-			return
+			return output, fmt.Errorf("brew upgrade failed: %w", err)
 		}
-	} else {
-		d.logger.Info("updating CLI via direct download...", "target_version", update.TargetVersion)
-		var err error
-		output, err = cli.UpdateViaDownload(update.TargetVersion)
-		if err != nil {
-			d.logger.Error("CLI update failed", "error", err)
-			d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
-				"status": "failed",
-				"error":  fmt.Sprintf("download update failed: %v", err),
-			})
-			return
-		}
+		return output, nil
+	}
+	d.logger.Info("updating CLI via direct download...", "target_version", targetVersion)
+	output, err := cli.UpdateViaDownload(targetVersion)
+	if err != nil {
+		return output, fmt.Errorf("download update failed: %w", err)
+	}
+	return output, nil
+}
+
+// handleMulticaUpdate handles updates to the multica CLI itself.
+func (d *Daemon) handleMulticaUpdate(ctx context.Context, runtimeID string, update *PendingUpdate) {
+	output, err := d.runUpdateFn(update.TargetVersion)
+	if err != nil {
+		d.logger.Error("CLI update failed", "error", err, "output", output)
+		d.client.ReportUpdateResult(ctx, runtimeID, update.ID, map[string]any{
+			"status": "failed",
+			"error":  err.Error(),
+		})
+		return
 	}
 
 	d.logger.Info("CLI update completed successfully", "output", output)
@@ -808,6 +909,55 @@ func (d *Daemon) handleProviderUpdate(ctx context.Context, runtimeID string, upd
 
 	// No daemon restart needed — just re-register to update version info.
 	// The next heartbeat cycle will pick up the new version.
+}
+
+// tryEnterClaim records the intent to call ClaimTask. Returns true if the
+// caller may proceed, false if the auto-update barrier is in effect. Every
+// successful call MUST be paired with an exitClaim() on every exit path —
+// either right after a failed/empty claim, or via the handleTask goroutine
+// once the task is handed off (after activeTasks has been incremented).
+func (d *Daemon) tryEnterClaim() bool {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	if d.pauseClaims {
+		return false
+	}
+	d.claimsInFlight++
+	return true
+}
+
+// exitClaim releases the in-flight claim recorded by tryEnterClaim.
+func (d *Daemon) exitClaim() {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	d.claimsInFlight--
+}
+
+// trySetClaimBarrier atomically pauses new ClaimTask calls if the daemon is
+// fully idle (no claims in flight, no tasks running). Returns true if the
+// caller now holds the barrier and must release it with releaseClaimBarrier
+// on every non-restart exit path; false if the daemon is busy and the caller
+// should defer to the next tick. Used by tryAutoUpdate to close the race
+// where a task slips in between the cheap pre-fetch idle check and the
+// actual upgrade kick-off.
+func (d *Daemon) trySetClaimBarrier() bool {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	if d.claimsInFlight > 0 || d.activeTasks.Load() > 0 {
+		return false
+	}
+	d.pauseClaims = true
+	return true
+}
+
+// releaseClaimBarrier clears the auto-update claim barrier so pollers may
+// resume claiming. Called on failure paths only — a successful upgrade leaves
+// the barrier set because triggerRestart is about to take the process down
+// and clearing it would open a window for new claims during shutdown.
+func (d *Daemon) releaseClaimBarrier() {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	d.pauseClaims = false
 }
 
 // triggerRestart initiates a graceful daemon restart after a successful CLI update.
@@ -946,9 +1096,18 @@ func (d *Daemon) pollLoop(ctx context.Context) error {
 				goto sleep
 			}
 
+			// Record claim intent so the auto-update barrier can't fire a
+			// restart between the claim and the task being handed off.
+			if !d.tryEnterClaim() {
+				<-sem // Release the slot.
+				d.logger.Debug("poll: claims paused for auto-update")
+				goto sleep
+			}
+
 			rid := runtimeIDs[(pollOffset+i)%n]
 			task, err := d.client.ClaimTask(ctx, rid)
 			if err != nil {
+				d.exitClaim()
 				<-sem // Release the slot.
 				d.logger.Warn("claim task failed", "runtime_id", rid, "error", err)
 				continue
@@ -959,6 +1118,12 @@ func (d *Daemon) pollLoop(ctx context.Context) error {
 				go func(t Task) {
 					defer wg.Done()
 					defer func() { <-sem }()
+					// Bump activeTasks before releasing the claim slot so the
+					// auto-update barrier can never observe "no claims, no
+					// tasks" while this task is alive.
+					d.activeTasks.Add(1)
+					defer d.activeTasks.Add(-1)
+					d.exitClaim()
 					d.handleTask(ctx, t)
 				}(*task)
 				claimed = true
@@ -966,6 +1131,7 @@ func (d *Daemon) pollLoop(ctx context.Context) error {
 				break
 			}
 			// No task for this runtime, release the slot and try next.
+			d.exitClaim()
 			<-sem
 		}
 
@@ -1217,11 +1383,43 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
 	}
 
+	// Two-tier model resolution: an explicit agent-level model (from the
+	// agent's model_config for this provider) wins, then the daemon-wide
+	// MULTICA_<PROVIDER>_MODEL env var. If both are empty we deliberately
+	// pass "" through — each backend omits `--model` from the CLI
+	// invocation, so the provider picks its own default. Baking a Go-side
+	// "recommended default" here is how static guesses drift from whatever
+	// the upstream CLI actually accepts.
+	model := ""
+	thinkingLevel := ""
+	if task.Agent != nil {
+		model = task.Agent.Model
+		thinkingLevel = task.Agent.ThinkingLevel
+	}
+	if model == "" {
+		model = entry.Model
+	}
+	// Per-model guard: the server validates the literal token against the
+	// provider's enum, but per-model gaps (Claude's `xhigh` on a non-Opus
+	// model, Codex's per-model `supported_reasoning_levels`) only resolve
+	// here, against the daemon's local CLI catalog. Invalid combinations
+	// log a warning and drop the level rather than failing the task, so a
+	// stale persisted value never blocks execution. Discovery errors fail
+	// open: if we can't list models, we pass the level through unchanged.
+	if thinkingLevel != "" {
+		if valid, err := agent.ValidateThinkingLevel(ctx, provider, entry.Path, model, thinkingLevel); err == nil && !valid {
+			taskLog.Warn("thinking level not supported by model; dropping",
+				"provider", provider, "model", model, "thinking_level", thinkingLevel)
+			thinkingLevel = ""
+		}
+	}
+
 	reused := task.PriorWorkDir != "" && env.WorkDir == task.PriorWorkDir
 	taskLog.Info("starting agent",
 		"provider", provider,
 		"workdir", env.WorkDir,
-		"model", entry.Model,
+		"model", model,
+		"thinking_level", thinkingLevel,
 		"reused", reused,
 	)
 	if task.PriorSessionID != "" {
@@ -1231,10 +1429,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	taskStart := time.Now()
 
 	session, err := backend.Execute(ctx, prompt, agent.ExecOptions{
-		Cwd:             env.WorkDir,
-		Model:           entry.Model,
-		Timeout:         d.cfg.AgentTimeout,
-		ResumeSessionID: task.PriorSessionID,
+		Cwd:                       env.WorkDir,
+		Model:                     model,
+		ThinkingLevel:             thinkingLevel,
+		Timeout:                   d.cfg.AgentTimeout,
+		SemanticInactivityTimeout: d.cfg.CodexSemanticInactivityTimeout,
+		ResumeSessionID:           task.PriorSessionID,
 	})
 	if err != nil {
 		return TaskResult{}, err
