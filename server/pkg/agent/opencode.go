@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+// opencodeBlockedArgs are flags hardcoded by the daemon that must not be
+// overridden by user-configured custom_args.
+var opencodeBlockedArgs = map[string]blockedArgMode{
+	"--format":  blockedWithValue, // json output format for daemon communication
+	"--dir":     blockedWithValue, // task workdir anchor for skill / AGENTS.md discovery
+	"--variant": blockedWithValue, // owned by agent.thinking_level
+}
+
 // opencodeBackend implements Backend by spawning `opencode run --format json`
 // and reading streaming JSON events from stdout — the same pattern as Claude.
 type opencodeBackend struct {
@@ -27,14 +35,20 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	}
 
 	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = 20 * time.Minute
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := runContext(ctx, timeout)
 
 	args := []string{"run", "--format", "json"}
+	// Anchor OpenCode's project discovery (AGENTS.md walk-up + skills scan)
+	// at the task workdir. Without this, OpenCode falls back to PWD inherited
+	// from the daemon process and can silently bypass the per-task workdir.
+	if opts.Cwd != "" {
+		args = append(args, "--dir", opts.Cwd)
+	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
+	}
+	if opts.ThinkingLevel != "" {
+		args = append(args, "--variant", opts.ThinkingLevel)
 	}
 	if opts.SystemPrompt != "" {
 		args = append(args, "--prompt", opts.SystemPrompt)
@@ -45,9 +59,14 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	if opts.ResumeSessionID != "" {
 		args = append(args, "--session", opts.ResumeSessionID)
 	}
+	args = append(args, filterCustomArgs(opts.ExtraArgs, opencodeBlockedArgs, b.cfg.Logger)...)
+	args = append(args, filterCustomArgs(opts.CustomArgs, opencodeBlockedArgs, b.cfg.Logger)...)
 	args = append(args, prompt)
 
 	cmd := exec.CommandContext(runCtx, execPath, args...)
+	hideAgentWindow(cmd)
+	b.cfg.Logger.Info("agent command", "exec", execPath, "args", args)
+	cmd.WaitDelay = 10 * time.Second
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
@@ -55,6 +74,12 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	env := buildEnv(b.cfg.Env)
 	// Auto-approve all tool use in daemon mode.
 	env = append(env, `OPENCODE_PERMISSION={"*":"allow"}`)
+	// Override PWD so the child OpenCode process resolves its discovery root
+	// to the task workdir. cmd.Dir alone is not enough: OpenCode reads PWD
+	// (inherited from the parent daemon) before falling back to process.cwd().
+	if opts.Cwd != "" {
+		env = append(env, "PWD="+opts.Cwd)
+	}
 	cmd.Env = env
 
 	stdout, err := cmd.StdoutPipe()
@@ -62,7 +87,8 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		cancel()
 		return nil, fmt.Errorf("opencode stdout pipe: %w", err)
 	}
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[opencode:stderr] ")
+	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[opencode:stderr] "), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -78,6 +104,12 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
+
+		// Close stdout when the context is cancelled so scanner.Scan() unblocks.
+		go func() {
+			<-runCtx.Done()
+			_ = stdout.Close()
+		}()
 
 		startTime := time.Now()
 		scanResult := b.processEvents(stdout, msgCh)
@@ -95,6 +127,10 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		} else if exitErr != nil && scanResult.status == "completed" {
 			scanResult.status = "failed"
 			scanResult.errMsg = fmt.Sprintf("opencode exited with error: %v", exitErr)
+		}
+
+		if scanResult.errMsg != "" {
+			scanResult.errMsg = withAgentStderr(scanResult.errMsg, "opencode", stderrBuf.Tail())
 		}
 
 		b.cfg.Logger.Info("opencode finished", "pid", cmd.Process.Pid, "status", scanResult.status, "duration", duration.Round(time.Millisecond).String())
