@@ -11,32 +11,67 @@ import (
 	gh "github.com/nullne/multica/server/internal/github"
 	"github.com/nullne/multica/server/internal/logger"
 	"github.com/nullne/multica/server/internal/service"
+	agentpkg "github.com/nullne/multica/server/pkg/agent"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 	"github.com/nullne/multica/server/pkg/protocol"
 )
 
+// AgentModelConfig is the per-provider model selection persisted on an agent.
+// Empty Model means "use the provider CLI's own default"; empty ThinkingLevel
+// means "use the runtime/model default".
+type AgentModelConfig struct {
+	Model         string `json:"model,omitempty"`
+	ThinkingLevel string `json:"thinking_level,omitempty"`
+}
+
+// validateModelConfig checks the thinking_level tokens against each
+// provider's known vocabulary. Model IDs are deliberately not validated
+// against a catalog: the UI offers discovered models but allows manual
+// entry, and the daemon passes unknown IDs through to the CLI which
+// rejects them with a real error message.
+func validateModelConfig(mc map[string]AgentModelConfig) string {
+	for provider, cfg := range mc {
+		if !agentpkg.IsKnownThinkingValue(provider, cfg.ThinkingLevel) {
+			return "invalid thinking_level " + cfg.ThinkingLevel + " for provider " + provider
+		}
+	}
+	return ""
+}
+
+func parseModelConfig(raw []byte) map[string]AgentModelConfig {
+	if len(raw) == 0 {
+		return map[string]AgentModelConfig{}
+	}
+	var mc map[string]AgentModelConfig
+	if err := json.Unmarshal(raw, &mc); err != nil || mc == nil {
+		return map[string]AgentModelConfig{}
+	}
+	return mc
+}
+
 type AgentResponse struct {
-	ID                 string          `json:"id"`
-	WorkspaceID        string          `json:"workspace_id"`
-	Providers          []string        `json:"providers"`
-	DefaultProvider    *string         `json:"default_provider"`
-	Name               string          `json:"name"`
-	Description        string          `json:"description"`
-	Instructions       string          `json:"instructions"`
-	AvatarURL          *string         `json:"avatar_url"`
-	Visibility         string          `json:"visibility"`
-	Status             string          `json:"status"`
-	OwnerID            *string         `json:"owner_id"`
-	Skills             []SkillResponse `json:"skills"`
-	Tools              any             `json:"tools"`
-	Triggers           any             `json:"triggers"`
-	GitHubCodeAccess   string          `json:"github_code_access"`
-	DefaultDaemonID    *string         `json:"default_daemon_id"`
-	MaxConcurrentTasks int32           `json:"max_concurrent_tasks"`
-	CreatedAt          string          `json:"created_at"`
-	UpdatedAt          string          `json:"updated_at"`
-	ArchivedAt         *string         `json:"archived_at"`
-	ArchivedBy         *string         `json:"archived_by"`
+	ID                 string                      `json:"id"`
+	WorkspaceID        string                      `json:"workspace_id"`
+	Providers          []string                    `json:"providers"`
+	DefaultProvider    *string                     `json:"default_provider"`
+	Name               string                      `json:"name"`
+	Description        string                      `json:"description"`
+	Instructions       string                      `json:"instructions"`
+	AvatarURL          *string                     `json:"avatar_url"`
+	Visibility         string                      `json:"visibility"`
+	Status             string                      `json:"status"`
+	OwnerID            *string                     `json:"owner_id"`
+	Skills             []SkillResponse             `json:"skills"`
+	Tools              any                         `json:"tools"`
+	Triggers           any                         `json:"triggers"`
+	GitHubCodeAccess   string                      `json:"github_code_access"`
+	DefaultDaemonID    *string                     `json:"default_daemon_id"`
+	MaxConcurrentTasks int32                       `json:"max_concurrent_tasks"`
+	ModelConfig        map[string]AgentModelConfig `json:"model_config"`
+	CreatedAt          string                      `json:"created_at"`
+	UpdatedAt          string                      `json:"updated_at"`
+	ArchivedAt         *string                     `json:"archived_at"`
+	ArchivedBy         *string                     `json:"archived_by"`
 }
 
 func agentToResponse(a db.Agent) AgentResponse {
@@ -79,6 +114,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		GitHubCodeAccess:   a.GithubCodeAccess,
 		DefaultDaemonID:    uuidToPtr(a.DefaultDaemonID),
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
+		ModelConfig:        parseModelConfig(a.ModelConfig),
 		CreatedAt:          timestampToString(a.CreatedAt),
 		UpdatedAt:          timestampToString(a.UpdatedAt),
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
@@ -114,9 +150,9 @@ type AgentTaskResponse struct {
 	PriorWorkDir     string         `json:"prior_work_dir,omitempty"`     // work_dir from a previous task on same issue
 	TriggerCommentID *string        `json:"trigger_comment_id,omitempty"` // comment that triggered this task
 	ResultCommentID  *string        `json:"result_comment_id,omitempty"`  // comment this run produced as its final reply
-	GitHubToken      string `json:"github_token,omitempty"`
-	GitHubCodeAccess string `json:"github_code_access,omitempty"`
-	ProviderAPIKey   string `json:"provider_api_key,omitempty"` // workspace-level API key for the provider
+	GitHubToken      string         `json:"github_token,omitempty"`
+	GitHubCodeAccess string         `json:"github_code_access,omitempty"`
+	ProviderAPIKey   string         `json:"provider_api_key,omitempty"` // workspace-level API key for the provider
 }
 
 // TaskAgentData holds agent info included in claim responses so the daemon
@@ -126,6 +162,10 @@ type TaskAgentData struct {
 	Name         string                   `json:"name"`
 	Instructions string                   `json:"instructions"`
 	Skills       []service.AgentSkillData `json:"skills,omitempty"`
+	// Model / ThinkingLevel are resolved server-side from the agent's
+	// model_config for the provider of the runtime that claimed the task.
+	Model         string `json:"model,omitempty"`
+	ThinkingLevel string `json:"thinking_level,omitempty"`
 }
 
 func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
@@ -225,19 +265,20 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateAgentRequest struct {
-	Name               string   `json:"name"`
-	Description        string   `json:"description"`
-	Instructions       string   `json:"instructions"`
-	AvatarURL          *string  `json:"avatar_url"`
-	Providers          []string `json:"providers"`
-	Provider           string   `json:"provider"` // deprecated: single provider, use providers
-	DefaultProvider    *string  `json:"default_provider"`
-	Visibility         string   `json:"visibility"`
-	Tools              any      `json:"tools"`
-	Triggers           any      `json:"triggers"`
-	GitHubCodeAccess   string   `json:"github_code_access"`
-	DefaultDaemonID    *string  `json:"default_daemon_id"`
-	MaxConcurrentTasks *int32   `json:"max_concurrent_tasks"`
+	Name               string                      `json:"name"`
+	Description        string                      `json:"description"`
+	Instructions       string                      `json:"instructions"`
+	AvatarURL          *string                     `json:"avatar_url"`
+	Providers          []string                    `json:"providers"`
+	Provider           string                      `json:"provider"` // deprecated: single provider, use providers
+	DefaultProvider    *string                     `json:"default_provider"`
+	Visibility         string                      `json:"visibility"`
+	Tools              any                         `json:"tools"`
+	Triggers           any                         `json:"triggers"`
+	GitHubCodeAccess   string                      `json:"github_code_access"`
+	DefaultDaemonID    *string                     `json:"default_daemon_id"`
+	MaxConcurrentTasks *int32                      `json:"max_concurrent_tasks"`
+	ModelConfig        map[string]AgentModelConfig `json:"model_config"`
 }
 
 func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
@@ -298,6 +339,15 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		maxConcurrentTasks = *req.MaxConcurrentTasks
 	}
 
+	if msg := validateModelConfig(req.ModelConfig); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	modelConfig := []byte("{}")
+	if req.ModelConfig != nil {
+		modelConfig, _ = json.Marshal(req.ModelConfig)
+	}
+
 	agent, err := h.Queries.CreateAgent(r.Context(), db.CreateAgentParams{
 		WorkspaceID:        parseUUID(workspaceID),
 		Name:               req.Name,
@@ -313,6 +363,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		DefaultProvider:    ptrToText(req.DefaultProvider),
 		DefaultDaemonID:    parseOptionalUUID(req.DefaultDaemonID),
 		MaxConcurrentTasks: maxConcurrentTasks,
+		ModelConfig:        modelConfig,
 	})
 	if err != nil {
 		slog.Warn("create agent failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -331,19 +382,20 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateAgentRequest struct {
-	Name               *string  `json:"name"`
-	Description        *string  `json:"description"`
-	Instructions       *string  `json:"instructions"`
-	AvatarURL          *string  `json:"avatar_url"`
-	Providers          []string `json:"providers"`
-	DefaultProvider    *string  `json:"default_provider"`
-	Visibility         *string  `json:"visibility"`
-	Status             *string  `json:"status"`
-	Tools              any      `json:"tools"`
-	Triggers           any      `json:"triggers"`
-	GitHubCodeAccess   *string  `json:"github_code_access"`
-	DefaultDaemonID    *string  `json:"default_daemon_id"`
-	MaxConcurrentTasks *int32   `json:"max_concurrent_tasks"`
+	Name               *string                     `json:"name"`
+	Description        *string                     `json:"description"`
+	Instructions       *string                     `json:"instructions"`
+	AvatarURL          *string                     `json:"avatar_url"`
+	Providers          []string                    `json:"providers"`
+	DefaultProvider    *string                     `json:"default_provider"`
+	Visibility         *string                     `json:"visibility"`
+	Status             *string                     `json:"status"`
+	Tools              any                         `json:"tools"`
+	Triggers           any                         `json:"triggers"`
+	GitHubCodeAccess   *string                     `json:"github_code_access"`
+	DefaultDaemonID    *string                     `json:"default_daemon_id"`
+	MaxConcurrentTasks *int32                      `json:"max_concurrent_tasks"`
+	ModelConfig        map[string]AgentModelConfig `json:"model_config"`
 }
 
 // canManageAgent checks whether the current user can update or archive an agent.
@@ -461,6 +513,18 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
+	}
+	if _, ok := rawFields["model_config"]; ok {
+		if msg := validateModelConfig(req.ModelConfig); msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		mc := req.ModelConfig
+		if mc == nil {
+			mc = map[string]AgentModelConfig{}
+		}
+		modelConfig, _ := json.Marshal(mc)
+		params.ModelConfig = modelConfig
 	}
 
 	agent, err = h.Queries.UpdateAgent(r.Context(), params)

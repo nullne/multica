@@ -368,6 +368,30 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		resp["pending_updates"] = out
 	}
 
+	// Pop pending model-list requests for any of this daemon's runtimes.
+	// Requests are runtime-scoped (the UI asks one runtime for its catalog)
+	// while the heartbeat is daemon-scoped, so project across all runtimes.
+	if runtimes, err := h.Queries.ListRuntimesByDaemon(r.Context(), daemon.ID); err == nil && len(runtimes) > 0 {
+		runtimeIDs := make([]string, 0, len(runtimes))
+		providerByRuntime := make(map[string]string, len(runtimes))
+		for _, rt := range runtimes {
+			id := uuidToString(rt.ID)
+			runtimeIDs = append(runtimeIDs, id)
+			providerByRuntime[id] = rt.Provider
+		}
+		if pendingModels := h.ModelListStore.PopPendingForRuntimes(runtimeIDs); len(pendingModels) > 0 {
+			out := make([]map[string]string, len(pendingModels))
+			for i, m := range pendingModels {
+				out[i] = map[string]string{
+					"id":         m.ID,
+					"runtime_id": m.RuntimeID,
+					"provider":   providerByRuntime[m.RuntimeID],
+				}
+			}
+			resp["pending_model_lists"] = out
+		}
+	}
+
 	// Project the union of provider configs across enabled workspaces so the
 	// daemon can auto-install any provider any of its workspaces wants.
 	merged := make(map[string]map[string]any)
@@ -423,6 +447,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// Build response with fresh agent data (name + skills).
 	resp := taskToResponse(*task)
 	var agentCodeAccess string
+	var agentModelConfig map[string]AgentModelConfig
 	if agent, err := h.Queries.GetAgent(r.Context(), task.AgentID); err == nil {
 		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
 		resp.Agent = &TaskAgentData{
@@ -432,12 +457,23 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			Skills:       skills,
 		}
 		agentCodeAccess = agent.GithubCodeAccess
+		agentModelConfig = parseModelConfig(agent.ModelConfig)
 	}
 
 	// Look up the runtime to get the provider for API key injection.
 	var runtimeProvider string
 	if rt, err := h.Queries.GetAgentRuntime(r.Context(), task.RuntimeID); err == nil {
 		runtimeProvider = rt.Provider
+	}
+
+	// Resolve the agent's model selection for this task's provider. The
+	// daemon receives a single (model, thinking_level) pair so it never
+	// has to understand the per-provider model_config shape.
+	if resp.Agent != nil && runtimeProvider != "" {
+		if cfg, ok := agentModelConfig[runtimeProvider]; ok {
+			resp.Agent.Model = cfg.Model
+			resp.Agent.ThinkingLevel = cfg.ThinkingLevel
+		}
 	}
 
 	// Include workspace ID and repos so the daemon can set up worktrees.

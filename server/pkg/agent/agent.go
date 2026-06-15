@@ -1,10 +1,11 @@
 // Package agent provides a unified interface for executing prompts via
-// coding agents (Claude Code, Codex, OpenCode). It mirrors the happy-cli AgentBackend
-// pattern, translated to idiomatic Go.
+// coding agents (Claude Code, Codex, OpenCode, Cursor). It mirrors the
+// happy-cli AgentBackend pattern, translated to idiomatic Go.
 package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -20,12 +21,38 @@ type Backend interface {
 
 // ExecOptions configures a single execution.
 type ExecOptions struct {
-	Cwd             string
-	Model           string
-	SystemPrompt    string
-	MaxTurns        int
-	Timeout         time.Duration
-	ResumeSessionID string // if non-empty, resume a previous agent session
+	Cwd                       string
+	Model                     string
+	SystemPrompt              string
+	ThreadName                string
+	MaxTurns                  int
+	Timeout                   time.Duration
+	SemanticInactivityTimeout time.Duration
+	ResumeSessionID           string          // if non-empty, resume a previous agent session
+	ExtraArgs                 []string        // daemon-wide default CLI arguments appended before CustomArgs
+	CustomArgs                []string        // per-agent CLI arguments appended after ExtraArgs
+	McpConfig                 json.RawMessage // if non-nil, MCP server config to pass via --mcp-config
+	// ThinkingLevel is the runtime-native reasoning/effort value (e.g.
+	// Claude's "low|medium|high|xhigh|max", Codex's "none|minimal|low|
+	// medium|high|xhigh", OpenCode's model variant names). Empty means
+	// "use the runtime/model default" — every backend that consumes this
+	// skips its --effort / reasoning_effort injection so the upstream
+	// CLI's own default applies. Backends that don't support the concept
+	// ignore the field rather than fail.
+	ThinkingLevel string
+}
+
+// runContext derives the execution context for an agent subprocess from the
+// configured per-run timeout. A positive timeout imposes a hard wall-clock
+// deadline; a zero (or negative) timeout imposes NO deadline, leaving
+// liveness to the caller's own watchdog so a session that keeps emitting
+// events is never killed merely for running long. The caller owns the
+// returned CancelFunc and must call it to release resources.
+func runContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
 }
 
 // Session represents a running agent execution.
@@ -52,14 +79,23 @@ const (
 
 // Message is a unified event emitted by an agent during execution.
 type Message struct {
-	Type    MessageType
-	Content string         // text content (Text, Error, Log)
-	Tool    string         // tool name (ToolUse, ToolResult)
-	CallID  string         // tool call ID (ToolUse, ToolResult)
-	Input   map[string]any // tool input (ToolUse)
-	Output  string         // tool output (ToolResult)
-	Status  string         // agent status string (Status)
-	Level   string         // log level (Log)
+	Type      MessageType
+	Content   string         // text content (Text, Error, Log)
+	Tool      string         // tool name (ToolUse, ToolResult)
+	CallID    string         // tool call ID (ToolUse, ToolResult)
+	Input     map[string]any // tool input (ToolUse)
+	Output    string         // tool output (ToolResult)
+	Status    string         // agent status string (Status)
+	Level     string         // log level (Log)
+	SessionID string         // backend session id (Status), for early resume-pointer pinning
+}
+
+// TokenUsage tracks token consumption for a single model.
+type TokenUsage struct {
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 // Result is the final outcome after an agent session completes.
@@ -69,11 +105,12 @@ type Result struct {
 	Error      string // error message if failed
 	DurationMs int64
 	SessionID  string
+	Usage      map[string]TokenUsage // keyed by model name
 }
 
 // Config configures a Backend instance.
 type Config struct {
-	ExecutablePath string            // path to CLI binary (claude, codex, or opencode)
+	ExecutablePath string            // path to CLI binary (claude, codex, opencode, or cursor-agent)
 	Env            map[string]string // extra environment variables
 	Logger         *slog.Logger
 }

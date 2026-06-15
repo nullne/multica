@@ -95,6 +95,16 @@ export interface AgentTask {
   result_comment_id?: string | null;
 }
 
+/**
+ * Per-provider model selection. Empty/missing model means "use the provider
+ * CLI's own default"; empty/missing thinking_level means "use the
+ * runtime/model default".
+ */
+export interface AgentModelConfig {
+  model?: string;
+  thinking_level?: string;
+}
+
 export interface Agent {
   id: string;
   workspace_id: string;
@@ -113,6 +123,7 @@ export interface Agent {
   github_code_access: GitHubCodeAccess;
   default_daemon_id: string | null;
   max_concurrent_tasks: number;
+  model_config: Record<string, AgentModelConfig>;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -132,6 +143,7 @@ export interface CreateAgentRequest {
   github_code_access?: GitHubCodeAccess;
   default_daemon_id?: string | null;
   max_concurrent_tasks?: number;
+  model_config?: Record<string, AgentModelConfig>;
 }
 
 export interface UpdateAgentRequest {
@@ -148,6 +160,7 @@ export interface UpdateAgentRequest {
   github_code_access?: GitHubCodeAccess;
   default_daemon_id?: string | null;
   max_concurrent_tasks?: number;
+  model_config?: Record<string, AgentModelConfig>;
 }
 
 // Skills
@@ -236,6 +249,43 @@ export interface RuntimeUpdate {
   status: RuntimeUpdateStatus;
   target_version: string;
   output?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Runtime model discovery
+
+export type ModelListStatus = "pending" | "running" | "completed" | "failed" | "timeout";
+
+export interface RuntimeModelThinkingLevel {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface RuntimeModelThinking {
+  supported_levels: RuntimeModelThinkingLevel[];
+  default_level?: string;
+}
+
+export interface RuntimeModel {
+  id: string;
+  label: string;
+  provider?: string;
+  /** The runtime's advertised preferred pick (display hint). */
+  default?: boolean;
+  /** Per-model reasoning/effort catalog; absent = no thinking picker. */
+  thinking?: RuntimeModelThinking;
+}
+
+export interface ModelListRequest {
+  id: string;
+  runtime_id: string;
+  status: ModelListStatus;
+  models?: RuntimeModel[];
+  /** False when the provider ignores per-agent model selection. */
+  supported: boolean;
   error?: string;
   created_at: string;
   updated_at: string;

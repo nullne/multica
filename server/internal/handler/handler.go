@@ -42,6 +42,7 @@ type Handler struct {
 	TaskService      *service.TaskService
 	PingStore        *PingStore
 	UpdateStore      *UpdateStore
+	ModelListStore   *ModelListStore
 	Storage          *storage.S3Storage
 	CFSigner         *auth.CloudFrontSigner
 	FirebaseVerifier auth.FirebaseVerifier
@@ -64,6 +65,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		TaskService:      service.NewTaskService(queries, hub, bus),
 		PingStore:        NewPingStore(),
 		UpdateStore:      NewUpdateStore(),
+		ModelListStore:   NewModelListStore(),
 		Storage:          s3,
 		CFSigner:         cfSigner,
 		FirebaseVerifier: auth.NewFirebaseVerifierFromEnv(),

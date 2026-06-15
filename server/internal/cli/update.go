@@ -47,6 +47,67 @@ func FetchLatestRelease() (*GitHubRelease, error) {
 	return &release, nil
 }
 
+// IsReleaseVersion reports whether v looks like a tagged release version
+// (e.g. "0.1.13", "v0.1.13") rather than a dev build (e.g. an empty version
+// or a `git describe`–style "v0.2.15-235-gdaf0e935"). The auto-update poller
+// uses this to skip self-update for source builds, where downgrading to a
+// public release would clobber unreleased changes.
+func IsReleaseVersion(v string) bool {
+	_, ok := parseReleaseVersion(v)
+	return ok
+}
+
+// IsNewerVersion reports whether latest is strictly newer than current. Both
+// arguments may carry an optional "v" prefix. Returns false if either side
+// cannot be parsed — the caller treats that as "stay on current".
+func IsNewerVersion(latest, current string) bool {
+	l, ok := parseReleaseVersion(latest)
+	if !ok {
+		return false
+	}
+	c, ok := parseReleaseVersion(current)
+	if !ok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if l[i] != c[i] {
+			return l[i] > c[i]
+		}
+	}
+	return false
+}
+
+// parseReleaseVersion extracts the three numeric components of v. Returns
+// (parts, true) on success; (_, false) when v is missing, malformed, or
+// carries any non-numeric component. Strict on purpose: the auto-update loop
+// must never silently downgrade a developer build to a public release just
+// because a dev-describe suffix happened to look numeric after trimming.
+func parseReleaseVersion(v string) ([3]int, bool) {
+	s := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(v), "v"))
+	if s == "" {
+		return [3]int{}, false
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var out [3]int
+	for i, p := range parts {
+		if p == "" {
+			return [3]int{}, false
+		}
+		n := 0
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return [3]int{}, false
+			}
+			n = n*10 + int(r-'0')
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
 // IsBrewInstall checks whether the running multica binary was installed via Homebrew.
 func IsBrewInstall() bool {
 	exePath, err := os.Executable()
@@ -193,4 +254,3 @@ func extractBinaryFromTarGz(r io.Reader, name string) ([]byte, error) {
 		}
 	}
 }
-
