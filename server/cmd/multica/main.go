@@ -13,9 +13,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "multica",
-	Short: "Multica CLI — local agent runtime and management tool",
-	Long:  "multica manages local agent runtimes and provides control commands for the Multica platform.",
+	Use:           "multica",
+	Short:         "Multica CLI — local agent runtime and management tool",
+	Long:          "multica manages local agent runtimes and provides control commands for the Multica platform.",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
@@ -32,6 +32,7 @@ func init() {
 	rootCmd.AddCommand(workspaceCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(issueCmd)
+	rootCmd.AddCommand(routineCmd)
 	rootCmd.AddCommand(skillCmd)
 	rootCmd.AddCommand(repoCmd)
 	rootCmd.AddCommand(versionCmd)
