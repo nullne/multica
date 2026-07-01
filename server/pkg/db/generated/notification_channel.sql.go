@@ -27,7 +27,7 @@ func (q *Queries) DeleteUserNotificationChannel(ctx context.Context, arg DeleteU
 }
 
 const getUserNotificationChannel = `-- name: GetUserNotificationChannel :one
-SELECT user_id, channel_type, channel_id, enabled, created_at, updated_at FROM user_notification_channel
+SELECT user_id, channel_type, channel_id, enabled, created_at, updated_at, preferences FROM user_notification_channel
 WHERE user_id = $1 AND channel_type = $2
 `
 
@@ -46,12 +46,13 @@ func (q *Queries) GetUserNotificationChannel(ctx context.Context, arg GetUserNot
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Preferences,
 	)
 	return i, err
 }
 
 const listEnabledTelegramChannelsForUsers = `-- name: ListEnabledTelegramChannelsForUsers :many
-SELECT unc.user_id, unc.channel_id
+SELECT unc.user_id, unc.channel_id, unc.preferences
 FROM user_notification_channel unc
 WHERE unc.channel_type = 'telegram'
   AND unc.enabled = TRUE
@@ -59,8 +60,9 @@ WHERE unc.channel_type = 'telegram'
 `
 
 type ListEnabledTelegramChannelsForUsersRow struct {
-	UserID    pgtype.UUID `json:"user_id"`
-	ChannelID string      `json:"channel_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	ChannelID   string      `json:"channel_id"`
+	Preferences []byte      `json:"preferences"`
 }
 
 func (q *Queries) ListEnabledTelegramChannelsForUsers(ctx context.Context, dollar_1 []pgtype.UUID) ([]ListEnabledTelegramChannelsForUsersRow, error) {
@@ -72,7 +74,7 @@ func (q *Queries) ListEnabledTelegramChannelsForUsers(ctx context.Context, dolla
 	items := []ListEnabledTelegramChannelsForUsersRow{}
 	for rows.Next() {
 		var i ListEnabledTelegramChannelsForUsersRow
-		if err := rows.Scan(&i.UserID, &i.ChannelID); err != nil {
+		if err := rows.Scan(&i.UserID, &i.ChannelID, &i.Preferences); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -84,7 +86,7 @@ func (q *Queries) ListEnabledTelegramChannelsForUsers(ctx context.Context, dolla
 }
 
 const listUserNotificationChannels = `-- name: ListUserNotificationChannels :many
-SELECT user_id, channel_type, channel_id, enabled, created_at, updated_at FROM user_notification_channel
+SELECT user_id, channel_type, channel_id, enabled, created_at, updated_at, preferences FROM user_notification_channel
 WHERE user_id = $1
 ORDER BY channel_type
 `
@@ -105,6 +107,7 @@ func (q *Queries) ListUserNotificationChannels(ctx context.Context, userID pgtyp
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Preferences,
 		); err != nil {
 			return nil, err
 		}
@@ -117,13 +120,14 @@ func (q *Queries) ListUserNotificationChannels(ctx context.Context, userID pgtyp
 }
 
 const upsertUserNotificationChannel = `-- name: UpsertUserNotificationChannel :one
-INSERT INTO user_notification_channel (user_id, channel_type, channel_id, enabled)
-VALUES ($1, $2, $3, $4)
+INSERT INTO user_notification_channel (user_id, channel_type, channel_id, enabled, preferences)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (user_id, channel_type) DO UPDATE SET
     channel_id = EXCLUDED.channel_id,
     enabled    = EXCLUDED.enabled,
+    preferences = EXCLUDED.preferences,
     updated_at = now()
-RETURNING user_id, channel_type, channel_id, enabled, created_at, updated_at
+RETURNING user_id, channel_type, channel_id, enabled, created_at, updated_at, preferences
 `
 
 type UpsertUserNotificationChannelParams struct {
@@ -131,6 +135,7 @@ type UpsertUserNotificationChannelParams struct {
 	ChannelType string      `json:"channel_type"`
 	ChannelID   string      `json:"channel_id"`
 	Enabled     bool        `json:"enabled"`
+	Preferences []byte      `json:"preferences"`
 }
 
 func (q *Queries) UpsertUserNotificationChannel(ctx context.Context, arg UpsertUserNotificationChannelParams) (UserNotificationChannel, error) {
@@ -139,6 +144,7 @@ func (q *Queries) UpsertUserNotificationChannel(ctx context.Context, arg UpsertU
 		arg.ChannelType,
 		arg.ChannelID,
 		arg.Enabled,
+		arg.Preferences,
 	)
 	var i UserNotificationChannel
 	err := row.Scan(
@@ -148,6 +154,7 @@ func (q *Queries) UpsertUserNotificationChannel(ctx context.Context, arg UpsertU
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Preferences,
 	)
 	return i, err
 }

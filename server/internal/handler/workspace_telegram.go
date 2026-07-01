@@ -12,8 +12,9 @@ import (
 
 // WorkspaceTelegramSettings holds the workspace-level Telegram group chat configuration.
 type WorkspaceTelegramSettings struct {
-	ChatID  string `json:"chat_id"`
-	Enabled bool   `json:"enabled"`
+	ChatID      string          `json:"chat_id"`
+	Enabled     bool            `json:"enabled"`
+	Preferences map[string]bool `json:"preferences"`
 }
 
 // ParseTelegramGroupSettings extracts the telegram_group section from the raw
@@ -34,6 +35,7 @@ func ParseTelegramGroupSettings(raw []byte) *WorkspaceTelegramSettings {
 	if err := json.Unmarshal(tgRaw, &s); err != nil {
 		return nil
 	}
+	s.Preferences = NormalizeTelegramPreferences(s.Preferences)
 	return &s
 }
 
@@ -61,6 +63,7 @@ func mergeTelegramGroupIntoWorkspace(raw []byte, s WorkspaceTelegramSettings) ([
 	if full == nil {
 		full = make(map[string]json.RawMessage)
 	}
+	s.Preferences = NormalizeTelegramPreferences(s.Preferences)
 	b, err := json.Marshal(s)
 	if err != nil {
 		return nil, err
@@ -101,15 +104,17 @@ func (h *Handler) GetWorkspaceTelegramNotifications(w http.ResponseWriter, r *ht
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"configured": true,
-		"chat_id":    s.ChatID,
-		"enabled":    s.Enabled,
+		"configured":  true,
+		"chat_id":     s.ChatID,
+		"enabled":     s.Enabled,
+		"preferences": s.Preferences,
 	})
 }
 
 type UpsertWorkspaceTelegramRequest struct {
-	ChatID  string `json:"chat_id"`
-	Enabled *bool  `json:"enabled"`
+	ChatID      string          `json:"chat_id"`
+	Enabled     *bool           `json:"enabled"`
+	Preferences map[string]bool `json:"preferences"`
 }
 
 // UpsertWorkspaceTelegramNotifications saves or updates the workspace Telegram group chat ID.
@@ -137,10 +142,17 @@ func (h *Handler) UpsertWorkspaceTelegramNotifications(w http.ResponseWriter, r 
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	preferences := req.Preferences
+	if preferences == nil {
+		if existing := ParseTelegramGroupSettings(ws.Settings); existing != nil {
+			preferences = existing.Preferences
+		}
+	}
 
 	merged, err := mergeTelegramGroupIntoWorkspace(ws.Settings, WorkspaceTelegramSettings{
-		ChatID:  chatID,
-		Enabled: enabled,
+		ChatID:      chatID,
+		Enabled:     enabled,
+		Preferences: preferences,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode settings")
@@ -158,9 +170,10 @@ func (h *Handler) UpsertWorkspaceTelegramNotifications(w http.ResponseWriter, r 
 	h.publish(protocol.EventWorkspaceUpdated, id, "member", userID, map[string]any{"workspace": workspaceToResponse(ws)})
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"configured": true,
-		"chat_id":    chatID,
-		"enabled":    enabled,
+		"configured":  true,
+		"chat_id":     chatID,
+		"enabled":     enabled,
+		"preferences": NormalizeTelegramPreferences(preferences),
 	})
 }
 

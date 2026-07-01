@@ -24,7 +24,6 @@ type mention struct {
 	ID   string // user_id, agent_id, issue_id, or "all"
 }
 
-
 // statusLabels maps DB status values to human-readable labels for notifications.
 var statusLabels = map[string]string{
 	"backlog":     "Backlog",
@@ -199,7 +198,7 @@ func notifySubscribers(
 		telegramRecipients = append(telegramRecipients, sub.UserID)
 	}
 
-	sendTelegramToSubscribers(ctx, queries, bot, telegramRecipients, telegramMessage(notifType, title, issuePageURL(issueID), body))
+	sendTelegramToSubscribers(ctx, queries, bot, telegramRecipients, notifType, telegramMessage(notifType, title, issuePageURL(issueID), body))
 }
 
 // notifyDirect creates an inbox item for a specific recipient. Skips if the
@@ -331,14 +330,33 @@ func notifyMentionedMembers(
 		})
 		telegramRecipients = append(telegramRecipients, parseUUID(id))
 	}
-	sendTelegramToSubscribers(context.Background(), queries, bot, telegramRecipients,
+	sendTelegramToSubscribers(context.Background(), queries, bot, telegramRecipients, "mentioned",
 		telegramMessage("mentioned", issueTitle, issuePageURL(issueID), body))
+}
+
+func telegramCategoryForType(notifType string) string {
+	switch notifType {
+	case "issue_created":
+		return handler.TelegramCategoryNewIssues
+	case "issue_assigned", "unassigned", "mentioned":
+		return handler.TelegramCategoryAssignmentsMentions
+	case "new_comment":
+		return handler.TelegramCategoryComments
+	case "assignee_changed", "status_changed", "priority_changed", "due_date_changed":
+		return handler.TelegramCategoryFieldChanges
+	case "task_completed", "task_failed":
+		return handler.TelegramCategoryTaskResults
+	case "reaction_added":
+		return handler.TelegramCategoryReactions
+	default:
+		return ""
+	}
 }
 
 // sendWorkspaceTelegramGroup delivers a message to the workspace Telegram group
 // chat if one is configured and enabled. Delivery failures are logged without
 // affecting the caller.
-func sendWorkspaceTelegramGroup(ctx context.Context, queries *db.Queries, bot *telegram.Bot, workspaceID, text string) {
+func sendWorkspaceTelegramGroup(ctx context.Context, queries *db.Queries, bot *telegram.Bot, workspaceID, notifType, text string) {
 	if bot == nil {
 		return
 	}
@@ -351,13 +369,16 @@ func sendWorkspaceTelegramGroup(ctx context.Context, queries *db.Queries, bot *t
 	if s == nil || !s.Enabled || s.ChatID == "" {
 		return
 	}
+	if !handler.TelegramPreferenceEnabled(s.Preferences, telegramCategoryForType(notifType)) {
+		return
+	}
 	bot.SendMessageAsync(s.ChatID, text)
 }
 
 // sendTelegramToSubscribers looks up enabled Telegram channels for the given
 // member user IDs and delivers the message asynchronously. Delivery errors are
 // logged without affecting the caller.
-func sendTelegramToSubscribers(ctx context.Context, queries *db.Queries, bot *telegram.Bot, userIDs []pgtype.UUID, text string) {
+func sendTelegramToSubscribers(ctx context.Context, queries *db.Queries, bot *telegram.Bot, userIDs []pgtype.UUID, notifType, text string) {
 	if bot == nil || len(userIDs) == 0 {
 		return
 	}
@@ -366,7 +387,11 @@ func sendTelegramToSubscribers(ctx context.Context, queries *db.Queries, bot *te
 		slog.Error("telegram: failed to look up channels", "error", err)
 		return
 	}
+	category := telegramCategoryForType(notifType)
 	for _, ch := range channels {
+		if !handler.TelegramPreferenceEnabled(handler.TelegramPreferencesFromRaw(ch.Preferences), category) {
+			continue
+		}
 		bot.SendMessageAsync(ch.ChannelID, text)
 	}
 }
@@ -454,7 +479,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			)
 			sendTelegramToSubscribers(ctx, queries, bot,
 				[]pgtype.UUID{parseUUID(*issue.AssigneeID)},
-				telegramMessage("issue_assigned", issue.Title, issuePageURL(issue.ID), ""))
+				"issue_assigned", telegramMessage("issue_assigned", issue.Title, issuePageURL(issue.ID), ""))
 		}
 
 		// Notify @mentions in description
@@ -466,7 +491,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 
 		// Workspace group notification
 		sendWorkspaceTelegramGroup(ctx, queries, bot, issue.WorkspaceID,
-			telegramMessage("issue_created", issue.Title, issuePageURL(issue.ID), ""))
+			"issue_created", telegramMessage("issue_created", issue.Title, issuePageURL(issue.ID), ""))
 	})
 
 	// issue:updated — handle assignee changes, status changes, priority, due date
@@ -489,18 +514,18 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 		// Workspace group: send one notification per meaningful change type
 		if assigneeChanged {
 			sendWorkspaceTelegramGroup(ctx, queries, bot, e.WorkspaceID,
-				telegramMessage("assignee_changed", issue.Title, issuePageURL(issue.ID), ""))
+				"assignee_changed", telegramMessage("assignee_changed", issue.Title, issuePageURL(issue.ID), ""))
 		}
 		if statusChanged {
 			prevStatus, _ := payload["prev_status"].(string)
 			sendWorkspaceTelegramGroup(ctx, queries, bot, e.WorkspaceID,
-				telegramMessage("status_changed", issue.Title, issuePageURL(issue.ID),
+				"status_changed", telegramMessage("status_changed", issue.Title, issuePageURL(issue.ID),
 					statusLabel(prevStatus)+" → "+statusLabel(issue.Status)))
 		}
 		if priorityChanged, _ := payload["priority_changed"].(bool); priorityChanged {
 			prevPriority, _ := payload["prev_priority"].(string)
 			sendWorkspaceTelegramGroup(ctx, queries, bot, e.WorkspaceID,
-				telegramMessage("priority_changed", issue.Title, issuePageURL(issue.ID),
+				"priority_changed", telegramMessage("priority_changed", issue.Title, issuePageURL(issue.ID),
 					priorityLabel(prevPriority)+" → "+priorityLabel(issue.Priority)))
 		}
 
@@ -545,7 +570,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 				if *issue.AssigneeType == "member" {
 					sendTelegramToSubscribers(ctx, queries, bot,
 						[]pgtype.UUID{parseUUID(*issue.AssigneeID)},
-						telegramMessage("issue_assigned", issue.Title, issuePageURL(issue.ID), ""))
+						"issue_assigned", telegramMessage("issue_assigned", issue.Title, issuePageURL(issue.ID), ""))
 				}
 			}
 
@@ -561,7 +586,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 				)
 				sendTelegramToSubscribers(ctx, queries, bot,
 					[]pgtype.UUID{parseUUID(*prevAssigneeID)},
-					telegramMessage("unassigned", issue.Title, issuePageURL(issue.ID), ""))
+					"unassigned", telegramMessage("unassigned", issue.Title, issuePageURL(issue.ID), ""))
 			}
 
 			// Subscriber: notify remaining subscribers about assignee change,
@@ -697,7 +722,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 
 		// Workspace group notification
 		sendWorkspaceTelegramGroup(ctx, queries, bot, e.WorkspaceID,
-			telegramMessage("new_comment", issueTitle, issuePageURL(issueID), commentContent))
+			"new_comment", telegramMessage("new_comment", issueTitle, issuePageURL(issueID), commentContent))
 	})
 
 	// issue_reaction:added — notify the issue creator
@@ -736,7 +761,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 		if creatorType == "member" {
 			sendTelegramToSubscribers(ctx, queries, bot,
 				[]pgtype.UUID{parseUUID(creatorID)},
-				telegramMessage("reaction_added", issueTitle, issuePageURL(issueID), reaction.Emoji))
+				"reaction_added", telegramMessage("reaction_added", issueTitle, issuePageURL(issueID), reaction.Emoji))
 		}
 	})
 
@@ -781,7 +806,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 		if commentAuthorType == "member" {
 			sendTelegramToSubscribers(ctx, queries, bot,
 				[]pgtype.UUID{parseUUID(commentAuthorID)},
-				telegramMessage("reaction_added", issueTitle, issuePageURL(issueID), reaction.Emoji))
+				"reaction_added", telegramMessage("reaction_added", issueTitle, issuePageURL(issueID), reaction.Emoji))
 		}
 	})
 
@@ -801,7 +826,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 			return
 		}
 		sendWorkspaceTelegramGroup(ctx, queries, bot, e.WorkspaceID,
-			telegramMessage("task_completed", issue.Title, issuePageURL(issueID), ""))
+			"task_completed", telegramMessage("task_completed", issue.Title, issuePageURL(issueID), ""))
 	})
 
 	// task:failed — notify all subscribers except the agent
@@ -847,7 +872,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries, bot *te
 
 		// Workspace group notification
 		sendWorkspaceTelegramGroup(ctx, queries, bot, e.WorkspaceID,
-			telegramMessage("task_failed", issue.Title, issuePageURL(issueID), taskFailedBody))
+			"task_failed", telegramMessage("task_failed", issue.Title, issuePageURL(issueID), taskFailedBody))
 	})
 }
 

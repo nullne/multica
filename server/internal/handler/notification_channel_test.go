@@ -34,6 +34,10 @@ func TestNotificationChannelAPI(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := newRequest("PUT", "/api/me/notification-channels/telegram", map[string]any{
 			"chat_id": "12345678",
+			"preferences": map[string]bool{
+				"comments":      false,
+				"field_changes": true,
+			},
 		})
 		testHandler.UpsertTelegramChannel(w, req)
 		if w.Code != http.StatusOK {
@@ -49,6 +53,15 @@ func TestNotificationChannelAPI(t *testing.T) {
 		}
 		if !ch.Enabled {
 			t.Fatal("expected channel to be enabled by default")
+		}
+		if ch.Preferences["comments"] {
+			t.Fatal("expected comments preference to be disabled")
+		}
+		if !ch.Preferences["field_changes"] {
+			t.Fatal("expected field_changes preference to be enabled")
+		}
+		if !ch.Preferences["assignments_mentions"] {
+			t.Fatal("expected omitted assignment preference to default enabled")
 		}
 	})
 
@@ -66,6 +79,9 @@ func TestNotificationChannelAPI(t *testing.T) {
 		}
 		if channels[0].ChannelType != "telegram" {
 			t.Fatalf("expected telegram, got %q", channels[0].ChannelType)
+		}
+		if channels[0].Preferences["comments"] {
+			t.Fatal("expected stored comments preference to remain disabled")
 		}
 	})
 

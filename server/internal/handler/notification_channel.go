@@ -5,15 +5,17 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	db "github.com/nullne/multica/server/pkg/db/generated"
 )
 
 type NotificationChannelResponse struct {
-	ChannelType string `json:"channel_type"`
-	ChannelID   string `json:"channel_id"`
-	Enabled     bool   `json:"enabled"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ChannelType string          `json:"channel_type"`
+	ChannelID   string          `json:"channel_id"`
+	Enabled     bool            `json:"enabled"`
+	CreatedAt   string          `json:"created_at"`
+	UpdatedAt   string          `json:"updated_at"`
+	Preferences map[string]bool `json:"preferences"`
 }
 
 func notificationChannelToResponse(c db.UserNotificationChannel) NotificationChannelResponse {
@@ -23,6 +25,7 @@ func notificationChannelToResponse(c db.UserNotificationChannel) NotificationCha
 		Enabled:     c.Enabled,
 		CreatedAt:   timestampToString(c.CreatedAt),
 		UpdatedAt:   timestampToString(c.UpdatedAt),
+		Preferences: TelegramPreferencesFromRaw(c.Preferences),
 	}
 }
 
@@ -47,8 +50,9 @@ func (h *Handler) ListNotificationChannels(w http.ResponseWriter, r *http.Reques
 }
 
 type UpsertTelegramChannelRequest struct {
-	ChatID  string `json:"chat_id"`
-	Enabled *bool  `json:"enabled"`
+	ChatID      string          `json:"chat_id"`
+	Enabled     *bool           `json:"enabled"`
+	Preferences map[string]bool `json:"preferences"`
 }
 
 // UpsertTelegramChannel creates or updates the user's Telegram notification channel.
@@ -75,11 +79,32 @@ func (h *Handler) UpsertTelegramChannel(w http.ResponseWriter, r *http.Request) 
 		enabled = *req.Enabled
 	}
 
+	preferences := req.Preferences
+	if preferences == nil {
+		existing, err := h.Queries.GetUserNotificationChannel(r.Context(), db.GetUserNotificationChannelParams{
+			UserID:      parseUUID(userID),
+			ChannelType: "telegram",
+		})
+		if err != nil && err != pgx.ErrNoRows {
+			writeError(w, http.StatusInternalServerError, "failed to load channel")
+			return
+		}
+		if err == nil {
+			preferences = TelegramPreferencesFromRaw(existing.Preferences)
+		}
+	}
+	preferencesJSON, err := encodeTelegramPreferences(preferences)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode preferences")
+		return
+	}
+
 	channel, err := h.Queries.UpsertUserNotificationChannel(r.Context(), db.UpsertUserNotificationChannelParams{
 		UserID:      parseUUID(userID),
 		ChannelType: "telegram",
 		ChannelID:   chatID,
 		Enabled:     enabled,
+		Preferences: preferencesJSON,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save channel")

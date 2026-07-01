@@ -8,11 +8,12 @@ WHERE user_id = $1
 ORDER BY channel_type;
 
 -- name: UpsertUserNotificationChannel :one
-INSERT INTO user_notification_channel (user_id, channel_type, channel_id, enabled)
-VALUES ($1, $2, $3, $4)
+INSERT INTO user_notification_channel (user_id, channel_type, channel_id, enabled, preferences)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (user_id, channel_type) DO UPDATE SET
     channel_id = EXCLUDED.channel_id,
     enabled    = EXCLUDED.enabled,
+    preferences = EXCLUDED.preferences,
     updated_at = now()
 RETURNING *;
 
@@ -21,7 +22,7 @@ DELETE FROM user_notification_channel
 WHERE user_id = $1 AND channel_type = $2;
 
 -- name: ListEnabledTelegramChannelsForUsers :many
-SELECT unc.user_id, unc.channel_id
+SELECT unc.user_id, unc.channel_id, unc.preferences
 FROM user_notification_channel unc
 WHERE unc.channel_type = 'telegram'
   AND unc.enabled = TRUE
