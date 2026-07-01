@@ -59,8 +59,8 @@ WHERE agent_id = $1
 ORDER BY created_at DESC;
 
 -- name: CreateAgentTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id, context)
-VALUES ($1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id), sqlc.narg(context))
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id, context, provider)
+VALUES ($1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id), sqlc.narg(context), sqlc.narg(provider))
 RETURNING *;
 
 -- name: CancelAgentTasksByIssue :exec
@@ -111,8 +111,22 @@ RETURNING *;
 
 -- name: CompleteAgentTask :one
 UPDATE agent_task_queue
-SET status = 'completed', completed_at = now(), result = $2, session_id = $3, work_dir = $4
+SET status = 'completed',
+    completed_at = now(),
+    result = $2,
+    session_id = $3,
+    work_dir = $4,
+    model = COALESCE(sqlc.narg(model), model),
+    thinking_level = COALESCE(sqlc.narg(thinking_level), thinking_level)
 WHERE id = $1 AND status = 'running'
+RETURNING *;
+
+-- name: SetAgentTaskExecutionMetadata :one
+UPDATE agent_task_queue
+SET provider = COALESCE(sqlc.narg(provider), provider),
+    model = COALESCE(sqlc.narg(model), model),
+    thinking_level = COALESCE(sqlc.narg(thinking_level), thinking_level)
+WHERE id = $1 AND status IN ('queued', 'dispatched', 'running')
 RETURNING *;
 
 -- name: SetAgentTaskResultComment :one

@@ -67,6 +67,11 @@ function formatDuration(start: string, end: string): string {
   return `${minutes}m ${secs}s`;
 }
 
+export function formatTaskRunModelLabel(task: Pick<AgentTask, "model" | "thinking_level">): string | null {
+  const parts = [task.model, task.thinking_level].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 function shortenPath(p: string): string {
   const parts = p.split("/");
   if (parts.length <= 3) return p;
@@ -250,10 +255,11 @@ export function TaskRunCard({ task, fallbackAgentName }: TaskRunCardProps) {
   const taskDaemon = taskRuntime?.daemon_ref ? daemons.find((d) => d.id === taskRuntime.daemon_ref) : null;
   const runtimeLabel = [
     taskDaemon?.device_name || taskDaemon?.daemon_id,
-    taskRuntime?.provider,
+    taskRuntime?.provider ?? task.provider,
   ]
     .filter(Boolean)
     .join(" / ");
+  const modelLabel = formatTaskRunModelLabel(task);
 
   const agentLabel =
     (task.agent_id ? getActorName("agent", task.agent_id) : null) ?? fallbackAgentName ?? "Agent";
@@ -317,6 +323,12 @@ export function TaskRunCard({ task, fallbackAgentName }: TaskRunCardProps) {
               </span>
             )}
           </CollapsibleTrigger>
+
+          {modelLabel && (
+            <span className="text-xs text-muted-foreground shrink-0 truncate max-w-[180px]">
+              {modelLabel}
+            </span>
+          )}
 
           {runtimeLabel && (
             <Link

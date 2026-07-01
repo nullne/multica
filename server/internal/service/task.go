@@ -234,6 +234,7 @@ func (s *TaskService) enqueueTaskToAgent(ctx context.Context, issue db.Issue, ag
 		Priority:         priorityToInt(issue.Priority),
 		TriggerCommentID: triggerCommentID,
 		Context:          contextData,
+		Provider:         pgtype.Text{String: runtime.Provider, Valid: runtime.Provider != ""},
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -333,12 +334,14 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 
 // CompleteTask marks a task as completed.
 // Issue status is NOT changed here — the agent manages it via the CLI.
-func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir string) (*db.AgentTaskQueue, error) {
+func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, result []byte, sessionID, workDir, model, thinkingLevel string) (*db.AgentTaskQueue, error) {
 	task, err := s.Queries.CompleteAgentTask(ctx, db.CompleteAgentTaskParams{
-		ID:        taskID,
-		Result:    result,
-		SessionID: pgtype.Text{String: sessionID, Valid: sessionID != ""},
-		WorkDir:   pgtype.Text{String: workDir, Valid: workDir != ""},
+		ID:            taskID,
+		Result:        result,
+		SessionID:     pgtype.Text{String: sessionID, Valid: sessionID != ""},
+		WorkDir:       pgtype.Text{String: workDir, Valid: workDir != ""},
+		Model:         pgtype.Text{String: model, Valid: model != ""},
+		ThinkingLevel: pgtype.Text{String: thinkingLevel, Valid: thinkingLevel != ""},
 	})
 	if err != nil {
 		// Log the current task state to help debug why the update matched no rows.
