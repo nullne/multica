@@ -266,11 +266,35 @@ func TestCursorAccumulateResultUsage(t *testing.T) {
 		},
 	}
 
-	b.accumulateResultUsage(usage, evt)
+	b.accumulateResultUsage(usage, evt, "")
 
 	u := usage["gpt-5.3"]
 	if u.InputTokens != 200 || u.OutputTokens != 100 || u.CacheReadTokens != 50 {
 		t.Fatalf("unexpected usage: %+v", u)
+	}
+}
+
+func TestCursorAccumulateResultUsageUsesFallbackModel(t *testing.T) {
+	t.Parallel()
+
+	b := &cursorBackend{cfg: Config{Logger: slog.Default()}}
+	usage := make(map[string]TokenUsage)
+
+	evt := &cursorStreamEvent{
+		Usage: &cursorUsage{
+			InputTokens:  200,
+			OutputTokens: 100,
+		},
+	}
+
+	b.accumulateResultUsage(usage, evt, "Composer 2.5 Fast")
+
+	if _, ok := usage["cursor"]; ok {
+		t.Fatalf("provider fallback must not be recorded as a model: %+v", usage)
+	}
+	u := usage["Composer 2.5 Fast"]
+	if u.InputTokens != 200 || u.OutputTokens != 100 {
+		t.Fatalf("unexpected fallback model usage: %+v", usage)
 	}
 }
 
@@ -395,7 +419,7 @@ func TestCursorUsageNoDoubleCount(t *testing.T) {
 
 				switch evt.Type {
 				case "result":
-					b.accumulateResultUsage(resultUsage, &evt)
+					b.accumulateResultUsage(resultUsage, &evt, "")
 					if evt.Usage != nil {
 						hasResultUsage = true
 					}

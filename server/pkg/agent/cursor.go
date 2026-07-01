@@ -77,6 +77,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		startTime := time.Now()
 		var output strings.Builder
 		var sessionID string
+		var streamModel string
 		finalStatus := "completed"
 		var finalError string
 		resultSeen := false
@@ -105,6 +106,9 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 			if sid := evt.readSessionID(); sid != "" {
 				sessionID = sid
+			}
+			if model := strings.TrimSpace(evt.Model); model != "" {
+				streamModel = model
 			}
 
 			switch evt.Type {
@@ -160,7 +164,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if evt.ResultText != "" && output.Len() == 0 {
 					output.WriteString(evt.ResultText)
 				}
-				b.accumulateResultUsage(resultUsage, &evt)
+				b.accumulateResultUsage(resultUsage, &evt, streamModel)
 				if evt.Usage != nil {
 					hasResultUsage = true
 				}
@@ -192,7 +196,10 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					_ = json.Unmarshal(evt.Part, &part)
 					model := evt.Model
 					if model == "" {
-						model = "cursor"
+						model = streamModel
+					}
+					if model == "" {
+						break
 					}
 					u := stepUsage[model]
 					u.InputTokens += int64(part.Tokens.Input)
@@ -356,13 +363,16 @@ func (b *cursorBackend) handleCursorToolCall(evt *cursorStreamEvent, ch chan<- M
 	}
 }
 
-func (b *cursorBackend) accumulateResultUsage(usage map[string]TokenUsage, evt *cursorStreamEvent) {
+func (b *cursorBackend) accumulateResultUsage(usage map[string]TokenUsage, evt *cursorStreamEvent, fallbackModel string) {
 	if evt.Usage == nil {
 		return
 	}
 	model := evt.Model
 	if model == "" {
-		model = "cursor"
+		model = fallbackModel
+	}
+	if model == "" {
+		return
 	}
 	u := usage[model]
 	u.InputTokens += evt.Usage.InputTokens
