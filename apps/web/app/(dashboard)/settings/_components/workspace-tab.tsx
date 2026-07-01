@@ -22,7 +22,12 @@ import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
-import type { WorkspaceTelegramSettings } from "@/shared/types";
+import {
+  normalizeTelegramPreferences,
+  telegramPreferenceCategories,
+  type TelegramPreferenceCategory,
+  type WorkspaceTelegramSettings,
+} from "@/shared/types";
 
 export function WorkspaceTab() {
   const user = useAuthStore((s) => s.user);
@@ -78,6 +83,7 @@ export function WorkspaceTab() {
       const updated = await api.upsertWorkspaceTelegramNotifications(workspace.id, {
         chat_id: chatId,
         enabled: telegramGroup?.enabled ?? true,
+        preferences: normalizeTelegramPreferences(telegramGroup?.preferences),
       });
       setTelegramGroup(updated);
       toast.success("Telegram group saved");
@@ -94,6 +100,7 @@ export function WorkspaceTab() {
       const updated = await api.upsertWorkspaceTelegramNotifications(workspace.id, {
         chat_id: telegramGroup.chat_id,
         enabled,
+        preferences: normalizeTelegramPreferences(telegramGroup.preferences),
       });
       setTelegramGroup(updated);
     } catch (e) {
@@ -110,6 +117,30 @@ export function WorkspaceTab() {
       toast.success("Telegram group removed");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to remove Telegram group");
+    }
+  };
+
+  const handleTelegramGroupPreferenceToggle = async (
+    category: TelegramPreferenceCategory,
+    enabled: boolean,
+  ) => {
+    if (!workspace || !telegramGroup?.configured || !telegramGroup.chat_id) return;
+    const preferences = {
+      ...normalizeTelegramPreferences(telegramGroup.preferences),
+      [category]: enabled,
+    };
+    setTelegramSaving(true);
+    try {
+      const updated = await api.upsertWorkspaceTelegramNotifications(workspace.id, {
+        chat_id: telegramGroup.chat_id,
+        enabled: telegramGroup.enabled ?? true,
+        preferences,
+      });
+      setTelegramGroup(updated);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update Telegram group preferences");
+    } finally {
+      setTelegramSaving(false);
     }
   };
 
@@ -279,16 +310,46 @@ export function WorkspaceTab() {
                 </div>
 
                 {telegramGroup?.configured && (
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={telegramGroup.enabled ?? true}
-                      onCheckedChange={handleTelegramGroupToggle}
-                      disabled={!canManageWorkspace}
-                      id="telegram-group-enabled"
-                    />
-                    <Label htmlFor="telegram-group-enabled" className="text-xs text-muted-foreground cursor-pointer">
-                      Notifications enabled
-                    </Label>
+                  <div className="space-y-4 border-t pt-4">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={telegramGroup.enabled ?? true}
+                        onCheckedChange={handleTelegramGroupToggle}
+                        disabled={!canManageWorkspace || telegramSaving}
+                        id="telegram-group-enabled"
+                      />
+                      <Label htmlFor="telegram-group-enabled" className="text-xs text-muted-foreground cursor-pointer">
+                        Notifications enabled
+                      </Label>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-xs font-medium">Notification types</p>
+                        <p className="text-xs text-muted-foreground">
+                          Choose which updates are posted to the workspace Telegram group.
+                        </p>
+                      </div>
+                      {telegramPreferenceCategories.map((category) => {
+                        const preferences = normalizeTelegramPreferences(telegramGroup.preferences);
+                        return (
+                          <div key={category.id} className="flex items-start justify-between gap-4">
+                            <div className="space-y-0.5">
+                              <Label className="text-xs">{category.label}</Label>
+                              <p className="text-xs text-muted-foreground">{category.description}</p>
+                            </div>
+                            <Switch
+                              checked={preferences[category.id]}
+                              onCheckedChange={(nextEnabled) => (
+                                handleTelegramGroupPreferenceToggle(category.id, nextEnabled)
+                              )}
+                              disabled={!canManageWorkspace || telegramSaving}
+                              aria-label={`Toggle ${category.label}`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 

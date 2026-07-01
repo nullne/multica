@@ -9,7 +9,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { api } from "@/shared/api";
-import type { NotificationChannel } from "@/shared/types";
+import {
+  normalizeTelegramPreferences,
+  personalTelegramPreferenceCategories,
+  type NotificationChannel,
+  type TelegramPreferenceCategory,
+} from "@/shared/types";
 
 export function NotificationsTab() {
   const [telegramChannel, setTelegramChannel] = useState<NotificationChannel | null>(null);
@@ -35,6 +40,7 @@ export function NotificationsTab() {
       const updated = await api.upsertTelegramChannel({
         chat_id: chatId,
         enabled: telegramChannel?.enabled ?? true,
+        preferences: normalizeTelegramPreferences(telegramChannel?.preferences),
       });
       setTelegramChannel(updated);
       toast.success("Telegram channel saved");
@@ -51,6 +57,7 @@ export function NotificationsTab() {
       const updated = await api.upsertTelegramChannel({
         chat_id: telegramChannel.channel_id,
         enabled,
+        preferences: normalizeTelegramPreferences(telegramChannel.preferences),
       });
       setTelegramChannel(updated);
     } catch (e) {
@@ -66,6 +73,30 @@ export function NotificationsTab() {
       toast.success("Telegram channel removed");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to remove Telegram channel");
+    }
+  };
+
+  const handleTelegramPreferenceToggle = async (
+    category: TelegramPreferenceCategory,
+    enabled: boolean,
+  ) => {
+    if (!telegramChannel) return;
+    const preferences = {
+      ...normalizeTelegramPreferences(telegramChannel.preferences),
+      [category]: enabled,
+    };
+    setTelegramSaving(true);
+    try {
+      const updated = await api.upsertTelegramChannel({
+        chat_id: telegramChannel.channel_id,
+        enabled: telegramChannel.enabled,
+        preferences,
+      });
+      setTelegramChannel(updated);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update Telegram preferences");
+    } finally {
+      setTelegramSaving(false);
     }
   };
 
@@ -124,12 +155,41 @@ export function NotificationsTab() {
                   </div>
                 </div>
                 {telegramChannel && (
-                  <div className="flex items-center justify-between">
-                    <Label className="text-xs text-muted-foreground">Enable Telegram notifications</Label>
-                    <Switch
-                      checked={telegramChannel.enabled}
-                      onCheckedChange={handleTelegramToggle}
-                    />
+                  <div className="space-y-4 border-t pt-4">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs text-muted-foreground">Enable Telegram notifications</Label>
+                      <Switch
+                        checked={telegramChannel.enabled}
+                        onCheckedChange={handleTelegramToggle}
+                        disabled={telegramSaving}
+                      />
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <p className="text-xs font-medium">Notification types</p>
+                        <p className="text-xs text-muted-foreground">
+                          Choose which private Telegram notifications you receive.
+                        </p>
+                      </div>
+                      {personalTelegramPreferenceCategories.map((category) => {
+                        const preferences = normalizeTelegramPreferences(telegramChannel.preferences);
+                        return (
+                          <div key={category.id} className="flex items-start justify-between gap-4">
+                            <div className="space-y-0.5">
+                              <Label className="text-xs">{category.label}</Label>
+                              <p className="text-xs text-muted-foreground">{category.description}</p>
+                            </div>
+                            <Switch
+                              checked={preferences[category.id]}
+                              onCheckedChange={(enabled) => handleTelegramPreferenceToggle(category.id, enabled)}
+                              disabled={telegramSaving}
+                              aria-label={`Toggle ${category.label}`}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

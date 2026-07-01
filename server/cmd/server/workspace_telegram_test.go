@@ -75,6 +75,27 @@ func setWorkspaceTelegramGroup(t *testing.T, workspaceID, chatID string, enabled
 	}
 }
 
+// setWorkspaceTelegramGroupWithPreferences configures the workspace Telegram group
+// and category preferences for delivery filtering tests.
+func setWorkspaceTelegramGroupWithPreferences(t *testing.T, workspaceID, chatID string, enabled bool, preferences map[string]bool) {
+	t.Helper()
+	settings := map[string]any{
+		"telegram_group": map[string]any{
+			"chat_id":     chatID,
+			"enabled":     enabled,
+			"preferences": preferences,
+		},
+	}
+	b, _ := json.Marshal(settings)
+	_, err := testPool.Exec(context.Background(),
+		`UPDATE workspace SET settings = $1 WHERE id = $2`,
+		b, workspaceID,
+	)
+	if err != nil {
+		t.Fatalf("setWorkspaceTelegramGroupWithPreferences: %v", err)
+	}
+}
+
 // clearWorkspaceTelegramGroup removes the telegram_group key from workspace settings.
 func clearWorkspaceTelegramGroup(t *testing.T, workspaceID string) {
 	t.Helper()
@@ -292,6 +313,145 @@ func TestWorkspaceTelegram_StatusChanged(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected status change message to group chat %s, got: %v", groupChatID, msgs)
+	}
+}
+
+// TestWorkspaceTelegram_CategoryPreferences verifies group category preferences
+// suppress disabled notification categories without disabling the whole channel.
+func TestWorkspaceTelegram_CategoryPreferences(t *testing.T) {
+	srv, getMsgs := fakeTelegramServer(t)
+	bot := telegram.NewBotWithURL("test-token", srv.URL)
+
+	const groupChatID = "-1001234567893"
+	setWorkspaceTelegramGroupWithPreferences(t, testWorkspaceID, groupChatID, true, map[string]bool{
+		"new_issues":    true,
+		"field_changes": false,
+	})
+	t.Cleanup(func() { clearWorkspaceTelegramGroup(t, testWorkspaceID) })
+
+	queries := db.New(testPool)
+	bus := events.New()
+	registerSubscriberListeners(bus, queries)
+	registerNotificationListeners(bus, queries, bot)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueUpdated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:          issueID,
+				WorkspaceID: testWorkspaceID,
+				Title:       "blocked field change telegram test",
+				Status:      "in_progress",
+				Priority:    "medium",
+				CreatorType: "member",
+				CreatorID:   testUserID,
+			},
+			"status_changed": true,
+			"prev_status":    "todo",
+		},
+	})
+
+	time.Sleep(150 * time.Millisecond)
+	if msgs := getMsgs(); len(msgs) != 0 {
+		t.Fatalf("expected no field change Telegram messages, got: %v", msgs)
+	}
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:          issueID,
+				WorkspaceID: testWorkspaceID,
+				Title:       "allowed new issue telegram test",
+				Status:      "todo",
+				Priority:    "medium",
+				CreatorType: "member",
+				CreatorID:   testUserID,
+			},
+		},
+	})
+
+	msgs := waitForMsgs(getMsgs, 1)
+	if len(msgs) == 0 {
+		t.Fatal("expected new issue Telegram message to be delivered")
+	}
+}
+
+// TestPersonalTelegram_CategoryPreferences verifies per-user category
+// preferences suppress private Telegram delivery for disabled categories.
+func TestPersonalTelegram_CategoryPreferences(t *testing.T) {
+	srv, getMsgs := fakeTelegramServer(t)
+	bot := telegram.NewBotWithURL("test-token", srv.URL)
+
+	clearWorkspaceTelegramGroup(t, testWorkspaceID)
+
+	subscriberEmail := "telegram-pref-subscriber@multica.ai"
+	subscriberID := createTestUser(t, subscriberEmail)
+	t.Cleanup(func() { cleanupTestUser(t, subscriberEmail) })
+
+	const privateChatID = "123456789"
+	_, err := testPool.Exec(context.Background(), `
+		INSERT INTO user_notification_channel (user_id, channel_type, channel_id, enabled, preferences)
+		VALUES ($1, 'telegram', $2, TRUE, '{"comments": false}'::jsonb)
+		ON CONFLICT (user_id, channel_type) DO UPDATE SET
+			channel_id = EXCLUDED.channel_id,
+			enabled = EXCLUDED.enabled,
+			preferences = EXCLUDED.preferences
+	`, subscriberID, privateChatID)
+	if err != nil {
+		t.Fatalf("insert user notification channel: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(),
+			`DELETE FROM user_notification_channel WHERE user_id = $1 AND channel_type = 'telegram'`,
+			subscriberID)
+	})
+
+	queries := db.New(testPool)
+	bus := events.New()
+	registerSubscriberListeners(bus, queries)
+	registerNotificationListeners(bus, queries, bot)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	addTestSubscriber(t, issueID, "member", subscriberID, "manual")
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventCommentCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"comment": handler.CommentResponse{
+				ID:      "00000000-0000-0000-0000-000000000001",
+				IssueID: issueID,
+				Content: "comment should not trigger private telegram",
+			},
+			"issue_title":  "personal telegram preference test",
+			"issue_status": "todo",
+		},
+	})
+
+	time.Sleep(150 * time.Millisecond)
+	for _, msg := range getMsgs() {
+		if msg.ChatID == privateChatID {
+			t.Fatalf("unexpected private Telegram message for disabled comments category: %v", msg)
+		}
 	}
 }
 

@@ -459,6 +459,7 @@ type UserNotificationChannel struct {
 	Enabled     bool               `json:"enabled"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Preferences []byte             `json:"preferences"`
 }
 
 type VerificationCode struct {
