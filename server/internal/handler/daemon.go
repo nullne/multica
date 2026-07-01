@@ -592,11 +592,13 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL      string `json:"pr_url"`
-	BranchName string `json:"branch_name"`
-	Output     string `json:"output"`
-	SessionID  string `json:"session_id"` // Claude session ID for future resumption
-	WorkDir    string `json:"work_dir"`   // working directory used during execution
+	PRURL         string `json:"pr_url"`
+	BranchName    string `json:"branch_name"`
+	Output        string `json:"output"`
+	SessionID     string `json:"session_id"` // Claude session ID for future resumption
+	WorkDir       string `json:"work_dir"`   // working directory used during execution
+	Model         string `json:"model"`
+	ThinkingLevel string `json:"thinking_level"`
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
@@ -609,7 +611,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, _ := json.Marshal(req)
-	task, err := h.TaskService.CompleteTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
+	task, err := h.TaskService.CompleteTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir, req.Model, req.ThinkingLevel)
 	if err != nil {
 		slog.Warn("complete task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -618,6 +620,38 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
+}
+
+// ReportTaskExecutionMetadata snapshots the model settings the daemon resolved
+// immediately before launching the provider CLI.
+type TaskExecutionMetadataRequest struct {
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	ThinkingLevel string `json:"thinking_level"`
+}
+
+func (h *Handler) ReportTaskExecutionMetadata(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "taskId")
+
+	var req TaskExecutionMetadataRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	task, err := h.Queries.SetAgentTaskExecutionMetadata(r.Context(), db.SetAgentTaskExecutionMetadataParams{
+		ID:            parseUUID(taskID),
+		Provider:      pgtype.Text{String: req.Provider, Valid: req.Provider != ""},
+		Model:         pgtype.Text{String: req.Model, Valid: req.Model != ""},
+		ThinkingLevel: pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+	})
+	if err != nil {
+		slog.Warn("task execution metadata update failed", "task_id", taskID, "error", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, taskToResponse(task))
 }
 
 // GetTaskStatus returns the current status of a task.

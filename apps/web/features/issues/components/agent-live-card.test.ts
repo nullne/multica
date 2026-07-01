@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { AgentTask } from "@/shared/types/agent";
 import {
+  formatTaskRunModelLabel,
   groupTaskRunsByTrigger,
   isActiveTask,
   partitionTaskRunsByResultComment,
@@ -21,9 +22,22 @@ function makeTask(overrides: Partial<AgentTask>): AgentTask {
     error: null,
     created_at: "2026-05-01T00:00:00Z",
     trigger_comment_id: null,
+    provider: null,
+    model: null,
+    thinking_level: null,
     ...overrides,
   };
 }
+
+describe("formatTaskRunModelLabel", () => {
+  it("joins model and thinking level when both are present", () => {
+    expect(formatTaskRunModelLabel(makeTask({ model: "gpt-5.5", thinking_level: "high" }))).toBe("gpt-5.5 · high");
+  });
+
+  it("omits empty task model metadata", () => {
+    expect(formatTaskRunModelLabel(makeTask({ model: null, thinking_level: null }))).toBeNull();
+  });
+});
 
 describe("groupTaskRunsByTrigger", () => {
   it("places null-trigger runs in the issue bucket", () => {

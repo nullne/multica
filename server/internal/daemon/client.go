@@ -86,7 +86,21 @@ func (c *Client) ReportTaskMessages(ctx context.Context, taskID string, messages
 	}, nil)
 }
 
-func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branchName, sessionID, workDir string) error {
+func (c *Client) ReportTaskExecutionMetadata(ctx context.Context, taskID, provider, model, thinkingLevel string) error {
+	body := map[string]any{}
+	if provider != "" {
+		body["provider"] = provider
+	}
+	if model != "" {
+		body["model"] = model
+	}
+	if thinkingLevel != "" {
+		body["thinking_level"] = thinkingLevel
+	}
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/metadata", taskID), body, nil)
+}
+
+func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branchName, sessionID, workDir, model, thinkingLevel string) error {
 	body := map[string]any{"output": output}
 	if prURL != "" {
 		body["pr_url"] = prURL
@@ -99,6 +113,12 @@ func (c *Client) CompleteTask(ctx context.Context, taskID, output, prURL, branch
 	}
 	if workDir != "" {
 		body["work_dir"] = workDir
+	}
+	if model != "" {
+		body["model"] = model
+	}
+	if thinkingLevel != "" {
+		body["thinking_level"] = thinkingLevel
 	}
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/complete", taskID), body, nil)
 }

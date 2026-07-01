@@ -1252,7 +1252,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task) {
 		}
 	default:
 		taskLog.Info("task completed", "status", result.Status)
-		if err := d.client.CompleteTask(ctx, task.ID, result.Comment, result.PRURL, result.BranchName, result.SessionID, result.WorkDir); err != nil {
+		if err := d.client.CompleteTask(ctx, task.ID, result.Comment, result.PRURL, result.BranchName, result.SessionID, result.WorkDir, result.Model, result.ThinkingLevel); err != nil {
 			taskLog.Error("complete task failed, falling back to fail", "error", err)
 			if failErr := d.client.FailTask(ctx, task.ID, fmt.Sprintf("complete task failed: %s", err.Error())); failErr != nil {
 				taskLog.Error("fail task fallback also failed", "error", failErr)
@@ -1428,6 +1428,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 
 	taskStart := time.Now()
 
+	if err := d.client.ReportTaskExecutionMetadata(ctx, task.ID, provider, model, thinkingLevel); err != nil {
+		taskLog.Warn("report task execution metadata failed", "error", err)
+	}
+
 	session, err := backend.Execute(ctx, prompt, agent.ExecOptions{
 		Cwd:                       env.WorkDir,
 		Model:                     model,
@@ -1572,11 +1576,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	}()
 
 	result := <-session.Result
+	actualModel := model
+	if reportedModel := actualModelFromUsage(result.Usage); reportedModel != "" {
+		actualModel = reportedModel
+	}
 	elapsed := time.Since(taskStart).Round(time.Second)
 	taskLog.Info("agent finished",
 		"status", result.Status,
 		"duration", elapsed.String(),
 		"tools", toolCount.Load(),
+		"model", actualModel,
 	)
 
 	switch result.Status {
@@ -1585,10 +1594,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 			return TaskResult{}, fmt.Errorf("%s returned empty output", provider)
 		}
 		return TaskResult{
-			Status:    "completed",
-			Comment:   result.Output,
-			SessionID: result.SessionID,
-			WorkDir:   env.WorkDir,
+			Status:        "completed",
+			Comment:       result.Output,
+			SessionID:     result.SessionID,
+			WorkDir:       env.WorkDir,
+			Model:         actualModel,
+			ThinkingLevel: thinkingLevel,
 		}, nil
 	case "timeout":
 		return TaskResult{}, fmt.Errorf("%s timed out after %s", provider, d.cfg.AgentTimeout)
@@ -1597,8 +1608,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 		if errMsg == "" {
 			errMsg = fmt.Sprintf("%s execution %s", provider, result.Status)
 		}
-		return TaskResult{Status: "blocked", Comment: errMsg}, nil
+		return TaskResult{Status: "blocked", Comment: errMsg, Model: actualModel, ThinkingLevel: thinkingLevel}, nil
 	}
+}
+
+func actualModelFromUsage(usage map[string]agent.TokenUsage) string {
+	if len(usage) != 1 {
+		return ""
+	}
+	for model := range usage {
+		if strings.TrimSpace(model) == "" || model == "unknown" {
+			return ""
+		}
+		return model
+	}
+	return ""
 }
 
 func convertReposForEnv(repos []RepoData) []execenv.RepoContextForEnv {
