@@ -47,6 +47,7 @@ export interface IssueViewState {
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
   labelFilters: string[];
+  runningOnly: boolean;
   sortBy: SortField;
   sortDirection: SortDirection;
   cardProperties: CardProperties;
@@ -58,6 +59,7 @@ export interface IssueViewState {
   toggleNoAssignee: () => void;
   toggleCreatorFilter: (value: ActorFilterValue) => void;
   toggleLabelFilter: (labelId: string) => void;
+  toggleRunningOnly: () => void;
   hideStatus: (status: IssueStatus) => void;
   showStatus: (status: IssueStatus) => void;
   clearFilters: () => void;
@@ -75,6 +77,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   includeNoAssignee: false,
   creatorFilters: [],
   labelFilters: [],
+  runningOnly: false,
   sortBy: "position",
   sortDirection: "asc",
   cardProperties: {
@@ -133,6 +136,8 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
         ? state.labelFilters.filter((id) => id !== labelId)
         : [...state.labelFilters, labelId],
     })),
+  toggleRunningOnly: () =>
+    set((state) => ({ runningOnly: !state.runningOnly })),
   hideStatus: (status) =>
     set((state) => {
       // If no filter active, activate filter with all EXCEPT this one
@@ -157,6 +162,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
       includeNoAssignee: false,
       creatorFilters: [],
       labelFilters: [],
+      runningOnly: false,
     }),
   setSortBy: (field) => set({ sortBy: field }),
   setSortDirection: (dir) => set({ sortDirection: dir }),
@@ -185,6 +191,7 @@ export const viewStorePersistOptions = (name: string) => ({
     includeNoAssignee: state.includeNoAssignee,
     creatorFilters: state.creatorFilters,
     labelFilters: state.labelFilters,
+    runningOnly: state.runningOnly,
     sortBy: state.sortBy,
     sortDirection: state.sortDirection,
     cardProperties: state.cardProperties,

@@ -54,6 +54,7 @@ import {
   CARD_PROPERTY_OPTIONS,
   type ActorFilterValue,
 } from "@/features/issues/stores/view-store";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 import {
   useIssuesScopeStore,
   type IssuesScope,
@@ -290,9 +291,11 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
   const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
+  const runningOnly = useIssueViewStore((s) => s.runningOnly);
   const sortBy = useIssueViewStore((s) => s.sortBy);
   const sortDirection = useIssueViewStore((s) => s.sortDirection);
   const cardProperties = useIssueViewStore((s) => s.cardProperties);
+  const activeTasks = useActiveTaskStore((s) => s.tasks);
   const act = useIssueViewStore.getState();
 
   const allLabels = useLabelStore((s) => s.labels);
@@ -310,6 +313,26 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
 
   const sortLabel =
     SORT_OPTIONS.find((o) => o.value === sortBy)?.label ?? "Manual";
+
+  const runningCount = useMemo(() => {
+    return filterIssues(scopedIssues, {
+      statusFilters,
+      priorityFilters,
+      assigneeFilters,
+      includeNoAssignee,
+      creatorFilters,
+      labelFilters,
+    }).filter((issue) => activeTasks.has(issue.id)).length;
+  }, [
+    scopedIssues,
+    statusFilters,
+    priorityFilters,
+    assigneeFilters,
+    includeNoAssignee,
+    creatorFilters,
+    labelFilters,
+    activeTasks,
+  ]);
 
   return (
     <div className="flex h-12 shrink-0 items-center justify-between px-2 md:px-4 gap-1">
@@ -340,6 +363,23 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
 
       {/* Right: filter + display + view toggle */}
       <div className="flex items-center gap-1">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-pressed={runningOnly}
+          className={
+            runningOnly
+              ? "bg-accent text-accent-foreground hover:bg-accent/80"
+              : "text-muted-foreground"
+          }
+          onClick={act.toggleRunningOnly}
+        >
+          Running
+          <span className="text-xs text-muted-foreground">
+            {runningCount}
+          </span>
+        </Button>
+
         {/* Filter */}
         <DropdownMenu>
           <Tooltip>

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Issue } from "@/shared/types";
+import type { AgentTask } from "@/shared/types/agent";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
@@ -110,9 +112,11 @@ const mockViewState = {
   assigneeFilters: [] as { type: string; id: string }[],
   includeNoAssignee: false,
   creatorFilters: [] as { type: string; id: string }[],
+  labelFilters: [] as string[],
+  runningOnly: false,
   sortBy: "position" as const,
   sortDirection: "asc" as const,
-  cardProperties: { priority: true, description: true, assignee: true, dueDate: true },
+  cardProperties: { priority: true, description: true, assignee: true, dueDate: true, labels: true },
   listCollapsedStatuses: [] as string[],
   setViewMode: vi.fn(),
   toggleStatusFilter: vi.fn(),
@@ -120,6 +124,8 @@ const mockViewState = {
   toggleAssigneeFilter: vi.fn(),
   toggleNoAssignee: vi.fn(),
   toggleCreatorFilter: vi.fn(),
+  toggleLabelFilter: vi.fn(),
+  toggleRunningOnly: vi.fn(),
   hideStatus: vi.fn(),
   showStatus: vi.fn(),
   clearFilters: vi.fn(),
@@ -147,6 +153,7 @@ vi.mock("@/features/issues/stores/view-store", () => ({
     { key: "description", label: "Description" },
     { key: "assignee", label: "Assignee" },
     { key: "dueDate", label: "Due date" },
+    { key: "labels", label: "Labels" },
   ],
 }));
 
@@ -292,6 +299,23 @@ const mockIssues: Issue[] = [
   },
 ];
 
+function activeTaskForIssue(issueId: string): AgentTask {
+  return {
+    id: `task-${issueId}`,
+    agent_id: "agent-1",
+    runtime_id: "runtime-1",
+    issue_id: issueId,
+    status: "running",
+    priority: 0,
+    dispatched_at: null,
+    started_at: null,
+    completed_at: null,
+    result: null,
+    error: null,
+    created_at: "2026-01-01T00:00:00Z",
+  };
+}
+
 import IssuesPage from "./page";
 
 describe("IssuesPage", () => {
@@ -309,6 +333,12 @@ describe("IssuesPage", () => {
     mockViewState.viewMode = "board";
     mockViewState.statusFilters = [];
     mockViewState.priorityFilters = [];
+    mockViewState.assigneeFilters = [];
+    mockViewState.includeNoAssignee = false;
+    mockViewState.creatorFilters = [];
+    mockViewState.labelFilters = [];
+    mockViewState.runningOnly = false;
+    useActiveTaskStore.setState({ tasks: new Map() });
   });
 
   it("shows loading state initially", () => {
@@ -371,6 +401,40 @@ describe("IssuesPage", () => {
     // Filter and Display are now icon-only buttons, verify they render as buttons
     const buttons = screen.getAllByRole("button");
     expect(buttons.length).toBeGreaterThan(0);
+  });
+
+  it("filters running issues after current filters", () => {
+    mockStoreState.loading = false;
+    mockStoreState.issues = mockIssues;
+    mockViewState.runningOnly = true;
+    mockViewState.statusFilters = ["todo"];
+    useActiveTaskStore.setState({
+      tasks: new Map([
+        ["issue-1", activeTaskForIssue("issue-1")],
+        ["issue-2", activeTaskForIssue("issue-2")],
+      ]),
+    });
+
+    render(<IssuesPage />);
+
+    expect(screen.getByText("Implement auth")).toBeInTheDocument();
+    expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
+    expect(screen.queryByText("Write tests")).not.toBeInTheDocument();
+  });
+
+  it("toggles the running quick filter from the header", async () => {
+    const user = userEvent.setup();
+    mockStoreState.loading = false;
+    mockStoreState.issues = mockIssues;
+    useActiveTaskStore.setState({
+      tasks: new Map([["issue-2", activeTaskForIssue("issue-2")]]),
+    });
+
+    render(<IssuesPage />);
+
+    await user.click(screen.getByRole("button", { name: /running/i }));
+
+    expect(mockViewState.toggleRunningOnly).toHaveBeenCalledTimes(1);
   });
 
   it("shows empty board view when no issues exist", () => {
