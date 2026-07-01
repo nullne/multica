@@ -7,6 +7,7 @@ import type { IssueStatus } from "@/shared/types";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useIssueStore } from "@/features/issues/store";
 import { useIssueViewStore, initFilterWorkspaceSync } from "@/features/issues/stores/view-store";
+import { useActiveTaskStore } from "@/features/issues/stores/active-task-store";
 import { useIssuesScopeStore } from "@/features/issues/stores/issues-scope-store";
 import { ViewStoreProvider } from "@/features/issues/stores/view-store-context";
 import { filterIssues } from "@/features/issues/utils/filter";
@@ -37,6 +38,8 @@ export function IssuesPage() {
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
   const labelFilters = useIssueViewStore((s) => s.labelFilters ?? []);
+  const runningOnly = useIssueViewStore((s) => s.runningOnly);
+  const activeTasks = useActiveTaskStore((s) => s.tasks);
 
   useEffect(() => {
     initFilterWorkspaceSync();
@@ -65,10 +68,28 @@ export function IssuesPage() {
     return allIssues;
   }, [allIssues, scope]);
 
-  const issues = useMemo(
-    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters }),
-    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters, labelFilters],
-  );
+  const issues = useMemo(() => {
+    const filteredIssues = filterIssues(scopedIssues, {
+      statusFilters,
+      priorityFilters,
+      assigneeFilters,
+      includeNoAssignee,
+      creatorFilters,
+      labelFilters,
+    });
+    if (!runningOnly) return filteredIssues;
+    return filteredIssues.filter((issue) => activeTasks.has(issue.id));
+  }, [
+    scopedIssues,
+    statusFilters,
+    priorityFilters,
+    assigneeFilters,
+    includeNoAssignee,
+    creatorFilters,
+    labelFilters,
+    runningOnly,
+    activeTasks,
+  ]);
 
   const visibleStatuses = useMemo(() => {
     if (statusFilters.length > 0)
