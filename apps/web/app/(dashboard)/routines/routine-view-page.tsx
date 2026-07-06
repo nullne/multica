@@ -25,7 +25,7 @@ import { RoutineRunList } from "@/features/routines";
 import { useRoutineStore } from "@/features/routines";
 import { useAuthStore } from "@/features/auth";
 import { useActorName, useWorkspaceStore } from "@/features/workspace";
-import { Loader2, MoreHorizontal, Pencil, Play, Sparkles, Trash2 } from "lucide-react";
+import { Archive, Loader2, MoreHorizontal, Pencil, Play, Sparkles } from "lucide-react";
 import { api } from "@/shared/api";
 import type { Routine, RoutineRun } from "@/shared/types";
 import { toast } from "sonner";
@@ -42,9 +42,9 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
   const [runs, setRuns] = useState<RoutineRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [triggering, setTriggering] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [loadingMoreRuns, setLoadingMoreRuns] = useState(false);
   const [hasMoreRuns, setHasMoreRuns] = useState(true);
   const [nextRunOffset, setNextRunOffset] = useState(0);
@@ -118,17 +118,17 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
     }
   }
 
-  async function handleDelete() {
+  async function handleArchive() {
     if (!routine) return;
-    setDeleting(true);
+    setArchiving(true);
     try {
-      await api.deleteRoutine(routine.id);
+      await api.archiveRoutine(routine.id);
       useRoutineStore.getState().remove(routine.id);
-      toast.success("Routine deleted");
+      toast.success("Routine archived");
       router.push("/routines");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to delete routine");
-      setDeleting(false);
+      toast.error(error instanceof Error ? error.message : "Failed to archive routine");
+      setArchiving(false);
     }
   }
 
@@ -167,7 +167,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
             </div>
             {routine && canManageRoutines && (
               <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button variant="outline" onClick={handleTrigger} disabled={!routine.enabled || triggering || deleting}>
+                <Button variant="outline" onClick={handleTrigger} disabled={!routine.enabled || triggering || archiving}>
                   <Play className="size-4" />
                   {triggering ? "Running..." : "Run now"}
                 </Button>
@@ -182,7 +182,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                         variant="outline"
                         size="icon"
                         aria-label="More actions"
-                        disabled={triggering || deleting}
+                        disabled={triggering || archiving}
                       />
                     }
                   >
@@ -191,10 +191,10 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem
                       variant="destructive"
-                      onClick={() => setDeleteOpen(true)}
+                      onClick={() => setArchiveOpen(true)}
                     >
-                      <Trash2 className="size-4" />
-                      Delete
+                      <Archive className="size-4" />
+                      Archive
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -216,7 +216,7 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
                 <div className="rounded-xl border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
                   <span className="font-medium text-foreground">System routine</span>
                   {" · "}
-                  Managed by Multica and provisioned by the GitHub App connection. It cannot be edited or deleted.
+                  Managed by Multica and provisioned by the GitHub App connection. It cannot be edited or archived.
                 </div>
               ) : !canManageRoutines ? (
                 <div className="rounded-xl border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
@@ -296,22 +296,22 @@ export function RoutineViewPage({ routineID }: { routineID: string }) {
           )}
         </div>
       </main>
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete routine</AlertDialogTitle>
+            <AlertDialogTitle>Archive routine</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete {routine?.name ?? "this routine"}. Existing issues created by the routine are kept.
+              This will hide {routine?.name ?? "this routine"} from routine lists and stop its triggers. Existing issues and run history are kept.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={archiving}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDelete}
-              disabled={deleting}
+              onClick={handleArchive}
+              disabled={archiving}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete routine
+              Archive routine
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

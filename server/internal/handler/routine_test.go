@@ -116,6 +116,92 @@ func TestRoutineCRUD_CreateGetAndRunList(t *testing.T) {
 	}
 }
 
+func TestDeleteRoutineArchivesAndPreservesRuns(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("test database not available")
+	}
+
+	ctx := context.Background()
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id::text FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find agent: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := routineRequest(t, "POST", "/api/routines", map[string]any{
+		"name":          "Routine archive test",
+		"instructions":  "Archive instead of delete",
+		"priority":      "medium",
+		"assignee_type": "agent",
+		"assignee_id":   agentID,
+		"enabled":       true,
+		"triggers": []map[string]any{
+			{
+				"trigger_type": "schedule",
+				"schedule":     "0 9 * * 1",
+				"timezone":     "UTC",
+			},
+		},
+	})
+	testHandler.CreateRoutine(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateRoutine: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var routine RoutineResponse
+	if err := json.NewDecoder(w.Body).Decode(&routine); err != nil {
+		t.Fatalf("decode routine: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(ctx, `DELETE FROM routine WHERE id = $1`, routine.ID)
+	})
+
+	run, err := testHandler.Queries.CreateRoutineRun(ctx, db.CreateRoutineRunParams{
+		RoutineID: parseUUID(routine.ID),
+		TriggerID: parseUUID(routine.Triggers[0].ID),
+		ActionID:  parseUUID(routine.Actions[0].ID),
+		EventType: "routine.archive.test",
+		DedupKey:  "routine-archive-test",
+		Payload:   []byte(`{}`),
+		Status:    "processed",
+	})
+	if err != nil {
+		t.Fatalf("CreateRoutineRun: %v", err)
+	}
+
+	w = httptest.NewRecorder()
+	req = routineRequest(t, "DELETE", "/api/routines/"+routine.ID, nil)
+	req = withURLParam(req, "id", routine.ID)
+	testHandler.DeleteRoutine(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeleteRoutine: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var archived bool
+	if err := testPool.QueryRow(ctx, `SELECT archived_at IS NOT NULL FROM routine WHERE id = $1`, routine.ID).Scan(&archived); err != nil {
+		t.Fatalf("query archived routine: %v", err)
+	}
+	if !archived {
+		t.Fatal("expected routine to be archived")
+	}
+
+	routines, err := testHandler.Queries.ListRoutines(ctx, parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatalf("ListRoutines: %v", err)
+	}
+	for _, listed := range routines {
+		if uuidToString(listed.ID) == routine.ID {
+			t.Fatalf("archived routine %s should not appear in ListRoutines", routine.ID)
+		}
+	}
+
+	var runExists bool
+	if err := testPool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM routine_run WHERE id = $1)`, uuidToString(run.ID)).Scan(&runExists); err != nil {
+		t.Fatalf("query routine run: %v", err)
+	}
+	if !runExists {
+		t.Fatal("expected routine run history to be preserved")
+	}
+}
+
 func TestListRoutineEventsPaginatesWorkspaceEventLog(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("test database not available")

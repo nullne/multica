@@ -41,6 +41,7 @@ function makeRoutine(id: string, workspaceId: string): Routine {
     github_auto_fix_enabled: false,
     enabled: true,
     managed: false,
+    archived_at: null,
     created_by_id: "user-1",
     created_by_type: "member",
     subscriber_ids: [],

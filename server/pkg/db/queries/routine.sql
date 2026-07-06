@@ -19,7 +19,7 @@ RETURNING *;
 
 -- name: GetManagedRoutineByWorkspace :one
 SELECT * FROM routine
-WHERE workspace_id = $1 AND managed = TRUE
+WHERE workspace_id = $1 AND managed = TRUE AND archived_at IS NULL
 ORDER BY created_at ASC
 LIMIT 1;
 
@@ -29,15 +29,16 @@ WHERE workspace_id = $1 AND managed = TRUE;
 
 -- name: GetRoutineInWorkspace :one
 SELECT * FROM routine
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL;
 
 -- name: GetRoutine :one
 SELECT * FROM routine
-WHERE id = $1;
+WHERE id = $1 AND archived_at IS NULL;
 
 -- name: ListRoutines :many
 SELECT * FROM routine
 WHERE workspace_id = $1
+  AND archived_at IS NULL
 ORDER BY created_at DESC;
 
 -- name: UpdateRoutine :one
@@ -54,12 +55,14 @@ UPDATE routine SET
     enabled               = $11,
     github_auto_fix_enabled = $12,
     updated_at            = now()
-WHERE id = $1 AND workspace_id = $13
+WHERE id = $1 AND workspace_id = $13 AND archived_at IS NULL
 RETURNING *;
 
 -- name: DeleteRoutine :exec
-DELETE FROM routine
-WHERE id = $1 AND workspace_id = $2;
+UPDATE routine
+SET archived_at = now(),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL;
 
 -- name: CreateRoutineTrigger :one
 INSERT INTO routine_trigger (
@@ -89,7 +92,7 @@ WHERE id = $1;
 SELECT rt.*
 FROM routine_trigger rt
 JOIN routine r ON r.id = rt.routine_id
-WHERE rt.id = $1 AND r.workspace_id = $2;
+WHERE rt.id = $1 AND r.workspace_id = $2 AND r.archived_at IS NULL;
 
 -- name: GetRoutineTriggerByTokenHash :one
 SELECT * FROM routine_trigger
@@ -107,6 +110,7 @@ JOIN routine r ON r.id = rt.routine_id
 WHERE r.workspace_id = $1
   AND rt.trigger_type = $2
   AND r.enabled = TRUE
+  AND r.archived_at IS NULL
   AND rt.enabled = TRUE
 ORDER BY rt.created_at;
 
@@ -117,6 +121,7 @@ JOIN routine r ON r.id = rt.routine_id
 WHERE rt.trigger_type = 'github'
   AND rt.installation_id = $1
   AND r.enabled = TRUE
+  AND r.archived_at IS NULL
   AND rt.enabled = TRUE
 ORDER BY rt.created_at;
 
@@ -147,6 +152,7 @@ SELECT rt.*
 FROM routine_trigger rt
 JOIN routine r ON r.id = rt.routine_id
 WHERE r.enabled = TRUE
+  AND r.archived_at IS NULL
   AND rt.enabled = TRUE
   AND rt.trigger_type = 'schedule'
   AND rt.next_run_at IS NOT NULL
@@ -160,11 +166,17 @@ UPDATE routine_trigger
 SET last_triggered_at = now(),
     next_run_at       = $3,
     updated_at        = now()
-WHERE id = $1
+WHERE routine_trigger.id = $1
   AND next_run_at = $2
   AND trigger_type = 'schedule'
   AND enabled = TRUE
   AND (max_runs IS NULL OR successful_runs_count < max_runs)
+  AND EXISTS (
+      SELECT 1 FROM routine r
+      WHERE r.id = routine_trigger.routine_id
+        AND r.enabled = TRUE
+        AND r.archived_at IS NULL
+  )
 RETURNING *;
 
 -- name: IncrementRoutineTriggerSuccess :one

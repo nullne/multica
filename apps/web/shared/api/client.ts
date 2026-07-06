@@ -977,7 +977,7 @@ export class ApiClient {
     });
   }
 
-  async deleteRoutine(id: string): Promise<void> {
+  async archiveRoutine(id: string): Promise<void> {
     await this.fetch(`/api/routines/${id}`, { method: "DELETE" });
   }
 
