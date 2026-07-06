@@ -55,6 +55,7 @@ type RoutineResponse struct {
 	Enabled              bool                     `json:"enabled"`
 	GithubAutoFixEnabled bool                     `json:"github_auto_fix_enabled"`
 	Managed              bool                     `json:"managed"`
+	ArchivedAt           *string                  `json:"archived_at"`
 	CreatedByID          string                   `json:"created_by_id"`
 	CreatedByType        string                   `json:"created_by_type"`
 	CreatedAt            string                   `json:"created_at"`
@@ -202,6 +203,7 @@ func routineToResponse(r db.Routine, subscriberIDs, labelIDs []string, triggers 
 		Enabled:              r.Enabled,
 		GithubAutoFixEnabled: r.GithubAutoFixEnabled,
 		Managed:              r.Managed,
+		ArchivedAt:           timestampToPtr(r.ArchivedAt),
 		CreatedByID:          uuidToString(r.CreatedByID),
 		CreatedByType:        r.CreatedByType,
 		CreatedAt:            timestampToString(r.CreatedAt),
@@ -398,14 +400,14 @@ func (h *Handler) DeleteRoutine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if existing.Managed {
-		writeError(w, http.StatusForbidden, "managed routines cannot be deleted")
+		writeError(w, http.StatusForbidden, "managed routines cannot be archived")
 		return
 	}
 	if err := h.Queries.DeleteRoutine(r.Context(), db.DeleteRoutineParams{
 		ID:          id,
 		WorkspaceID: parseUUID(workspaceID),
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete routine")
+		writeError(w, http.StatusInternalServerError, "failed to archive routine")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

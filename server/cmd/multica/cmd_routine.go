@@ -50,7 +50,7 @@ var routineUpdateCmd = &cobra.Command{
 
 var routineDeleteCmd = &cobra.Command{
 	Use:   "delete <id>",
-	Short: "Delete a routine",
+	Short: "Archive a routine",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runRoutineDelete,
 }
@@ -304,9 +304,9 @@ func runRoutineDelete(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	if err := client.DeleteJSON(ctx, "/api/routines/"+args[0]); err != nil {
-		return fmt.Errorf("delete routine: %w", err)
+		return fmt.Errorf("archive routine: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Routine %s deleted.\n", truncateID(args[0]))
+	fmt.Fprintf(os.Stderr, "Routine %s archived.\n", truncateID(args[0]))
 	return nil
 }
 

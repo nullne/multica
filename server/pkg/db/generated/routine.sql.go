@@ -48,11 +48,17 @@ UPDATE routine_trigger
 SET last_triggered_at = now(),
     next_run_at       = $3,
     updated_at        = now()
-WHERE id = $1
+WHERE routine_trigger.id = $1
   AND next_run_at = $2
   AND trigger_type = 'schedule'
   AND enabled = TRUE
   AND (max_runs IS NULL OR successful_runs_count < max_runs)
+  AND EXISTS (
+      SELECT 1 FROM routine r
+      WHERE r.id = routine_trigger.routine_id
+        AND r.enabled = TRUE
+        AND r.archived_at IS NULL
+  )
 RETURNING id, routine_id, trigger_type, source_type, token_hash, token_prefix, installation_id, schedule, timezone, run_at, next_run_at, last_triggered_at, dedup_window_seconds, max_runs, successful_runs_count, config, enabled, created_at, updated_at
 `
 
@@ -146,7 +152,7 @@ INSERT INTO routine (
 ) VALUES (
     $1, $2, 'medium', TRUE, TRUE, $3, $4
 )
-RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed
+RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed, archived_at
 `
 
 type CreateManagedRoutineParams struct {
@@ -183,6 +189,7 @@ func (q *Queries) CreateManagedRoutine(ctx context.Context, arg CreateManagedRou
 		&i.UpdatedAt,
 		&i.GithubAutoFixEnabled,
 		&i.Managed,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -196,7 +203,7 @@ INSERT INTO routine (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 )
-RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed
+RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed, archived_at
 `
 
 type CreateRoutineParams struct {
@@ -253,6 +260,7 @@ func (q *Queries) CreateRoutine(ctx context.Context, arg CreateRoutineParams) (R
 		&i.UpdatedAt,
 		&i.GithubAutoFixEnabled,
 		&i.Managed,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -589,8 +597,10 @@ func (q *Queries) DeleteManagedRoutineByWorkspace(ctx context.Context, workspace
 }
 
 const deleteRoutine = `-- name: DeleteRoutine :exec
-DELETE FROM routine
-WHERE id = $1 AND workspace_id = $2
+UPDATE routine
+SET archived_at = now(),
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
 `
 
 type DeleteRoutineParams struct {
@@ -646,8 +656,8 @@ func (q *Queries) FindRecentRoutineRun(ctx context.Context, arg FindRecentRoutin
 }
 
 const getManagedRoutineByWorkspace = `-- name: GetManagedRoutineByWorkspace :one
-SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed FROM routine
-WHERE workspace_id = $1 AND managed = TRUE
+SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed, archived_at FROM routine
+WHERE workspace_id = $1 AND managed = TRUE AND archived_at IS NULL
 ORDER BY created_at ASC
 LIMIT 1
 `
@@ -674,13 +684,14 @@ func (q *Queries) GetManagedRoutineByWorkspace(ctx context.Context, workspaceID 
 		&i.UpdatedAt,
 		&i.GithubAutoFixEnabled,
 		&i.Managed,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
 
 const getRoutine = `-- name: GetRoutine :one
-SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed FROM routine
-WHERE id = $1
+SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed, archived_at FROM routine
+WHERE id = $1 AND archived_at IS NULL
 `
 
 func (q *Queries) GetRoutine(ctx context.Context, id pgtype.UUID) (Routine, error) {
@@ -705,6 +716,7 @@ func (q *Queries) GetRoutine(ctx context.Context, id pgtype.UUID) (Routine, erro
 		&i.UpdatedAt,
 		&i.GithubAutoFixEnabled,
 		&i.Managed,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -731,8 +743,8 @@ func (q *Queries) GetRoutineAction(ctx context.Context, id pgtype.UUID) (Routine
 }
 
 const getRoutineInWorkspace = `-- name: GetRoutineInWorkspace :one
-SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed FROM routine
-WHERE id = $1 AND workspace_id = $2
+SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed, archived_at FROM routine
+WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
 `
 
 type GetRoutineInWorkspaceParams struct {
@@ -762,6 +774,7 @@ func (q *Queries) GetRoutineInWorkspace(ctx context.Context, arg GetRoutineInWor
 		&i.UpdatedAt,
 		&i.GithubAutoFixEnabled,
 		&i.Managed,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -951,7 +964,7 @@ const getRoutineTriggerInWorkspace = `-- name: GetRoutineTriggerInWorkspace :one
 SELECT rt.id, rt.routine_id, rt.trigger_type, rt.source_type, rt.token_hash, rt.token_prefix, rt.installation_id, rt.schedule, rt.timezone, rt.run_at, rt.next_run_at, rt.last_triggered_at, rt.dedup_window_seconds, rt.max_runs, rt.successful_runs_count, rt.config, rt.enabled, rt.created_at, rt.updated_at
 FROM routine_trigger rt
 JOIN routine r ON r.id = rt.routine_id
-WHERE rt.id = $1 AND r.workspace_id = $2
+WHERE rt.id = $1 AND r.workspace_id = $2 AND r.archived_at IS NULL
 `
 
 type GetRoutineTriggerInWorkspaceParams struct {
@@ -1030,6 +1043,7 @@ SELECT rt.id, rt.routine_id, rt.trigger_type, rt.source_type, rt.token_hash, rt.
 FROM routine_trigger rt
 JOIN routine r ON r.id = rt.routine_id
 WHERE r.enabled = TRUE
+  AND r.archived_at IS NULL
   AND rt.enabled = TRUE
   AND rt.trigger_type = 'schedule'
   AND rt.next_run_at IS NOT NULL
@@ -1446,6 +1460,7 @@ JOIN routine r ON r.id = rt.routine_id
 WHERE rt.trigger_type = 'github'
   AND rt.installation_id = $1
   AND r.enabled = TRUE
+  AND r.archived_at IS NULL
   AND rt.enabled = TRUE
 ORDER BY rt.created_at
 `
@@ -1497,6 +1512,7 @@ JOIN routine r ON r.id = rt.routine_id
 WHERE r.workspace_id = $1
   AND rt.trigger_type = $2
   AND r.enabled = TRUE
+  AND r.archived_at IS NULL
   AND rt.enabled = TRUE
 ORDER BY rt.created_at
 `
@@ -1547,8 +1563,9 @@ func (q *Queries) ListRoutineTriggersByTypeAndWorkspace(ctx context.Context, arg
 }
 
 const listRoutines = `-- name: ListRoutines :many
-SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed FROM routine
+SELECT id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed, archived_at FROM routine
 WHERE workspace_id = $1
+  AND archived_at IS NULL
 ORDER BY created_at DESC
 `
 
@@ -1580,6 +1597,7 @@ func (q *Queries) ListRoutines(ctx context.Context, workspaceID pgtype.UUID) ([]
 			&i.UpdatedAt,
 			&i.GithubAutoFixEnabled,
 			&i.Managed,
+			&i.ArchivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1605,8 +1623,8 @@ UPDATE routine SET
     enabled               = $11,
     github_auto_fix_enabled = $12,
     updated_at            = now()
-WHERE id = $1 AND workspace_id = $13
-RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed
+WHERE id = $1 AND workspace_id = $13 AND archived_at IS NULL
+RETURNING id, workspace_id, name, instructions, priority, assignee_type, assignee_id, due_date_offset_hours, dispatch_provider, dispatch_daemon_id, dispatch_daemon_label, enabled, created_by_id, created_by_type, created_at, updated_at, github_auto_fix_enabled, managed, archived_at
 `
 
 type UpdateRoutineParams struct {
@@ -1661,6 +1679,7 @@ func (q *Queries) UpdateRoutine(ctx context.Context, arg UpdateRoutineParams) (R
 		&i.UpdatedAt,
 		&i.GithubAutoFixEnabled,
 		&i.Managed,
+		&i.ArchivedAt,
 	)
 	return i, err
 }

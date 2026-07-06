@@ -53,6 +53,7 @@ export interface Routine {
   github_auto_fix_enabled: boolean;
   enabled: boolean;
   managed: boolean;
+  archived_at: string | null;
   created_by_id: string;
   created_by_type: string;
   subscriber_ids: string[];

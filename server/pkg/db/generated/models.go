@@ -309,6 +309,7 @@ type Routine struct {
 	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 	GithubAutoFixEnabled bool               `json:"github_auto_fix_enabled"`
 	Managed              bool               `json:"managed"`
+	ArchivedAt           pgtype.Timestamptz `json:"archived_at"`
 }
 
 type RoutineAction struct {
