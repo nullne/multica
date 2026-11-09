@@ -1,0 +1,231 @@
+name: Restore Production Database
+
+on:
+  workflow_dispatch:
+
+# Shared with deploy.yml so a restore never overlaps a production deploy.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RESTORE_REF: v0.2.126
+  PGDATA_DIR: /data/multica/data
+  LISTEN_PORT: "8888"
+  IMAGE_TAG: v0.2.126
+  BACKUP_DIR: /data/multica/backup
+  DUMP_FILE: multica-prod-final-20261109-181756.dump
+  CHECKSUM_FILE: multica-prod-final-20261109-181756.dump.sha256
+  POSTGRES_IMAGE: pgvector/pgvector:pg17
+  # Compose defaults in docker-compose.prod.yml; .env.prod does not override them.
+  DB_USER: multica
+  DB_NAME: multica
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  restore:
+    runs-on: [self-hosted, multica-prod-qwip]
+    environment: prod
+    timeout-minutes: 120
+    env:
+      RESTORE_TMP_NAME: multica-restore-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check runner paths are under /data
+        run: |
+          for dir in "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; do
+            case "$(realpath -m "$dir")/" in
+              /data/*) ;;
+              *)
+                echo "::error::$dir is not under /data; refusing to place restore files elsewhere."
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RESTORE_REF }}
+          persist-credentials: false
+
+      - name: Create temporary env file
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          FRONTEND_ORIGIN: ${{ secrets.FRONTEND_ORIGIN }}
+        run: |
+          umask 077
+          TMP_DIR="$RUNNER_TEMP/$RESTORE_TMP_NAME"
+          mkdir -m 700 "$TMP_DIR"
+          ENV_FILE="$TMP_DIR/.env.prod"
+          echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
+
+          for name in POSTGRES_PASSWORD JWT_SECRET FRONTEND_ORIGIN; do
+            value="${!name}"
+            if [ -z "$value" ]; then
+              echo "::error::Secret $name is empty."
+              exit 1
+            fi
+            if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+              echo "::error::Secret $name contains a newline and cannot be written to an env file."
+              exit 1
+            fi
+          done
+
+          # Same unquoted KEY=value format as deploy.yml, so Compose parses the
+          # password identically when the normal deploy later reuses PGDATA_DIR.
+          {
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
+            printf 'FRONTEND_ORIGIN=%s\n' "$FRONTEND_ORIGIN"
+            printf 'LISTEN_PORT=%s\n' "$LISTEN_PORT"
+            printf 'PGDATA_DIR=%s\n' "$PGDATA_DIR"
+            printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG"
+          } > "$ENV_FILE"
+
+          docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" config --quiet
+          echo "Env file created and validated."
+
+      - name: Check no application services are running
+        run: |
+          running="$(docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" ps --status running --services)"
+          for service in $running; do
+            if [ "$service" != "postgres" ]; then
+              echo "::error::Service '$service' is running; stop the production stack before restoring."
+              exit 1
+            fi
+          done
+          echo "Running services: ${running:-none}"
+
+      - name: Verify backup checksum
+        run: |
+          # Backups are root:root 0600, so read them from a root container
+          # with a read-only mount instead of from the runner user.
+          docker run --rm --network none \
+            -v "$BACKUP_DIR:/backup:ro" \
+            -e DUMP_FILE -e CHECKSUM_FILE \
+            "$POSTGRES_IMAGE" \
+            bash -euo pipefail -c '
+              cd /backup
+              test -f "$DUMP_FILE" || { echo "Dump not found: $DUMP_FILE"; exit 1; }
+              test -f "$CHECKSUM_FILE" || { echo "Checksum not found: $CHECKSUM_FILE"; exit 1; }
+              lines="$(grep -cv "^[[:space:]]*$" "$CHECKSUM_FILE" || true)"
+              if [ "$lines" -ne 1 ]; then
+                echo "Expected exactly one checksum entry, found $lines"
+                exit 1
+              fi
+              read -r expected listed_name < <(grep -v "^[[:space:]]*$" "$CHECKSUM_FILE")
+              listed_name="${listed_name#\*}"
+              if [ "$(basename "$listed_name")" != "$DUMP_FILE" ]; then
+                echo "Checksum file refers to $listed_name, expected $DUMP_FILE"
+                exit 1
+              fi
+              actual="$(sha256sum "$DUMP_FILE" | cut -d" " -f1)"
+              echo "expected: $expected"
+              echo "actual:   $actual"
+              if [ "${expected,,}" != "$actual" ]; then
+                echo "Checksum mismatch"
+                exit 1
+              fi
+              pg_restore --list "$DUMP_FILE" > /dev/null
+              echo "Checksum OK and archive is readable by pg_restore"
+            '
+
+      - name: Start postgres only
+        run: |
+          docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" pull postgres
+          docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" up -d --no-deps postgres
+
+          cid="$(docker compose -f docker-compose.prod.yml --env-file "$ENV_FILE" ps -q postgres)"
+          mount_source="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}' "$cid")"
+          if [ "$mount_source" != "$PGDATA_DIR" ]; then
+            echo "::error::postgres data mount is '$mount_source', expected '$PGDATA_DIR'."
+            exit 1
+          fi
+          echo "POSTGRES_CID=$cid" >> "$GITHUB_ENV"
+
+      - name: Wait for postgres
+        run: |
+          # Probe over TCP: during first-time init the entrypoint runs a
+          # temporary server that only listens on the Unix socket.
+          for i in $(seq 1 60); do
+            if docker exec "$POSTGRES_CID" pg_isready -q -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME"; then
+              echo "postgres is ready"
+              exit 0
+            fi
+            echo "Attempt $i/60 — waiting..."
+            sleep 5
+          done
+          echo "::error::postgres did not become ready in time."
+          docker logs --tail=100 "$POSTGRES_CID"
+          exit 1
+
+      - name: Check target database is empty
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          # TCP + password also proves the secret matches the cluster before restoring.
+          counts="$(docker exec -e PGPASSWORD "$POSTGRES_CID" psql -h 127.0.0.1 -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -AtF ' ' -c "
+            SELECT
+              (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+                  AND n.nspname NOT LIKE 'pg_toast%'
+                  AND n.nspname NOT LIKE 'pg_temp%'),
+              (SELECT count(*) FROM pg_namespace
+                WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'public')
+                  AND nspname NOT LIKE 'pg_toast%'
+                  AND nspname NOT LIKE 'pg_temp%'),
+              (SELECT count(*) FROM pg_extension WHERE extname <> 'plpgsql');
+          ")"
+          read -r relations schemas extensions <<<"$counts"
+          echo "relations=$relations schemas=$schemas extensions=$extensions"
+          if [ "$relations" != "0" ] || [ "$schemas" != "0" ] || [ "$extensions" != "0" ]; then
+            echo "::error::Target database $DB_NAME is not empty; refusing to restore."
+            exit 1
+          fi
+
+      - name: Restore dump
+        env:
+          PGPASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          # Share the postgres container's network namespace so the client
+          # reaches it on 127.0.0.1 without publishing a port.
+          docker run --rm \
+            --network "container:$POSTGRES_CID" \
+            -v "$BACKUP_DIR:/backup:ro" \
+            -e PGPASSWORD \
+            "$POSTGRES_IMAGE" \
+            pg_restore \
+              --host 127.0.0.1 \
+              --username "$DB_USER" \
+              --dbname "$DB_NAME" \
+              --no-owner \
+              --no-acl \
+              --single-transaction \
+              --exit-on-error \
+              "/backup/$DUMP_FILE"
+          echo "pg_restore finished"
+
+      - name: Check restored tables
+        run: |
+          tables="$(docker exec "$POSTGRES_CID" psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -At -c \
+            "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';")"
+          echo "public tables: $tables"
+          if [ "$tables" -eq 0 ]; then
+            echo "::error::No tables found in schema public after restore."
+            exit 1
+          fi
+
+      - name: Show postgres logs on failure
+        if: failure() && env.POSTGRES_CID != ''
+        run: docker logs --tail=100 "$POSTGRES_CID"
+
+      - name: Cleanup temporary files
+        if: always()
+        run: rm -rf "${RUNNER_TEMP:?}/${RESTORE_TMP_NAME:?}"
