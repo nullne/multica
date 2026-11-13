@@ -276,14 +276,21 @@ func claudeOpenFlags(editor string) string {
 	return ""
 }
 
+// openITermCommand builds the shell command to run in the new iTerm2 window:
+// change into the worktree, launch the terminal editor, and close the session
+// once the editor exits.
+func openITermCommand(dir, editor string) string {
+	return "cd " + shellQuote(dir) + " && " + shellQuote(editor) + claudeOpenFlags(editor) +
+		"; osascript -e 'tell application \"iTerm\" to close current session'"
+}
+
 // openInITerm opens a new iTerm2 window and runs the terminal editor in dir.
 func openInITerm(dir, editor string) error {
-	command := "cd " + shellQuote(dir) + " && " + shellQuote(editor) + claudeOpenFlags(editor)
 	script := "tell application \"iTerm\"\n" +
 		"\tactivate\n" +
 		"\tcreate window with default profile\n" +
 		"\ttell current session of current window\n" +
-		"\t\twrite text " + appleScriptString(command) + "\n" +
+		"\t\twrite text " + appleScriptString(openITermCommand(dir, editor)) + "\n" +
 		"\tend tell\n" +
 		"end tell"
 	return exec.Command("osascript", "-e", script).Run()
