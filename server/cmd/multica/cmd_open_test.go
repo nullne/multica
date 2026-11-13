@@ -152,7 +152,7 @@ func TestClaudeOpenFlags(t *testing.T) {
 
 func TestOpenITermCommand(t *testing.T) {
 	got := openITermCommand("/tmp/some dir", "claude")
-	want := `cd '/tmp/some dir' && 'claude' --dangerously-skip-permissions; osascript -e 'tell application "iTerm" to close current session'`
+	want := `cd '/tmp/some dir' && 'claude' --dangerously-skip-permissions; osascript -e 'tell application "iTerm" to close current session of current window'`
 	if got != want {
 		t.Errorf("openITermCommand() = %q, want %q", got, want)
 	}
@@ -161,7 +161,7 @@ func TestOpenITermCommand(t *testing.T) {
 	if strings.Contains(gotCodex, "dangerously-skip-permissions") {
 		t.Errorf("openITermCommand(codex) = %q, should not contain claude-only flag", gotCodex)
 	}
-	if !strings.Contains(gotCodex, "close current session") {
+	if !strings.Contains(gotCodex, "close current session of current window") {
 		t.Errorf("openITermCommand(codex) = %q, should close the session on exit", gotCodex)
 	}
 }

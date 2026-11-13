@@ -281,15 +281,15 @@ func claudeOpenFlags(editor string) string {
 // once the editor exits.
 func openITermCommand(dir, editor string) string {
 	return "cd " + shellQuote(dir) + " && " + shellQuote(editor) + claudeOpenFlags(editor) +
-		"; osascript -e 'tell application \"iTerm\" to close current session'"
+		"; osascript -e 'tell application \"iTerm\" to close current session of current window'"
 }
 
 // openInITerm opens a new iTerm2 window and runs the terminal editor in dir.
 func openInITerm(dir, editor string) error {
 	script := "tell application \"iTerm\"\n" +
 		"\tactivate\n" +
-		"\tcreate window with default profile\n" +
-		"\ttell current session of current window\n" +
+		"\tset newWindow to (create window with default profile)\n" +
+		"\ttell current session of newWindow\n" +
 		"\t\twrite text " + appleScriptString(openITermCommand(dir, editor)) + "\n" +
 		"\tend tell\n" +
 		"end tell"
