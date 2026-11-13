@@ -237,6 +237,58 @@ func createWorktree(bare, wsRoot string, proj project) (string, error) {
 	return wtPath, nil
 }
 
+// isTerminalEditor reports whether the editor is a terminal-based CLI (Claude Code
+// or Codex) that must run inside a terminal instead of being launched as a detached
+// GUI process.
+func isTerminalEditor(editor string) bool {
+	switch filepath.Base(editor) {
+	case "claude", "codex":
+		return true
+	}
+	return false
+}
+
+// isITerm reports whether the process is running inside iTerm2.
+func isITerm() bool {
+	return os.Getenv("TERM_PROGRAM") == "iTerm.app" ||
+		os.Getenv("LC_TERMINAL") == "iTerm2" ||
+		os.Getenv("__CFBundleIdentifier") == "com.googlecode.iterm2"
+}
+
+// shellQuote wraps s in single quotes for safe use inside a shell command.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// appleScriptString quotes s as an AppleScript string literal.
+func appleScriptString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
+}
+
+// claudeOpenFlags returns extra flags to pass when launching Claude Code, so the
+// freshly-opened project does not prompt for every permission.
+func claudeOpenFlags(editor string) string {
+	if filepath.Base(editor) == "claude" {
+		return " --dangerously-skip-permissions"
+	}
+	return ""
+}
+
+// openInITerm opens a new iTerm2 window and runs the terminal editor in dir.
+func openInITerm(dir, editor string) error {
+	command := "cd " + shellQuote(dir) + " && " + shellQuote(editor) + claudeOpenFlags(editor)
+	script := "tell application \"iTerm\"\n" +
+		"\tactivate\n" +
+		"\tcreate window with default profile\n" +
+		"\ttell current session of current window\n" +
+		"\t\twrite text " + appleScriptString(command) + "\n" +
+		"\tend tell\n" +
+		"end tell"
+	return exec.Command("osascript", "-e", script).Run()
+}
+
 func openInEditor(editor, editorPath string) error {
 	if editor == "" {
 		if p, err := exec.LookPath("cursor"); err == nil {
@@ -244,6 +296,13 @@ func openInEditor(editor, editorPath string) error {
 		} else if p, err := exec.LookPath("code"); err == nil {
 			editor = p
 		}
+	}
+
+	if isTerminalEditor(editor) {
+		if !isITerm() {
+			return fmt.Errorf("terminal editors (%s) require iTerm2: run 'multica open --editor %s' from an iTerm2 window", filepath.Base(editor), filepath.Base(editor))
+		}
+		return openInITerm(editorPath, editor)
 	}
 
 	if editor != "" {

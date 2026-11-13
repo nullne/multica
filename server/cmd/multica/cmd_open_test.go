@@ -111,3 +111,67 @@ func TestEnsureBareCloneFetchFailurePreventsStaleWorktree(t *testing.T) {
 		t.Fatalf("workspace dir exists after fetch failure: %v", err)
 	}
 }
+
+func TestIsTerminalEditor(t *testing.T) {
+	cases := []struct {
+		editor string
+		want   bool
+	}{
+		{"claude", true},
+		{"codex", true},
+		{"/usr/local/bin/claude", true},
+		{"/opt/homebrew/bin/codex", true},
+		{"cursor", false},
+		{"code", false},
+		{"/Applications/Cursor.app/Contents/MacOS/Cursor", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isTerminalEditor(c.editor); got != c.want {
+			t.Errorf("isTerminalEditor(%q) = %v, want %v", c.editor, got, c.want)
+		}
+	}
+}
+
+func TestClaudeOpenFlags(t *testing.T) {
+	cases := []struct {
+		editor string
+		want   string
+	}{
+		{"claude", " --dangerously-skip-permissions"},
+		{"/usr/local/bin/claude", " --dangerously-skip-permissions"},
+		{"codex", ""},
+		{"cursor", ""},
+	}
+	for _, c := range cases {
+		if got := claudeOpenFlags(c.editor); got != c.want {
+			t.Errorf("claudeOpenFlags(%q) = %q, want %q", c.editor, got, c.want)
+		}
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"simple", "'simple'"},
+		{"/path/with space", "'/path/with space'"},
+		{"a'b", `'a'\''b'`},
+	}
+	for _, c := range cases {
+		if got := shellQuote(c.in); got != c.want {
+			t.Errorf("shellQuote(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestAppleScriptString(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"hello", `"hello"`},
+		{`say "hi"`, `"say \"hi\""`},
+		{`back\slash`, `"back\\slash"`},
+	}
+	for _, c := range cases {
+		if got := appleScriptString(c.in); got != c.want {
+			t.Errorf("appleScriptString(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
